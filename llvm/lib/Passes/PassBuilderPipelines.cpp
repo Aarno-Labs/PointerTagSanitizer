@@ -71,6 +71,7 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation/CGProfile.h"
 #include "llvm/Transforms/Instrumentation/ControlHeightReduction.h"
+#include "llvm/Transforms/Instrumentation/PTSanIDStrip.h"
 #include "llvm/Transforms/Instrumentation/InstrOrderFile.h"
 #include "llvm/Transforms/Instrumentation/InstrProfiling.h"
 #include "llvm/Transforms/Instrumentation/MemProfiler.h"
@@ -302,6 +303,10 @@ static cl::opt<bool> EnableSampledInstr(
 static cl::opt<bool> UseLoopVersioningLICM(
     "enable-loop-versioning-licm", cl::init(false), cl::Hidden,
     cl::desc("Enable the experimental Loop Versioning LICM pass"));
+
+static cl::opt<bool> EnablePTSanIDStrip(
+    "ptsan-strip-ids", cl::init(false), cl::Optional,
+    cl::desc("Strips ptsan ids from IR memory accesses"));
 
 namespace llvm {
 extern cl::opt<bool> EnableMemProfContextDisambiguation;
@@ -1592,6 +1597,10 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
   // Now add the optimization pipeline.
   MPM.addPass(buildModuleOptimizationPipeline(Level, LTOPhase));
 
+  if (EnablePTSanIDStrip) {
+    MPM.addPass(PTSanIDStripPass());
+  }
+
   if (PGOOpt && PGOOpt->PseudoProbeForProfiling &&
       PGOOpt->Action == PGOOptions::SampleUse)
     MPM.addPass(PseudoProbeUpdatePass());
@@ -2067,6 +2076,10 @@ ModulePassManager PassBuilder::buildO0DefaultPipeline(OptimizationLevel Level,
          "buildO0DefaultPipeline should only be used with O0");
 
   ModulePassManager MPM;
+
+  if (EnablePTSanIDStrip) {
+    MPM.addPass(PTSanIDStripPass());
+  }
 
   // Perform pseudo probe instrumentation in O0 mode. This is for the
   // consistency between different build modes. For example, a LTO build can be
