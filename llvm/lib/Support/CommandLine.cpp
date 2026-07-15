@@ -2753,6 +2753,9 @@ ArrayRef<StringRef> cl::getCompilerBuildConfig() {
 #if __has_feature(dataflow_sanitizer)
       "+dfsan",
 #endif
+#if __has_feature(pointer_tag_sanitizer)
+      "+ptsan",
+#endif
 #if __has_feature(hwaddress_sanitizer)
       "+hwasan",
 #endif

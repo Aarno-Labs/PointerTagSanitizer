@@ -102,6 +102,7 @@ FEATURE(memory_sanitizer,
                                    SanitizerKind::KernelMemory))
 FEATURE(thread_sanitizer, LangOpts.Sanitize.has(SanitizerKind::Thread))
 FEATURE(dataflow_sanitizer, LangOpts.Sanitize.has(SanitizerKind::DataFlow))
+FEATURE(pointer_tag_sanitizer, LangOpts.Sanitize.has(SanitizerKind::PTSan))
 FEATURE(scudo, LangOpts.Sanitize.hasOneOf(SanitizerKind::Scudo))
 FEATURE(ptrauth_intrinsics, LangOpts.PointerAuthIntrinsics)
 FEATURE(ptrauth_calls, LangOpts.PointerAuthCalls)

@@ -1389,6 +1389,28 @@ void tools::linkSanitizerRuntimeDeps(const ToolChain &TC,
     CmdArgs.push_back("-lresolv");
 }
 
+static StringRef getPTSanRuntimeName(const ToolChain &TC, const ArgList &Args) {
+  bool LAM = false;
+  bool Validate = false;
+  for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
+    StringRef Value = A->getValue();
+    LAM |= Value == "-ptsan-lam";
+    Validate |= Value == "-ptsan-runtime-validate";
+  }
+
+  if (LAM && TC.getTriple().getArch() != llvm::Triple::x86_64)
+    TC.getDriver().Diag(diag::err_drv_unsupported_opt_for_target)
+        << "-mllvm -ptsan-lam" << TC.getTripleString();
+
+  if (LAM && Validate)
+    return "ptsan_lam_validate";
+  if (LAM)
+    return "ptsan_lam";
+  if (Validate)
+    return "ptsan_validate";
+  return "ptsan";
+}
+
 static void
 collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
                          SmallVectorImpl<StringRef> &SharedRuntimes,
@@ -1474,6 +1496,8 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
   }
   if (SanArgs.needsDfsanRt())
     StaticRuntimes.push_back("dfsan");
+  if (SanArgs.needsPTSanRt())
+    StaticRuntimes.push_back(getPTSanRuntimeName(TC, Args));
   if (SanArgs.needsLsanRt())
     StaticRuntimes.push_back("lsan");
   if (SanArgs.needsMsanRt()) {
