@@ -1,0 +1,7748 @@
+{
+  "path": "/src",
+  "name": "lib/cJSON/cJSON.c",
+  "functions": [
+    {
+      "name": "cJSON_GetErrorPtr",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 96,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "not-null",
+            "valid-mem",
+            "upper-bound",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_GetStringValue",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 106,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "stack-address-escape",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_GetNumberValue",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 116,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_Version",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 127,
+          "openPPOTypes": [
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "case_insensitive_strcmp",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 145,
+          "openPPOTypes": [
+            "upper-bound",
+            "stack-address-escape",
+            "ptr-upper-bound-deref",
+            "value-constraint",
+            "stack-address-escape",
+            "ptr-upper-bound-deref",
+            "upper-bound",
+            "value-constraint",
+            "initialized",
+            "value-constraint",
+            "initialized",
+            "value-constraint"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "not-null",
+            "not-null",
+            "not-null",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 147,
+          "openPPOTypes": [
+            "initialized",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 153,
+          "openPPOTypes": [
+            "value-constraint",
+            "initialized",
+            "value-constraint",
+            "initialized",
+            "upper-bound",
+            "value-constraint",
+            "value-constraint",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "not-null",
+            "valid-mem"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_strdup",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 198,
+          "openPPOTypes": [
+            "initialized-range",
+            "null-terminated",
+            "unsigned-to-unsigned-cast"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 199,
+          "openPPOTypes": [
+            "initialized",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "not-null"
+          ]
+        },
+        {
+          "line": 204,
+          "openPPOTypes": [
+            "not-null",
+            "no-overlap",
+            "ptr-upper-bound",
+            "in-scope",
+            "upper-bound",
+            "lower-bound",
+            "initialized-range",
+            "valid-mem",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ]
+        },
+        {
+          "line": 206,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "upper-bound",
+            "in-scope",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_InitHooks",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 221,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 223,
+          "openPPOTypes": [
+            "lower-bound",
+            "upper-bound",
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 227,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 229,
+          "openPPOTypes": [
+            "valid-mem",
+            "lower-bound",
+            "stack-address-escape",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_New_Item",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 243,
+          "openPPOTypes": [
+            "initialized",
+            "pointer-cast",
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 246,
+          "openPPOTypes": [
+            "ptr-upper-bound",
+            "valid-mem",
+            "lower-bound",
+            "in-scope",
+            "upper-bound",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 249,
+          "openPPOTypes": [
+            "lower-bound",
+            "in-scope",
+            "upper-bound",
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_Delete",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 258,
+          "openPPOTypes": [
+            "upper-bound",
+            "in-scope",
+            "initialized",
+            "valid-mem",
+            "lower-bound",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 259,
+          "openPPOTypes": [
+            "not-null",
+            "upper-bound",
+            "initialized",
+            "initialized",
+            "lower-bound",
+            "not-null",
+            "valid-mem",
+            "valid-mem",
+            "upper-bound",
+            "in-scope",
+            "lower-bound",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 261,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "lower-bound",
+            "initialized",
+            "in-scope",
+            "in-scope",
+            "lower-bound",
+            "upper-bound",
+            "not-null",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 263,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "initialized",
+            "in-scope",
+            "not-null",
+            "lower-bound",
+            "valid-mem",
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 265,
+          "openPPOTypes": [
+            "upper-bound",
+            "initialized",
+            "lower-bound",
+            "in-scope",
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "initialized",
+            "lower-bound",
+            "upper-bound",
+            "not-null",
+            "in-scope",
+            "valid-mem",
+            "valid-mem",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 266,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "lower-bound",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 268,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "initialized",
+            "valid-mem",
+            "lower-bound",
+            "in-scope",
+            "upper-bound",
+            "in-scope",
+            "upper-bound",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 270,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "initialized",
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "initialized",
+            "upper-bound",
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "lower-bound",
+            "not-null",
+            "lower-bound",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 271,
+          "openPPOTypes": [
+            "not-null",
+            "lower-bound",
+            "upper-bound",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 273,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "initialized",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "lower-bound",
+            "upper-bound",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 274,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "get_decimal_point",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "parse_number",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 315,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 323,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 325,
+          "openPPOTypes": [
+            "initialized",
+            "in-scope",
+            "lower-bound",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "initialized",
+            "upper-bound",
+            "lower-bound",
+            "initialized",
+            "in-scope",
+            "in-scope",
+            "not-null",
+            "valid-mem",
+            "initialized",
+            "ptr-upper-bound-deref",
+            "not-null",
+            "not-null",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 341,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "initialized",
+            "not-null",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 355,
+          "openPPOTypes": [
+            "initialized-range",
+            "ptr-upper-bound",
+            "null-terminated"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 361,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 366,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 370,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 374,
+          "openPPOTypes": [
+            "cast",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 377,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 379,
+          "openPPOTypes": [
+            "valid-mem",
+            "signed-to-unsigned-cast-ub",
+            "common-base-type",
+            "valid-mem",
+            "not-null",
+            "uint-overflow",
+            "signed-to-unsigned-cast-lb",
+            "common-base"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null",
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_SetNumberHelper",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 388,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 392,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 396,
+          "openPPOTypes": [
+            "cast"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 399,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_SetValuestring",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 409,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 414,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 419,
+          "openPPOTypes": [
+            "ptr-upper-bound",
+            "initialized-range",
+            "null-terminated"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 420,
+          "openPPOTypes": [
+            "null-terminated",
+            "lower-bound",
+            "valid-mem",
+            "not-null",
+            "initialized-range",
+            "upper-bound",
+            "in-scope",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "initialized"
+          ]
+        },
+        {
+          "line": 425,
+          "openPPOTypes": [
+            "common-base",
+            "valid-mem",
+            "in-scope",
+            "in-scope",
+            "common-base",
+            "ptr-upper-bound",
+            "not-null",
+            "not-null",
+            "valid-mem",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "initialized",
+            "not-null",
+            "initialized",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 429,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "initialized-range",
+            "no-overlap",
+            "ptr-upper-bound",
+            "lower-bound",
+            "upper-bound",
+            "in-scope",
+            "null-terminated"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "initialized",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 430,
+          "openPPOTypes": [
+            "lower-bound",
+            "valid-mem",
+            "upper-bound",
+            "in-scope",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "initialized"
+          ]
+        },
+        {
+          "line": 432,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 437,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 439,
+          "openPPOTypes": [
+            "lower-bound",
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 441,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "stack-address-escape",
+            "null-terminated"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 443,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "ensure",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 463,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 468,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 480,
+          "openPPOTypes": [
+            "uint-overflow",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 481,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 483,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 486,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 508,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 511,
+          "openPPOTypes": [
+            "initialized",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "lower-bound",
+            "in-scope",
+            "upper-bound",
+            "valid-mem",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 514,
+          "openPPOTypes": [
+            "lower-bound",
+            "valid-mem",
+            "in-scope",
+            "initialized",
+            "valid-mem",
+            "upper-bound",
+            "upper-bound",
+            "not-null",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 524,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "upper-bound",
+            "lower-bound",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 527,
+          "openPPOTypes": [
+            "lower-bound",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "upper-bound",
+            "initialized",
+            "in-scope",
+            "lower-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 534,
+          "openPPOTypes": [
+            "in-scope",
+            "upper-bound",
+            "upper-bound",
+            "initialized-range",
+            "lower-bound",
+            "in-scope",
+            "valid-mem",
+            "no-overlap",
+            "valid-mem",
+            "ptr-upper-bound",
+            "uint-overflow",
+            "ptr-upper-bound",
+            "lower-bound",
+            "not-null",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 535,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "in-scope",
+            "lower-bound",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "valid-mem",
+            "initialized"
+          ]
+        },
+        {
+          "line": 537,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 538,
+          "openPPOTypes": [
+            "null-terminated",
+            "lower-bound",
+            "stack-address-escape",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 540,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "valid-mem"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "update_offset",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 547,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 551,
+          "openPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 553,
+          "openPPOTypes": [
+            "valid-mem",
+            "lower-bound",
+            "uint-overflow",
+            "initialized-range",
+            "not-null",
+            "in-scope",
+            "null-terminated",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "valid-mem"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "compare_double",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "print_number",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 567,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 582,
+          "openPPOTypes": [
+            "ptr-upper-bound",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 584,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 586,
+          "openPPOTypes": [
+            "valid-mem",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 591,
+          "openPPOTypes": [
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 594,
+          "openPPOTypes": [
+            "initialized-range",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 597,
+          "openPPOTypes": [
+            "ptr-upper-bound",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 608,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 618,
+          "openPPOTypes": [
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 620,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 624,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 626,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 628,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "parse_hex4",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 642,
+          "openPPOTypes": [
+            "initialized",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "ptr-upper-bound-deref",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "not-null"
+          ]
+        },
+        {
+          "line": 644,
+          "openPPOTypes": [
+            "uint-underflow",
+            "uint-overflow",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref"
+          ]
+        },
+        {
+          "line": 646,
+          "openPPOTypes": [
+            "initialized",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref",
+            "ptr-upper-bound-deref",
+            "not-null"
+          ]
+        },
+        {
+          "line": 648,
+          "openPPOTypes": [
+            "uint-overflow",
+            "uint-underflow",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "ptr-upper-bound-deref",
+            "not-null"
+          ]
+        },
+        {
+          "line": 650,
+          "openPPOTypes": [
+            "initialized",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref",
+            "ptr-upper-bound-deref",
+            "not-null"
+          ]
+        },
+        {
+          "line": 652,
+          "openPPOTypes": [
+            "initialized",
+            "uint-overflow",
+            "uint-underflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "utf16_literal_to_utf8",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 681,
+          "openPPOTypes": [
+            "common-base-type",
+            "common-base"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 688,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "ptr-upper-bound-deref",
+            "not-null"
+          ]
+        },
+        {
+          "line": 699,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref"
+          ]
+        },
+        {
+          "line": 703,
+          "openPPOTypes": [
+            "common-base-type",
+            "valid-mem",
+            "common-base",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 709,
+          "openPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "initialized",
+            "ptr-upper-bound-deref",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 716,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 726,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 770,
+          "openPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref",
+            "initialized",
+            "valid-mem",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 776,
+          "openPPOTypes": [
+            "initialized",
+            "in-scope",
+            "valid-mem",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 780,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "in-scope",
+            "not-null",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 783,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "stack-address-escape",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "not-null",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "parse_string",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 794,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 795,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "not-null",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 800,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "in-scope",
+            "not-null",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized",
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 809,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "valid-mem",
+            "not-null",
+            "signed-to-unsigned-cast-lb",
+            "common-base",
+            "common-base-type",
+            "lower-bound",
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "in-scope",
+            "signed-to-unsigned-cast-ub",
+            "in-scope",
+            "initialized",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 812,
+          "openPPOTypes": [
+            "initialized",
+            "not-null",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 814,
+          "openPPOTypes": [
+            "ptr-upper-bound",
+            "common-base-type",
+            "common-base",
+            "valid-mem",
+            "valid-mem",
+            "signed-to-unsigned-cast-ub",
+            "not-null",
+            "in-scope",
+            "not-null",
+            "in-scope",
+            "signed-to-unsigned-cast-lb"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized",
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 819,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 820,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "not-null",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 822,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 824,
+          "openPPOTypes": [
+            "signed-to-unsigned-cast-ub",
+            "initialized",
+            "in-scope",
+            "in-scope",
+            "signed-to-unsigned-cast-lb",
+            "upper-bound",
+            "not-null",
+            "lower-bound",
+            "not-null",
+            "not-null",
+            "in-scope",
+            "common-base",
+            "valid-mem",
+            "valid-mem",
+            "common-base-type",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null",
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 830,
+          "openPPOTypes": [
+            "signed-to-unsigned-cast-ub",
+            "not-null",
+            "common-base",
+            "valid-mem",
+            "in-scope",
+            "common-base-type",
+            "uint-underflow",
+            "not-null",
+            "signed-to-unsigned-cast-lb",
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null",
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 831,
+          "openPPOTypes": [
+            "unsigned-to-unsigned-cast",
+            "lower-bound",
+            "initialized",
+            "not-null",
+            "valid-mem",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 840,
+          "openPPOTypes": [
+            "in-scope",
+            "valid-mem",
+            "not-null",
+            "valid-mem",
+            "common-base",
+            "not-null",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 842,
+          "openPPOTypes": [
+            "lower-bound",
+            "not-null",
+            "in-scope",
+            "valid-mem",
+            "upper-bound",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 844,
+          "openPPOTypes": [
+            "in-scope",
+            "lower-bound",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "valid-mem",
+            "in-scope",
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "lower-bound",
+            "in-scope",
+            "not-null",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "not-null",
+            "in-scope",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 850,
+          "openPPOTypes": [
+            "in-scope",
+            "not-null",
+            "valid-mem",
+            "not-null",
+            "in-scope",
+            "valid-mem",
+            "common-base-type",
+            "common-base"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 855,
+          "openPPOTypes": [
+            "initialized",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "initialized",
+            "in-scope",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 858,
+          "openPPOTypes": [
+            "not-null",
+            "lower-bound",
+            "valid-mem",
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "in-scope",
+            "not-null",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 861,
+          "openPPOTypes": [
+            "lower-bound",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "in-scope",
+            "in-scope",
+            "not-null",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 864,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "upper-bound",
+            "in-scope",
+            "not-null",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 867,
+          "openPPOTypes": [
+            "upper-bound",
+            "in-scope",
+            "lower-bound",
+            "in-scope",
+            "not-null",
+            "not-null",
+            "valid-mem",
+            "ptr-upper-bound-deref",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 870,
+          "openPPOTypes": [
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "lower-bound",
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "valid-mem",
+            "in-scope",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 875,
+          "openPPOTypes": [
+            "not-null",
+            "lower-bound",
+            "in-scope",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "not-null",
+            "in-scope",
+            "valid-mem",
+            "valid-mem",
+            "ptr-upper-bound-deref",
+            "upper-bound",
+            "in-scope",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 880,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "lower-bound",
+            "in-scope",
+            "lower-bound",
+            "in-scope",
+            "valid-mem",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 891,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "not-null",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 896,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "in-scope",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 898,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 899,
+          "openPPOTypes": [
+            "null-terminated",
+            "valid-mem",
+            "valid-mem",
+            "lower-bound",
+            "stack-address-escape",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 901,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "in-scope",
+            "not-null",
+            "valid-mem",
+            "valid-mem",
+            "common-base",
+            "common-base-type",
+            "signed-to-unsigned-cast-lb",
+            "signed-to-unsigned-cast-ub",
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 902,
+          "openPPOTypes": [
+            "uint-overflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 909,
+          "openPPOTypes": [
+            "lower-bound",
+            "initialized",
+            "upper-bound",
+            "valid-mem",
+            "in-scope",
+            "lower-bound",
+            "not-null",
+            "valid-mem",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 915,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "not-null",
+            "valid-mem",
+            "common-base",
+            "in-scope",
+            "valid-mem",
+            "valid-mem",
+            "common-base-type",
+            "in-scope",
+            "signed-to-unsigned-cast-ub",
+            "signed-to-unsigned-cast-lb"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "print_string_ptr",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 944,
+          "openPPOTypes": [
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 950,
+          "openPPOTypes": [
+            "initialized",
+            "upper-bound",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 952,
+          "openPPOTypes": [
+            "upper-bound",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 962,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 965,
+          "openPPOTypes": [
+            "upper-bound",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 968,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 973,
+          "openPPOTypes": [
+            "common-base-type",
+            "uint-overflow",
+            "common-base",
+            "signed-to-unsigned-cast-ub"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 975,
+          "openPPOTypes": [
+            "unsigned-to-unsigned-cast",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 985,
+          "openPPOTypes": [
+            "ptr-upper-bound",
+            "upper-bound",
+            "ptr-upper-bound",
+            "valid-mem",
+            "no-overlap",
+            "ptr-upper-bound-deref",
+            "initialized-range"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 986,
+          "openPPOTypes": [
+            "uint-overflow",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 987,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 993,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 995,
+          "openPPOTypes": [
+            "valid-mem",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "initialized",
+            "upper-bound",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "not-null"
+          ]
+        },
+        {
+          "line": 997,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "upper-bound",
+            "valid-mem",
+            "initialized",
+            "valid-mem",
+            "upper-bound",
+            "initialized",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1000,
+          "openPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "upper-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1005,
+          "openPPOTypes": [
+            "upper-bound",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1006,
+          "openPPOTypes": [
+            "valid-mem",
+            "lower-bound",
+            "in-scope",
+            "initialized",
+            "initialized",
+            "not-null",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1009,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1012,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1015,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1018,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1021,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1024,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1027,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1031,
+          "openPPOTypes": [
+            "upper-bound",
+            "valid-mem",
+            "format-cast",
+            "ptr-upper-bound",
+            "initialized",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1032,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1037,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1038,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "print_string",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1046,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "buffer_skip_whitespace",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1060,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1065,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1067,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1070,
+          "openPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1072,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1075,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized",
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1077,
+          "openPPOTypes": [
+            "uint-underflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null",
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "skip_utf8_bom",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1086,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1091,
+          "openPPOTypes": [
+            "not-null",
+            "initialized-range",
+            "valid-mem",
+            "upper-bound",
+            "ptr-upper-bound",
+            "ptr-upper-bound-deref",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1093,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1096,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_ParseWithOpts",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1104,
+          "openPPOTypes": [
+            "null-terminated",
+            "unsigned-to-unsigned-cast",
+            "ptr-upper-bound",
+            "initialized-range"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 1106,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_ParseWithLengthOpts",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1124,
+          "openPPOTypes": [
+            "null-terminated"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1135,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1145,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "initialized",
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1152,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 1155,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1160,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1166,
+          "openPPOTypes": [
+            "null-terminated",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1180,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "stack-address-escape",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_Parse",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1192,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_ParseWithLength",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1197,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "print",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1211,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "null-terminated",
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "initialized",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1214,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1223,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1233,
+          "openPPOTypes": [
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1236,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1240,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1242,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "not-null",
+            "initialized",
+            "uint-overflow",
+            "upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1251,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "uint-overflow",
+            "initialized",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1257,
+          "openPPOTypes": [
+            "in-scope",
+            "uint-overflow",
+            "in-scope",
+            "uint-overflow",
+            "ptr-upper-bound",
+            "not-null",
+            "initialized-range",
+            "upper-bound",
+            "no-overlap",
+            "upper-bound",
+            "not-null",
+            "initialized",
+            "initialized",
+            "ptr-upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "lower-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1258,
+          "openPPOTypes": [
+            "not-null",
+            "initialized",
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1261,
+          "openPPOTypes": [
+            "upper-bound",
+            "initialized",
+            "upper-bound",
+            "valid-mem",
+            "in-scope",
+            "lower-bound",
+            "initialized",
+            "valid-mem",
+            "lower-bound",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1265,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "upper-bound",
+            "in-scope",
+            "lower-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1270,
+          "openPPOTypes": [
+            "valid-mem",
+            "initialized",
+            "valid-mem",
+            "lower-bound",
+            "upper-bound",
+            "in-scope",
+            "not-null",
+            "valid-mem",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1276,
+          "openPPOTypes": [
+            "initialized",
+            "not-null",
+            "initialized",
+            "lower-bound",
+            "valid-mem",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_Print",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1289,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_PrintUnformatted",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1294,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_PrintBuffered",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1306,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "null-terminated",
+            "not-null",
+            "initialized",
+            "lower-bound",
+            "upper-bound",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1320,
+          "openPPOTypes": [
+            "initialized",
+            "lower-bound",
+            "not-null",
+            "valid-mem",
+            "upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "in-scope",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1325,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "in-scope",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_PrintPreallocated",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1337,
+          "openPPOTypes": [
+            "null-terminated"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "parse_value",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1350,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1357,
+          "openPPOTypes": [
+            "uint-overflow",
+            "upper-bound",
+            "valid-mem",
+            "initialized-range",
+            "ptr-upper-bound-deref",
+            "not-null",
+            "in-scope",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1359,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1360,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1364,
+          "openPPOTypes": [
+            "upper-bound",
+            "uint-overflow",
+            "ptr-upper-bound",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "initialized-range",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1366,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1367,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1371,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "ptr-upper-bound-deref",
+            "not-null",
+            "uint-overflow",
+            "ptr-upper-bound",
+            "in-scope",
+            "initialized-range"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "initialized",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1373,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1374,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1375,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1379,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "initialized",
+            "not-null",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1381,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1384,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "not-null",
+            "initialized",
+            "ptr-upper-bound-deref",
+            "initialized",
+            "initialized",
+            "in-scope",
+            "not-null",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "not-null",
+            "in-scope",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "initialized",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1386,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1389,
+          "openPPOTypes": [
+            "in-scope",
+            "initialized",
+            "valid-mem",
+            "not-null",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "initialized",
+            "valid-mem",
+            "initialized",
+            "valid-mem",
+            "initialized",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1391,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1394,
+          "openPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref",
+            "initialized",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "valid-mem",
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1396,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "print_value",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1412,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1420,
+          "openPPOTypes": [
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1429,
+          "openPPOTypes": [
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1438,
+          "openPPOTypes": [
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1447,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1452,
+          "openPPOTypes": [
+            "upper-bound",
+            "not-null",
+            "in-scope",
+            "null-terminated",
+            "lower-bound",
+            "ptr-upper-bound",
+            "initialized-range",
+            "valid-mem",
+            "unsigned-to-unsigned-cast"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1453,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1458,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "in-scope",
+            "upper-bound",
+            "ptr-upper-bound",
+            "ptr-upper-bound",
+            "no-overlap",
+            "initialized-range",
+            "lower-bound",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "parse_array",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1482,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1486,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1488,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "initialized",
+            "not-null",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized",
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1494,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1496,
+          "openPPOTypes": [
+            "valid-mem",
+            "initialized",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1503,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1505,
+          "openPPOTypes": [
+            "uint-underflow",
+            "valid-mem",
+            "uint-underflow",
+            "valid-mem",
+            "not-null",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1510,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "uint-underflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1512,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "in-scope",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1515,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1530,
+          "openPPOTypes": [
+            "not-null",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1531,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1536,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1537,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1538,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1542,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1546,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "initialized",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1552,
+          "openPPOTypes": [
+            "uint-underflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1555,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "not-null",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1558,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 1559,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 1561,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1568,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "print_array",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1579,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1595,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1596,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1600,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "lower-bound",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1604,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1605,
+          "openPPOTypes": [
+            "lower-bound",
+            "valid-mem",
+            "initialized",
+            "upper-bound",
+            "not-null",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1607,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1608,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1613,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1614,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1616,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1618,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1619,
+          "openPPOTypes": [
+            "uint-overflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1621,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "in-scope",
+            "initialized",
+            "upper-bound",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1624,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1629,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1630,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1631,
+          "openPPOTypes": [
+            "uint-underflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "parse_object",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1642,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1646,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1648,
+          "openPPOTypes": [
+            "not-null",
+            "in-scope",
+            "valid-mem",
+            "ptr-upper-bound-deref",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1653,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1655,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "in-scope",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "valid-mem",
+            "not-null",
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1661,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1663,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "not-null",
+            "valid-mem",
+            "uint-underflow",
+            "uint-underflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1668,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-underflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1670,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "initialized",
+            "valid-mem",
+            "valid-mem",
+            "in-scope",
+            "valid-mem",
+            "valid-mem",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1673,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1688,
+          "openPPOTypes": [
+            "not-null",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1689,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1693,
+          "openPPOTypes": [
+            "uint-overflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1699,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1700,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1701,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1705,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1708,
+          "openPPOTypes": [
+            "initialized",
+            "not-null",
+            "lower-bound",
+            "stack-address-escape",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "null-terminated",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1709,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1711,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "valid-mem",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "in-scope",
+            "valid-mem",
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1717,
+          "openPPOTypes": [
+            "uint-overflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1718,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1719,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1723,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1727,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "valid-mem",
+            "in-scope",
+            "initialized",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 1733,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "uint-underflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1736,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1739,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 1740,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 1742,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1748,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "print_object",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1759,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 1767,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1774,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1775,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1776,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1778,
+          "openPPOTypes": [
+            "upper-bound",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1780,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1784,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1787,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1792,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1794,
+          "openPPOTypes": [
+            "not-null",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1796,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1800,
+          "openPPOTypes": [
+            "upper-bound",
+            "valid-mem",
+            "valid-mem",
+            "not-null",
+            "valid-mem",
+            "in-scope",
+            "upper-bound",
+            "in-scope",
+            "lower-bound",
+            "initialized",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1804,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1806,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1807,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1812,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1813,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1815,
+          "openPPOTypes": [
+            "upper-bound",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1817,
+          "openPPOTypes": [
+            "uint-overflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1820,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "in-scope",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1824,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1827,
+          "openPPOTypes": [
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "initialized",
+            "lower-bound",
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1828,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1833,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "initialized",
+            "not-null",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1835,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1838,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1840,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "not-null",
+            "not-null",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1842,
+          "openPPOTypes": [
+            "not-null",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1843,
+          "openPPOTypes": [
+            "uint-overflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1845,
+          "openPPOTypes": [
+            "lower-bound",
+            "initialized",
+            "upper-bound",
+            "valid-mem",
+            "in-scope",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1848,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "uint-overflow",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1853,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1856,
+          "openPPOTypes": [
+            "valid-mem",
+            "uint-overflow",
+            "uint-underflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1858,
+          "openPPOTypes": [
+            "upper-bound",
+            "ptr-upper-bound-deref",
+            "not-null",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1861,
+          "openPPOTypes": [
+            "not-null",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1862,
+          "openPPOTypes": [
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1863,
+          "openPPOTypes": [
+            "uint-underflow",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_GetArraySize",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1879,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1883,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1884,
+          "openPPOTypes": [
+            "upper-bound",
+            "not-null",
+            "in-scope",
+            "initialized",
+            "lower-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1889,
+          "openPPOTypes": [
+            "unsigned-to-signed-cast"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "get_array_item",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1901,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1905,
+          "openPPOTypes": [
+            "initialized",
+            "lower-bound",
+            "in-scope",
+            "upper-bound",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1908,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "in-scope",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_GetArrayItem",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1918,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "get_object_item",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1930,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 1933,
+          "openPPOTypes": [
+            "null-terminated",
+            "initialized-range",
+            "initialized-range",
+            "in-scope",
+            "in-scope",
+            "null-terminated",
+            "lower-bound",
+            "valid-mem",
+            "ptr-upper-bound",
+            "not-null",
+            "lower-bound",
+            "upper-bound",
+            "upper-bound",
+            "not-null",
+            "initialized",
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "lower-bound",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1935,
+          "openPPOTypes": [
+            "valid-mem",
+            "lower-bound",
+            "not-null",
+            "in-scope",
+            "initialized",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1940,
+          "openPPOTypes": [
+            "in-scope",
+            "valid-mem",
+            "upper-bound",
+            "upper-bound",
+            "lower-bound",
+            "initialized",
+            "in-scope",
+            "not-null",
+            "lower-bound",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1942,
+          "openPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "in-scope",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1946,
+          "openPPOTypes": [
+            "not-null",
+            "lower-bound",
+            "initialized",
+            "upper-bound",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 1950,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "stack-address-escape",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_GetObjectItem",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1955,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_GetObjectItemCaseSensitive",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1960,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_HasObjectItem",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "suffix_object",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1971,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 1972,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "create_reference",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 1990,
+          "openPPOTypes": [
+            "ptr-upper-bound",
+            "no-overlap",
+            "valid-mem",
+            "not-null",
+            "initialized-range"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "ptr-upper-bound"
+          ]
+        },
+        {
+          "line": 1991,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1992,
+          "openPPOTypes": [
+            "not-null",
+            "not-null"
+          ],
+          "violationPPOTypes": [
+            "initialized"
+          ],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1993,
+          "openPPOTypes": [
+            "not-null",
+            "not-null",
+            "stack-address-escape",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 1994,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "add_item_to_array",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2006,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2013,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2014,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2020,
+          "openPPOTypes": [
+            "lower-bound",
+            "initialized",
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2022,
+          "openPPOTypes": [
+            "upper-bound",
+            "initialized",
+            "lower-bound",
+            "upper-bound",
+            "not-null",
+            "lower-bound",
+            "in-scope",
+            "in-scope",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2023,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "lower-bound",
+            "not-null",
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddItemToArray",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "cast_away_const",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "add_item_to_object",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2065,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2075,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2078,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2080,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "initialized",
+            "in-scope",
+            "valid-mem",
+            "valid-mem",
+            "lower-bound",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2083,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "valid-mem",
+            "null-terminated"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2084,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2086,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddItemToObject",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "cJSON_AddItemToObjectCS",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "cJSON_AddItemReferenceToArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2108,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddItemReferenceToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2118,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddNullToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2124,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2126,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2129,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddTrueToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2136,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2138,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2141,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddFalseToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2148,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2150,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2153,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddBoolToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2160,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2162,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2165,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddNumberToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2172,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2174,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2177,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddStringToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2184,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2186,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2189,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddRawToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2196,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2198,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2201,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddObjectToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2208,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2210,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2213,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_AddArrayToObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2220,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2222,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2225,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_DetachItemViaPointer",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2231,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2236,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2239,
+          "openPPOTypes": [
+            "lower-bound",
+            "valid-mem",
+            "stack-address-escape",
+            "in-scope",
+            "upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "not-null",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2241,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2244,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "in-scope",
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "stack-address-escape",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2247,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2250,
+          "openPPOTypes": [
+            "upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2252,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2255,
+          "openPPOTypes": [
+            "upper-bound",
+            "not-null",
+            "stack-address-escape",
+            "valid-mem",
+            "lower-bound",
+            "in-scope",
+            "lower-bound",
+            "valid-mem",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_DetachItemFromArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2272,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_DeleteItemFromArray",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "cJSON_DetachItemFromObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2284,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_DetachItemFromObjectCaseSensitive",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2291,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_DeleteItemFromObject",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "cJSON_DeleteItemFromObjectCaseSensitive",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "cJSON_InsertItemInArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2317,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2320,
+          "openPPOTypes": [
+            "initialized",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2325,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2326,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "lower-bound",
+            "stack-address-escape",
+            "initialized",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2327,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2328,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2330,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 2334,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "lower-bound",
+            "not-null",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_ReplaceItemViaPointer",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2341,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2351,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "lower-bound",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2352,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem",
+            "upper-bound",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2356,
+          "openPPOTypes": [
+            "in-scope",
+            "upper-bound",
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2358,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2360,
+          "openPPOTypes": [
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2362,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2364,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2373,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "stack-address-escape",
+            "in-scope",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2377,
+          "openPPOTypes": [
+            "in-scope",
+            "lower-bound",
+            "upper-bound",
+            "not-null",
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_ReplaceItemInArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2395,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "replace_item_in_object",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2406,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2408,
+          "openPPOTypes": [
+            "lower-bound",
+            "valid-mem",
+            "upper-bound",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2411,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2412,
+          "openPPOTypes": [
+            "in-scope",
+            "lower-bound",
+            "valid-mem",
+            "valid-mem",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2415,
+          "openPPOTypes": [
+            "null-terminated",
+            "stack-address-escape",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2416,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2421,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2423,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_ReplaceItemInObject",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "cJSON_ReplaceItemInObjectCaseSensitive",
+      "line": -1,
+      "unsafeLines": []
+    },
+    {
+      "name": "cJSON_CreateNull",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2442,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2445,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateTrue",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2453,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2456,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateFalse",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2464,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2467,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateBool",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2475,
+          "openPPOTypes": [
+            "not-null",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2478,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateNumber",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2486,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2487,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2492,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2496,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2500,
+          "openPPOTypes": [
+            "not-null",
+            "cast"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2504,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateString",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2512,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2513,
+          "openPPOTypes": [
+            "valid-mem",
+            "null-terminated",
+            "valid-mem",
+            "stack-address-escape",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2514,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2516,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2521,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateStringReference",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2529,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2530,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "not-null",
+            "null-terminated",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2533,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateObjectReference",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2540,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2541,
+          "openPPOTypes": [
+            "valid-mem",
+            "pointer-cast",
+            "valid-mem",
+            "not-null",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2544,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateArrayReference",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2550,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2551,
+          "openPPOTypes": [
+            "valid-mem",
+            "pointer-cast",
+            "valid-mem",
+            "not-null",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2554,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateRaw",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2562,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2563,
+          "openPPOTypes": [
+            "valid-mem",
+            "null-terminated",
+            "valid-mem",
+            "stack-address-escape",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2564,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2566,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2571,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2579,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2582,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2590,
+          "openPPOTypes": [
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2593,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateIntArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2613,
+          "openPPOTypes": [
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref"
+          ]
+        },
+        {
+          "line": 2616,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2621,
+          "openPPOTypes": [
+            "not-null",
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2630,
+          "openPPOTypes": [
+            "valid-mem",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2631,
+          "openPPOTypes": [
+            "valid-mem",
+            "lower-bound",
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "stack-address-escape",
+            "in-scope",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2634,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateFloatArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2653,
+          "openPPOTypes": [
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref"
+          ]
+        },
+        {
+          "line": 2656,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2661,
+          "openPPOTypes": [
+            "not-null",
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2670,
+          "openPPOTypes": [
+            "valid-mem",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2671,
+          "openPPOTypes": [
+            "valid-mem",
+            "lower-bound",
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "stack-address-escape",
+            "in-scope",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2674,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateDoubleArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2691,
+          "openPPOTypes": [
+            "uint-overflow"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2693,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 2696,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2701,
+          "openPPOTypes": [
+            "not-null",
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2705,
+          "openPPOTypes": [
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2710,
+          "openPPOTypes": [
+            "valid-mem",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2711,
+          "openPPOTypes": [
+            "valid-mem",
+            "lower-bound",
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "valid-mem",
+            "stack-address-escape",
+            "lower-bound",
+            "in-scope",
+            "initialized",
+            "upper-bound",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2714,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_CreateStringArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2733,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "lower-bound",
+            "in-scope",
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref"
+          ]
+        },
+        {
+          "line": 2736,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2741,
+          "openPPOTypes": [
+            "not-null",
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2750,
+          "openPPOTypes": [
+            "initialized",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2751,
+          "openPPOTypes": [
+            "initialized",
+            "stack-address-escape",
+            "not-null",
+            "not-null",
+            "in-scope",
+            "valid-mem",
+            "valid-mem",
+            "lower-bound",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2754,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_Duplicate",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2762,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_Duplicate_rec",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2784,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2785,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2786,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2787,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2789,
+          "openPPOTypes": [
+            "in-scope",
+            "valid-mem",
+            "valid-mem",
+            "stack-address-escape",
+            "upper-bound",
+            "lower-bound",
+            "valid-mem",
+            "null-terminated",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2790,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2795,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2797,
+          "openPPOTypes": [
+            "valid-mem",
+            "null-terminated",
+            "upper-bound",
+            "valid-mem",
+            "upper-bound",
+            "null-terminated",
+            "not-null",
+            "in-scope",
+            "not-null",
+            "valid-mem",
+            "valid-mem",
+            "stack-address-escape",
+            "stack-address-escape",
+            "lower-bound",
+            "valid-mem",
+            "valid-mem",
+            "lower-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2798,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2806,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2809,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 2815,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "lower-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2823,
+          "openPPOTypes": [
+            "not-null",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2824,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2830,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2833,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "not-null",
+            "in-scope",
+            "initialized",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2835,
+          "openPPOTypes": [
+            "not-null",
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2837,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "not-null",
+            "initialized",
+            "lower-bound",
+            "valid-mem",
+            "not-null",
+            "stack-address-escape",
+            "in-scope",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2840,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2845,
+          "openPPOTypes": [
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "skip_oneline_comment",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2853,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "not-null",
+            "initialized",
+            "not-null",
+            "ptr-upper-bound-deref"
+          ]
+        },
+        {
+          "line": 2855,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem",
+            "initialized",
+            "valid-mem",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2857,
+          "openPPOTypes": [
+            "valid-mem",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 2858,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "valid-mem",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "skip_multiline_comment",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2866,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "not-null",
+            "initialized",
+            "not-null",
+            "ptr-upper-bound-deref"
+          ]
+        },
+        {
+          "line": 2868,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "ptr-upper-bound-deref",
+            "initialized",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2870,
+          "openPPOTypes": [
+            "valid-mem",
+            "valid-mem",
+            "initialized",
+            "initialized",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2872,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "ptr-upper-bound-deref",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "minify_string",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2879,
+          "openPPOTypes": [
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "initialized",
+            "not-null",
+            "not-null",
+            "not-null",
+            "initialized",
+            "valid-mem",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 2880,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "not-null",
+            "initialized"
+          ]
+        },
+        {
+          "line": 2881,
+          "openPPOTypes": [
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "not-null",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "not-null",
+            "valid-mem"
+          ]
+        },
+        {
+          "line": 2884,
+          "openPPOTypes": [
+            "initialized",
+            "stack-address-escape",
+            "valid-mem",
+            "in-scope",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "in-scope",
+            "not-null",
+            "in-scope",
+            "valid-mem",
+            "ptr-upper-bound-deref",
+            "stack-address-escape",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null",
+            "not-null",
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2885,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "in-scope",
+            "valid-mem",
+            "in-scope",
+            "not-null",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2887,
+          "openPPOTypes": [
+            "in-scope",
+            "initialized",
+            "not-null",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 2888,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null"
+          ]
+        },
+        {
+          "line": 2889,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "stack-address-escape",
+            "not-null",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2890,
+          "openPPOTypes": [
+            "stack-address-escape",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2892,
+          "openPPOTypes": [
+            "initialized",
+            "in-scope",
+            "valid-mem",
+            "in-scope",
+            "not-null",
+            "not-null",
+            "initialized",
+            "valid-mem",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2893,
+          "openPPOTypes": [
+            "not-null",
+            "initialized",
+            "valid-mem",
+            "in-scope",
+            "valid-mem",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "ptr-upper-bound-deref",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2894,
+          "openPPOTypes": [
+            "valid-mem",
+            "in-scope",
+            "stack-address-escape",
+            "not-null",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        },
+        {
+          "line": 2895,
+          "openPPOTypes": [
+            "valid-mem",
+            "stack-address-escape",
+            "not-null",
+            "ptr-upper-bound-deref",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "not-null",
+            "not-null"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_Minify",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2909,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "initialized",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2911,
+          "openPPOTypes": [
+            "not-null",
+            "initialized",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2917,
+          "openPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "valid-mem",
+            "stack-address-escape"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2921,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "in-scope",
+            "valid-mem",
+            "initialized",
+            "not-null"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2925,
+          "openPPOTypes": [
+            "initialized",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "not-null",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2929,
+          "openPPOTypes": [
+            "valid-mem",
+            "not-null",
+            "in-scope",
+            "stack-address-escape",
+            "ptr-upper-bound-deref"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2938,
+          "openPPOTypes": [
+            "in-scope",
+            "initialized",
+            "not-null",
+            "in-scope",
+            "not-null",
+            "valid-mem",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2939,
+          "openPPOTypes": [
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "stack-address-escape",
+            "not-null",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2940,
+          "openPPOTypes": [
+            "not-null",
+            "ptr-upper-bound-deref",
+            "valid-mem",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 2945,
+          "openPPOTypes": [
+            "in-scope",
+            "lower-bound",
+            "not-null",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsInvalid",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2955,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsFalse",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2965,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsTrue",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2975,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsBool",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2986,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsNull",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 2995,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsNumber",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 3005,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsString",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 3015,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsArray",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 3025,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsObject",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 3035,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_IsRaw",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 3045,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cJSON_Compare",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 3050,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 3056,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 3078,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 3087,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 3095,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 3099,
+          "openPPOTypes": [
+            "initialized-range",
+            "not-null",
+            "initialized-range",
+            "lower-bound",
+            "valid-mem",
+            "null-terminated",
+            "ptr-upper-bound",
+            "lower-bound",
+            "null-terminated",
+            "not-null",
+            "valid-mem",
+            "upper-bound",
+            "in-scope",
+            "upper-bound",
+            "in-scope",
+            "ptr-upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized",
+            "initialized"
+          ]
+        },
+        {
+          "line": 3108,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 3109,
+          "openPPOTypes": [],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 3113,
+          "openPPOTypes": [
+            "valid-mem",
+            "lower-bound",
+            "in-scope",
+            "upper-bound",
+            "upper-bound",
+            "in-scope",
+            "valid-mem",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 3118,
+          "openPPOTypes": [
+            "upper-bound",
+            "not-null",
+            "lower-bound",
+            "in-scope",
+            "valid-mem",
+            "initialized"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 3119,
+          "openPPOTypes": [
+            "initialized",
+            "not-null",
+            "valid-mem",
+            "lower-bound",
+            "upper-bound",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 3134,
+          "openPPOTypes": [
+            "lower-bound",
+            "valid-mem",
+            "not-null",
+            "initialized",
+            "upper-bound",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 3137,
+          "openPPOTypes": [
+            "initialized",
+            "lower-bound",
+            "valid-mem",
+            "valid-mem",
+            "in-scope",
+            "in-scope",
+            "valid-mem",
+            "not-null",
+            "lower-bound",
+            "upper-bound",
+            "upper-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 3143,
+          "openPPOTypes": [
+            "upper-bound",
+            "valid-mem",
+            "lower-bound",
+            "in-scope"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 3151,
+          "openPPOTypes": [
+            "not-null",
+            "valid-mem",
+            "upper-bound",
+            "valid-mem",
+            "in-scope",
+            "initialized",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": [
+            "initialized"
+          ]
+        },
+        {
+          "line": 3153,
+          "openPPOTypes": [
+            "valid-mem",
+            "upper-bound",
+            "upper-bound",
+            "not-null",
+            "valid-mem",
+            "initialized",
+            "lower-bound",
+            "valid-mem",
+            "in-scope",
+            "in-scope",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        },
+        {
+          "line": 3159,
+          "openPPOTypes": [
+            "lower-bound",
+            "in-scope",
+            "upper-bound",
+            "valid-mem"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_malloc",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 3175,
+          "openPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "in-scope",
+            "valid-mem",
+            "stack-address-escape",
+            "lower-bound",
+            "not-null",
+            "upper-bound",
+            "upper-bound",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    },
+    {
+      "name": "cJSON_free",
+      "line": -1,
+      "unsafeLines": [
+        {
+          "line": 3180,
+          "openPPOTypes": [
+            "initialized",
+            "valid-mem",
+            "not-null",
+            "upper-bound",
+            "lower-bound"
+          ],
+          "violationPPOTypes": [],
+          "delegatedPPOTypes": []
+        }
+      ]
+    }
+  ]
+}

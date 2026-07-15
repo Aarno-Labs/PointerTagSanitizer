@@ -1,0 +1,34 @@
+// RUN: rm -rf %t && mkdir -p %t && cd %t
+// RUN: %clangxx_ptsan -g -O2 -o %exe %s
+// RUN: ./%exe 2> err.txt 1> out.txt
+// RUN: cat err.txt | FileCheck %s --check-prefix=ERR
+// RUN: cat out.txt | FileCheck %s
+
+// C++ variant of vararg_forward_vprintf.c (minimized from 531.deepsjeng_r).
+//
+// In C++ on AArch64, clang names the va_list type "struct.std::__va_list" (vs
+// the C "struct.__va_list"), so the by-type recognition in PTSanDiscovery.cpp's
+// isVaList() must match both -- otherwise clang's va_list *copy* is tagged
+// and forwarding it to libc vprintf faults under software masking. This uses
+// only <cstdio>/<cstdarg> (no STL), so it needs no instrumented C++ stdlib.
+
+// ERR: Unreclaimed IDs at exit: 0
+// CHECK: hello 42 world sum=100
+// CHECK: OK
+
+#include <cstdarg>
+#include <cstdio>
+
+__attribute__((noinline))
+static void myprintf(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vprintf(fmt, ap); // forward instrumented va_list -> uninstrumented libc
+  va_end(ap);
+}
+
+int main() {
+  myprintf("hello %d world sum=%d\n", 42, 100);
+  puts("OK");
+  return 0;
+}
