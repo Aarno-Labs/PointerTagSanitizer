@@ -40,6 +40,7 @@
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/Transforms/Utils/PTSanLoopBounds.h"
 #include <algorithm>
 
 using namespace llvm;
@@ -688,6 +689,8 @@ bool llvm::UnrollRuntimeLoopRemainder(
     return false;
   }
 
+  MDNode *OrigLoopID = L->getLoopID();
+
   // Loop structure is the following:
   //
   // PreHeader
@@ -1028,6 +1031,10 @@ bool llvm::UnrollRuntimeLoopRemainder(
     UnrollResult = UnrollLoop(remainderLoop, ULO, LI, SE, DT, AC, TTI,
                               /*ORE*/ nullptr, PreserveLCSSA);
   }
+
+  // Preserve the bounds on the final latch if the remainder loop survives.
+  if (UnrollResult != LoopUnrollResult::FullyUnrolled && remainderLoop)
+    ptsan::copyLoopBounds(remainderLoop, OrigLoopID);
 
   if (ResultLoop && UnrollResult != LoopUnrollResult::FullyUnrolled)
     *ResultLoop = remainderLoop;

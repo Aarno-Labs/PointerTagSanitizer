@@ -41,6 +41,7 @@
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
+#include "llvm/Transforms/Utils/PTSanLoopBounds.h"
 #include <cassert>
 #include <cstdint>
 
@@ -362,6 +363,8 @@ tryToUnrollAndJamLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
   if (NewInnerEpilogueLoopID)
     SubLoop->setLoopID(*NewInnerEpilogueLoopID);
 
+  ptsan::copyLoopBounds(SubLoop, OrigOuterLoopID);
+
   // Find trip count and trip multiple
   BasicBlock *Latch = L->getLoopLatch();
   BasicBlock *SubLoopLatch = SubLoop->getLoopLatch();
@@ -389,8 +392,10 @@ tryToUnrollAndJamLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
     std::optional<MDNode *> NewOuterEpilogueLoopID = makeFollowupLoopID(
         OrigOuterLoopID, {LLVMLoopUnrollAndJamFollowupAll,
                           LLVMLoopUnrollAndJamFollowupRemainderOuter});
-    if (NewOuterEpilogueLoopID)
+    if (NewOuterEpilogueLoopID) {
       EpilogueOuterLoop->setLoopID(*NewOuterEpilogueLoopID);
+      ptsan::copyLoopBounds(EpilogueOuterLoop, OrigOuterLoopID);
+    }
   }
 
   std::optional<MDNode *> NewInnerLoopID =
@@ -401,16 +406,23 @@ tryToUnrollAndJamLoop(Loop *L, DominatorTree &DT, LoopInfo *LI,
   else
     SubLoop->setLoopID(OrigSubLoopID);
 
+  ptsan::copyLoopBounds(SubLoop, OrigOuterLoopID);
+
   if (UnrollResult == LoopUnrollResult::PartiallyUnrolled) {
     std::optional<MDNode *> NewOuterLoopID = makeFollowupLoopID(
         OrigOuterLoopID,
         {LLVMLoopUnrollAndJamFollowupAll, LLVMLoopUnrollAndJamFollowupOuter});
     if (NewOuterLoopID) {
       L->setLoopID(*NewOuterLoopID);
+      ptsan::copyLoopBounds(L->getHeader(), L->getLoopPreheader(),
+                            OrigOuterLoopID);
 
       // Do not setLoopAlreadyUnrolled if a followup was given.
       return UnrollResult;
     }
+
+    ptsan::copyLoopBounds(L->getHeader(), L->getLoopPreheader(),
+                          OrigOuterLoopID);
   }
 
   // If loop has an unroll count pragma or unrolled by explicitly set count

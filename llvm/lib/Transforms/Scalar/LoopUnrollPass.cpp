@@ -58,6 +58,7 @@
 #include "llvm/Transforms/Utils/LoopPeel.h"
 #include "llvm/Transforms/Utils/LoopSimplify.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
+#include "llvm/Transforms/Utils/PTSanLoopBounds.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
 #include "llvm/Transforms/Utils/UnrollLoop.h"
 #include <algorithm>
@@ -1359,8 +1360,10 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
     std::optional<MDNode *> RemainderLoopID =
         makeFollowupLoopID(OrigLoopID, {LLVMLoopUnrollFollowupAll,
                                         LLVMLoopUnrollFollowupRemainder});
-    if (RemainderLoopID)
+    if (RemainderLoopID) {
       RemainderLoop->setLoopID(*RemainderLoopID);
+      ptsan::copyLoopBounds(RemainderLoop, OrigLoopID);
+    }
   }
 
   if (UnrollResult != LoopUnrollResult::FullyUnrolled) {
@@ -1369,11 +1372,14 @@ tryToUnrollLoop(Loop *L, DominatorTree &DT, LoopInfo *LI, ScalarEvolution &SE,
                                         LLVMLoopUnrollFollowupUnrolled});
     if (NewLoopID) {
       L->setLoopID(*NewLoopID);
+      ptsan::copyLoopBounds(L->getHeader(), L->getLoopPreheader(), OrigLoopID);
 
       // Do not setLoopAlreadyUnrolled if loop attributes have been specified
       // explicitly.
       return UnrollResult;
     }
+
+    ptsan::copyLoopBounds(L->getHeader(), L->getLoopPreheader(), OrigLoopID);
   }
 
   // If loop has an unroll count pragma or unrolled by explicitly set count
