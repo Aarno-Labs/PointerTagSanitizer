@@ -16,6 +16,10 @@ N: Andrew Browne
 E: browneee@google.com
 D: DataFlowSanitizer
 
+N: Eli Davis
+E: eli@aarno-labs.com
+D: PointerTagSanitizer
+
 N: Vitaly Buka
 E: vitalybuka@google.com
 D: Sanitizers

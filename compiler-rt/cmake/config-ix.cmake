@@ -617,6 +617,9 @@ if(APPLE)
   list_intersect(DFSAN_SUPPORTED_ARCH
     ALL_DFSAN_SUPPORTED_ARCH
     SANITIZER_COMMON_SUPPORTED_ARCH)
+  list_intersect(PTSAN_SUPPORTED_ARCH
+    ALL_PTSAN_SUPPORTED_ARCH
+    SANITIZER_COMMON_SUPPORTED_ARCH)
   list_intersect(GWP_ASAN_SUPPORTED_ARCH
     ALL_GWP_ASAN_SUPPORTED_ARCH
     SANITIZER_COMMON_SUPPORTED_ARCH)
@@ -683,6 +686,7 @@ else()
   filter_available_targets(RTSAN_SUPPORTED_ARCH ${ALL_RTSAN_SUPPORTED_ARCH})
   filter_available_targets(FUZZER_SUPPORTED_ARCH ${ALL_FUZZER_SUPPORTED_ARCH})
   filter_available_targets(DFSAN_SUPPORTED_ARCH ${ALL_DFSAN_SUPPORTED_ARCH})
+  filter_available_targets(PTSAN_SUPPORTED_ARCH ${ALL_PTSAN_SUPPORTED_ARCH})
   filter_available_targets(LSAN_SUPPORTED_ARCH ${ALL_LSAN_SUPPORTED_ARCH})
   filter_available_targets(MSAN_SUPPORTED_ARCH ${ALL_MSAN_SUPPORTED_ARCH})
   filter_available_targets(HWASAN_SUPPORTED_ARCH ${ALL_HWASAN_SUPPORTED_ARCH})
@@ -734,7 +738,7 @@ if(COMPILER_RT_SUPPORTED_ARCH)
 endif()
 message(STATUS "Compiler-RT supported architectures: ${COMPILER_RT_SUPPORTED_ARCH}")
 
-set(ALL_SANITIZERS asan;rtsan;dfsan;msan;hwasan;tsan;safestack;cfi;scudo_standalone;ubsan_minimal;gwp_asan;nsan;asan_abi)
+set(ALL_SANITIZERS asan;rtsan;dfsan;ptsan;msan;hwasan;tsan;safestack;cfi;scudo_standalone;ubsan_minimal;gwp_asan;nsan;asan_abi)
 set(COMPILER_RT_SANITIZERS_TO_BUILD all CACHE STRING
     "sanitizers to build if supported on the target (all;${ALL_SANITIZERS})")
 list_replace(COMPILER_RT_SANITIZERS_TO_BUILD all "${ALL_SANITIZERS}")
@@ -792,6 +796,13 @@ if (COMPILER_RT_HAS_SANITIZER_COMMON AND DFSAN_SUPPORTED_ARCH AND
   set(COMPILER_RT_HAS_DFSAN TRUE)
 else()
   set(COMPILER_RT_HAS_DFSAN FALSE)
+endif()
+
+if (COMPILER_RT_HAS_SANITIZER_COMMON AND PTSAN_SUPPORTED_ARCH AND
+    OS_NAME MATCHES "Linux")
+  set(COMPILER_RT_HAS_PTSAN TRUE)
+else()
+  set(COMPILER_RT_HAS_PTSAN FALSE)
 endif()
 
 if (COMPILER_RT_HAS_SANITIZER_COMMON AND LSAN_SUPPORTED_ARCH AND
