@@ -51,8 +51,8 @@ the optimizer can hoist, merge, and elide:
   
 - **LLVM test-suite MultiSource**
   - x86-64 (149 programs that execute > 10ms on baseline): 31%
-    geomean (27% with LAM).
-  - ARM64 (XXX programs that execute > 10ms on baseline): 40%
+    geomean; 27% with LAM.
+  - ARM64 (148 programs that execute > 10ms on baseline): 41%
     geomean.
   
 - **Memory**: 1.014x geomean peak physical memory on SPEC (worst case
