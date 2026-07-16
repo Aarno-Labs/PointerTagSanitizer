@@ -1,3 +1,17 @@
+//===-- ptsan_ir_interceptor_helpers.cpp ----------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file is a part of PointerTagSanitizer.
+//
+// Runtime helpers for IR-level PTSan interceptors.
+//
+//===----------------------------------------------------------------------===//
+
 #include "ptsan.h"
 #include "ptsan_ptr_utils.h"
 #include "sanitizer_common/sanitizer_internal_defs.h"

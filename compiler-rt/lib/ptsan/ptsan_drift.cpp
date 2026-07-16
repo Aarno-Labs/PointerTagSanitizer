@@ -1,3 +1,17 @@
+//===-- ptsan_drift.cpp ---------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
+// This file is a part of PointerTagSanitizer.
+//
+// Drift-specific PTSan machinery.
+//
+//===----------------------------------------------------------------------===//
+
 /* Drift-specific ptsan machinery
 
 This lives in a seperate file so I can easily remove it for the paper.

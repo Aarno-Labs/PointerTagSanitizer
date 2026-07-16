@@ -1,4 +1,4 @@
-//===-- PTSanIDStrip.cpp - Strip out PTSan Ids without doing anything else-*- C++ -*-===//
+//===-- PTSanIDStrip.cpp - Strip out PTSan ids and nothing else ----------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.

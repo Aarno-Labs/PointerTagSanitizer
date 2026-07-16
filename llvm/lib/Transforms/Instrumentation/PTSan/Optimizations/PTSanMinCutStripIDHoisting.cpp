@@ -1,5 +1,11 @@
 //===-- PTSanMinCutStripIDHoisting.cpp - Global strip-ID hoisting ---------===//
 //
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+//
 // PTSan pointer values can be either tagged or stripped. Some operations
 // require one polarity, transparent pointer operations propagate their input
 // polarity, and changing polarity costs a strip or tag operation. This file

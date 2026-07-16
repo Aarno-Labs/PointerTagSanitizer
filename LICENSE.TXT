@@ -234,6 +234,50 @@ mechanisms:
    file.
 
 ==============================================================================
+PointerTagSanitizer (PTSan) additions in this fork:
+==============================================================================
+This repository is a fork of LLVM 19.1.0 that adds PointerTagSanitizer (PTSan),
+developed by Aarno Labs LLC.
+
+PTSan's own code is Copyright (c) Aarno Labs LLC and is licensed under the
+Apache License v2.0 with LLVM Exceptions -- the same terms as the rest of the
+LLVM Project, reproduced above. This covers the instrumentation passes under
+llvm/lib/Transforms/Instrumentation/PTSan/, the runtime under
+compiler-rt/lib/ptsan/, their headers under llvm/include/llvm/, and the test
+suite under compiler-rt/test/ptsan/. These files carry SPDX headers.
+
+The files listed below are NOT under those terms. They retain the license of
+the code they derive from, and each carries its original notice at the top of
+the file, per mechanism (2) above.
+
+GNU Lesser General Public License v2.1 or later
+Copyright (c) Free Software Foundation, Inc.
+Derived from the GNU C Library:
+
+    compiler-rt/lib/ptsan/interceptors/ptsan_env.c
+    compiler-rt/lib/ptsan/interceptors/ptsan_exec.c
+    compiler-rt/lib/ptsan/interceptors/ptsan_obstack.cpp
+    compiler-rt/lib/ptsan/interceptors/ptsan_qsort.c
+    compiler-rt/lib/ptsan/interceptors/ptsan_tsearch.c
+
+PTSan provides its own implementations of these libc functions because they
+invoke user-supplied callbacks -- qsort's comparator, tsearch's comparison
+function -- which must receive pointers that still carry their PTSan tags.
+These five files are compiled into the PTSan runtime library, so a binary built
+with -fsanitize=ptsan contains LGPL-2.1-licensed code and carries the
+corresponding obligations on redistribution.
+
+MIT License
+Copyright (c) 2009-2017 Dave Gamble and cJSON contributors:
+
+    compiler-rt/test/ptsan/cjson/lib/cJSON.c
+    compiler-rt/test/ptsan/cjson/lib/cJSON.h
+
+cJSON is used only as an input program for the PTSan test suite. It is not part
+of the compiler, is not part of the PTSan runtime, and is not linked into any
+binary PTSan produces.
+
+==============================================================================
 Legacy LLVM License (https://llvm.org/docs/DeveloperPolicy.html#legacy):
 ==============================================================================
 University of Illinois/NCSA
