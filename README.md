@@ -34,10 +34,11 @@ pointer entitled to access this range?", which catches:
   and probabilistically thereafter.
 
 On MSET, an independent memory-safety benchmark suite, PTSan detects
-all 126 inter-object spatial cases and all 40 temporal cases,
-matching the strongest prior pointer-based system (SoftBound+CETS) at
-a fraction of its overhead. PTSan tracks allocation objects (heap,
-stack, globals, mmap); intra-object field overflows are out of scope.
+all 126 inter-object spatial cases and all 40 temporal cases, matching
+the strongest prior pointer-based system (the original publication of
+SoftBound+CETS) at a fraction of its overhead. PTSan tracks allocation
+objects (heap, stack, globals, mmap); intra-object field overflows are
+out of scope.
 
 ## Performance
 
@@ -75,12 +76,19 @@ the optimizer can hoist, merge, and elide:
   budget can fail closed in strict mode.
 - **Strict mode** is the security configuration: untagged pointers,
   the default identifier, and identifier exhaustion fail closed.
+  Strict mode is currently experimental and does not support all the
+  benchmarks published in our paper. 
   **Permissive mode** keeps such accesses running and is intended for
   bring-up and compatibility debugging, not for security deployments.
 - **PTSan-LAM** uses Intel Linear Address Masking to elide most
   software tag stripping (15-bit identifiers, 2^15 objects). It
   requires the LAM_U48 kernel variant, which is not in mainline
   Linux; our measurements use a patched Linux 6.1 kernel.
+- **Debug builds** of your source code are strongly encouraged at this
+  time since some of PTSan's analyses use information embedded
+  in debug metadata.
+- **Optimized builds** are required for PTSan-enabled builds of your
+  source code.  Please use at least `-O1`.
 
 ## Building and using PTSan
 
@@ -93,7 +101,7 @@ cmake -S llvm -B build -G Ninja \
   -DLLVM_ENABLE_PROJECTS="clang;compiler-rt"
 ninja -C build clang compiler-rt
 
-build/bin/clang -O2 -fsanitize=ptsan your_program.c -o your_program
+build/bin/clang -O2 -g -fsanitize=ptsan your_program.c -o your_program
 ```
 
 On a detected violation, PTSan reports the check site, the pointer's
@@ -127,7 +135,11 @@ functions because they invoke user-supplied callbacks, such as
 their PTSan tags. These five files are compiled into the PTSan runtime
 library, so a binary built with `-fsanitize=ptsan` contains
 LGPL-2.1-licensed code and carries the corresponding obligations on
-redistribution.
+redistribution.  
+
+We are working to create a single-license repository that does include
+the above 5 exceptions.  Please email us if the above exceptions are
+an issue.
 
 The PTSan test suite also includes cJSON
 (`compiler-rt/test/ptsan/cjson/lib/`), which is under the MIT License,
@@ -137,11 +149,9 @@ runtime.
 
 See `LICENSE.TXT` for the full license texts and the file inventory.
 
-# The LLVM Compiler Infrastructure
+(below is the original LLVM root README.md)
 
-[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/llvm/llvm-project/badge)](https://securityscorecards.dev/viewer/?uri=github.com/llvm/llvm-project)
-[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/8273/badge)](https://www.bestpractices.dev/projects/8273)
-[![libc++](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml/badge.svg?branch=main&event=schedule)](https://github.com/llvm/llvm-project/actions/workflows/libcxx-build-and-test.yaml?query=event%3Aschedule)
+# The LLVM Compiler Infrastructure 
 
 Welcome to the LLVM project!
 
