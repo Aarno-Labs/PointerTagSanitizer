@@ -50,7 +50,7 @@ the optimizer can hoist, merge, and elide:
   Intel LAM hardware address masking.
   
 - **LLVM test-suite MultiSource**
-  - x86-64 (149 programs that execute > 10ms on baseline): 31%
+  - x86-64 (149 programs that execute > 10ms on baseline): 31.5%
     geomean; 27% with LAM.
   - ARM64 (148 programs that execute > 10ms on baseline): 41%
     geomean.
@@ -60,9 +60,10 @@ the optimizer can hoist, merge, and elide:
   uses no redzones, no shadow memory, and no quarantine; its metadata
   is about 1.2 MiB of fixed tables.
   
-- **Servers**: six real-world server and cryptographic workloads
-  (Redis, PostgreSQL, NGINX, OpenSSL, memcached, Apache) run from
-  near-native to XXX% overhead.
+- **Servers**: seven real-world server and cryptographic workloads
+  (Redis, PostgreSQL, NGINX, OpenSSL, memcached, Apache, SQLite) with
+  overheads ranging from near-native to 44% on x86-64, each within the
+  2^16 identifier budget (peak demand 16,411).
 
 ## Requirements and configurations
 
