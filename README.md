@@ -137,9 +137,9 @@ library, so a binary built with `-fsanitize=ptsan` contains
 LGPL-2.1-licensed code and carries the corresponding obligations on
 redistribution.  
 
-We are working to create a single-license repository that does include
-the above 5 exceptions.  Please email us if the above exceptions are
-an issue.
+We are working to create a single-license repository that does not
+include the above 5 exceptions.  Please email us if the above
+exceptions are an issue.
 
 The PTSan test suite also includes cJSON
 (`compiler-rt/test/ptsan/cjson/lib/`), which is under the MIT License,
