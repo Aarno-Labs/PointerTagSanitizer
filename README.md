@@ -112,8 +112,8 @@ object identifier, the access type, address, and size.
 The design, security analysis, and full evaluation are described in:
 
 > Eli Davis, Eric Lahtinen, and Michael Gordon.
-> *PTSan: A Practical Memory Safety Sanitizer for C/C++ with
-> Pointer-Object Authority.* arXiv, 2026.
+> *[PTSan: A Practical Memory Safety Sanitizer for C/C++ with
+> Pointer-Object Authority](https://arxiv.org/abs/2607.19246).* arXiv, 2026.
 
 ## License
 
