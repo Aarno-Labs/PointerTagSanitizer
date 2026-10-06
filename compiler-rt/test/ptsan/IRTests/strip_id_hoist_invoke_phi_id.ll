@@ -21,16 +21,15 @@ define void @invoke_result_phi_descendant_retag_id(ptr %other, ptr %slot,
 ; CHECK-NEXT: %p = invoke ptr @may_throw()
 ; CHECK: join:
 ; CHECK-NEXT: %phi = phi ptr [ %p, %invoke.pred ], [ %other, %null.pred ]
-; CHECK-NEXT: [[PHI_STRIP:%.*]] = call ptr @llvm.ptrmask.p0.i64(ptr %phi,
 ; CHECK-NEXT: [[PHI_ASINT:%.*]] = ptrtoint ptr %phi to i64
+; CHECK-NEXT: [[PHI_BITS:%.*]] = call i64 asm "andq $2, $0", "=r,0,r,~{flags}"(i64 [[PHI_ASINT]], i64 281474976710655)
+; CHECK-NEXT: [[PHI_STRIP:%.*]] = inttoptr i64 [[PHI_BITS]] to ptr
 ; CHECK-NEXT: [[PHI_ID:%.*]] = lshr i64 [[PHI_ASINT]], 48
 ; CHECK: loop:
-; CHECK: %g = getelementptr i8, ptr [[PHI_STRIP]], i64 %iv, !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
+; CHECK: %g = getelementptr i8, ptr [[PHI_STRIP]], i64 %iv, !ptsan.stripped {{![0-9]+}}
 ; CHECK: exit:
-; CHECK-NEXT: [[G_LCSSA_ID:%.*]] = phi i64 [ [[PHI_ID]], %loop ]
-; CHECK-NEXT: %g.lcssa = phi ptr [ %g, %loop ], !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
-; CHECK-NEXT: [[G_LCSSA_ASINT:%.*]] = ptrtoint ptr %g.lcssa to i64
-; CHECK-NEXT: [[G_TAGBITS:%.*]] = shl i64 [[G_LCSSA_ID]], 48
+; CHECK-NEXT: [[G_LCSSA_ASINT:%.*]] = ptrtoint ptr %g to i64
+; CHECK-NEXT: [[G_TAGBITS:%.*]] = shl i64 [[PHI_ID]], 48
 ; CHECK-NEXT: [[G_TAGGED_ASINT:%.*]] = or i64 [[G_LCSSA_ASINT]], [[G_TAGBITS]]
 ; CHECK-NEXT: [[G_TAGGED:%.*]] = inttoptr i64 [[G_TAGGED_ASINT]] to ptr
 ; CHECK-NEXT: store ptr [[G_TAGGED]]

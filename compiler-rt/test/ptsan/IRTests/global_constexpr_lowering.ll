@@ -1,6 +1,7 @@
 ; Check the desired strip-ID hoist shape for a global constant-expression
 ; operand. The constant-expression GEP should be materialized so late strip-ID
-; hoisting can strip the raw global once and use ordinary GEPs under it.
+; hoisting can expose the raw global and use ordinary GEPs under it. A raw
+; GlobalValue is already stripped, so no strip operation is needed.
 ;
 ; RUN: %opt_ptsan -ptsan-nochecks -ptsan-stop-after=late-optimization %s | FileCheck %s
 
@@ -14,10 +15,10 @@ declare ptr @__ptsan_strip(ptr)
 define void @global_constexpr_strip_hoists(i64 %n) {
 ; CHECK-LABEL: define void @global_constexpr_strip_hoists(
 ; CHECK: entry:
-; CHECK: [[GLOBAL_STRIP:%.*]] = call ptr @__ptsan_strip(ptr @extern_global)
+; CHECK-NOT: call ptr @__ptsan_strip
 ; CHECK: loop:
 ; CHECK-NOT: call ptr @__ptsan_strip
-; CHECK: [[BASE:%.*]] = getelementptr inbounds i8, ptr [[GLOBAL_STRIP]], i64 4
+; CHECK: [[BASE:%.*]] = getelementptr inbounds i8, ptr @extern_global, i64 4
 ; CHECK-NEXT: %addr = getelementptr i8, ptr [[BASE]], i64 %i
 ; CHECK-NOT: call ptr @__ptsan_strip
 ; CHECK: load volatile i8, ptr %addr
@@ -43,18 +44,18 @@ exit:
 ; This is the SPEC-style case that used to split equivalent address shapes:
 ; one side used a global-derived SSA base, while the other side used a raw
 ; global constant-expression GEP. Materializing the constant expression lets
-; both sides derive from the same stripped global.
+; both sides derive from the same raw global.
 define void @global_constexpr_counterpart_canonicalizes_both_sides(i64 %i) {
 ; CHECK-LABEL: define void @global_constexpr_counterpart_canonicalizes_both_sides(
 ; CHECK: entry:
-; CHECK: [[GLOBAL_STRIP:%.*]] = call ptr @__ptsan_strip(ptr @extern_global)
-; CHECK: [[LOAD_BASE:%.*]] = getelementptr inbounds i8, ptr [[GLOBAL_STRIP]], i64 4
+; CHECK-NOT: call ptr @__ptsan_strip
+; CHECK: [[LOAD_BASE:%.*]] = getelementptr inbounds i8, ptr @extern_global, i64 4
 ; CHECK-NEXT: %load.col = getelementptr [256 x float], ptr [[LOAD_BASE]], i64 0, i64 %i
 ; CHECK: loop:
 ; CHECK-NOT: call ptr @__ptsan_strip
 ; CHECK: %load.addr = getelementptr [256 x float], ptr %load.col, i64 %j.next
 ; CHECK-NEXT: %v = load float, ptr %load.addr
-; CHECK-NEXT: [[STORE_COL:%.*]] = getelementptr inbounds i8, ptr [[GLOBAL_STRIP]], i64 1028
+; CHECK-NEXT: [[STORE_COL:%.*]] = getelementptr inbounds i8, ptr @extern_global, i64 1028
 ; CHECK-NEXT: %store.addr = getelementptr inbounds [256 x float], ptr [[STORE_COL]], i64 %j, i64 %i
 ; CHECK-NEXT: store float %v, ptr %store.addr
 ; CHECK-NOT: call ptr @__ptsan_strip

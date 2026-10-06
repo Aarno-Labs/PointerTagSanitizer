@@ -15,6 +15,7 @@
 #pragma once
 
 #include "ptsan.h"
+#include "ptsan_bounds.h"
 #include "sanitizer_common/sanitizer_common.h"
 #include "sanitizer_common/sanitizer_posix.h"
 namespace __ptsan {
@@ -26,9 +27,14 @@ class PTSanThread {
   static PTSanThread *Create(thread_callback_t start_routine, void *arg);
   static void TSDDtor(void *tsd);
   void Destroy();
+  // Free the record and return its bucket after teardown or failed creation.
+  // This does not touch the calling thread's TLS.
+  void Release();
 
   void Init();  // Should be called from the thread itself.
+  void InitTLS();
   thread_return_t ThreadStart();
+  int ThreadStartC11();
 
   uptr stack_top();
   uptr stack_bottom();
@@ -42,6 +48,10 @@ class PTSanThread {
   int stack_id_bucket_no;
   u16 next_stack_id;
   u16 stack_id_limit;
+
+  // Runtime-owned copies survive longjmp abandoning the allocating frames.
+  InternalMmapVectorNoCtor<u16> slow_stack_ids;
+  InternalMmapVectorNoCtor<RepeatableAllocaIDs *> repeatable_alloca_ids;
 
  private:
   // NOTE: There is no PTSanThread constructor. It is allocated
@@ -60,5 +70,10 @@ class PTSanThread {
 
 PTSanThread *GetCurrentThread();
 void SetCurrentThread(PTSanThread *t);
+
+#ifdef PTSAN_MUSL_INTERCEPTION
+// Call only at a final musl exit boundary; leaves all signals blocked.
+void FinishMuslThread();
+#endif
 
 } // namespace __ptsan

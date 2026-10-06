@@ -1,0 +1,17 @@
+#
+# Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+# See https://llvm.org/LICENSE.txt for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+#
+@LIT_SITE_CFG_IN_HEADER@
+
+config.name_suffix = "@PTSAN_MUSL_TEST_CONFIG_SUFFIX@"
+config.target_arch = "@PTSAN_MUSL_TEST_TARGET_ARCH@"
+config.musl_compiler = "@PTSAN_MUSL_TEST_COMPILER@"
+config.musl_resource_dir = "@PTSAN_MUSL_TEST_RESOURCE_DIR@"
+
+# Load common config for all compiler-rt lit tests.
+lit_config.load_config(config, "@COMPILER_RT_BINARY_DIR@/test/lit.common.configured")
+
+# Load the isolated instrumented-musl test configuration.
+lit_config.load_config(config, "@PTSAN_LIT_TESTS_DIR@/Musl/lit.cfg.py")

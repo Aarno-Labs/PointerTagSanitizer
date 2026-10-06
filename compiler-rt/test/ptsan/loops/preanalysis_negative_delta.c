@@ -1,9 +1,14 @@
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-discard-value-names -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR --implicit-check-not=SimpleAccessRange
+// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-discard-value-names -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR --implicit-check-not=SimpleAccessRange
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-discard-value-names -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -o %exe %s %S/../Inputs/preanalysis_negative_delta_globals.c
 // RUN: ./%exe 8 2> err && FileCheck %s --check-prefix=OUT < err
 
-// IR: PREANALYZED_LOOP
+// Isolate one mirrored access whose row and column addresses both decrease as
+// their induction variables increase. Preanalysis must retain those negative
+// affine deltas in a LoopAccessRange, materialize one precheck, and avoid a
+// false positive at runtime.
+
+// IR: call void (...) @__ptsan_loop_preanalysis(
 // IR: LoopAccessRange
 
 // OUT-NOT: Found bad

@@ -1,14 +1,15 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_ptsan -g -O2 -o %exe %s
-// RUN: ./%exe 83 2> out.txt
+// RUN: %clang_ptsan -g -O2 -mllvm -ptsan-abort-on-error -o %exe %s
+// RUN: not ./%exe 83 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 81 2> out.txt
+// RUN: not ./%exe 81 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 // RUN: ./%exe 80 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
 // RUN: ./%exe 79 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
 
+// Stop before the invalid copy can corrupt adjacent stack storage.
 // BAD: Found bad RANGE access
 
 // GOOD-NOT: Found bad RANGE access

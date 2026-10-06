@@ -5,11 +5,11 @@
 // RUN: ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 
-// OUT: line id: 0x1801
-// OUT: dup id: 0x1802
-// OUT: line id: 0x1801
-// OUT: dup id: 0x1803
-// OUT: resolved id: 0x1804
+// OUT: line id: 0x[[#%x,LINE:]]
+// OUT: dup id: 0x[[#LINE + 1]]
+// OUT: line id: 0x[[#LINE]]
+// OUT: dup id: 0x[[#LINE + 2]]
+// OUT: resolved id: 0x[[#LINE + 3]]
 
 // ERR: Unreclaimed IDs at exit: 0
 
@@ -44,6 +44,7 @@ int main(void) {
             break; // EOF or error
         }
         print_id(line);
+        assert(get_id(line) != 0);
 
         // 3) Duplicate the line via strdup (calls malloc internally).
         char *dup = strdup(line);

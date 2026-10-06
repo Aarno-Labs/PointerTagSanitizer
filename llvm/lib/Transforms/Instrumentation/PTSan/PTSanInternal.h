@@ -73,8 +73,8 @@ using NW = llvm::SCEV::NoWrapFlags;
 
 #define DEBUG_TYPE "ptsan-dbg"
 #define INFO_TYPE "ptsan-info"
-#define DBG(X) DEBUG_WITH_TYPE(DEBUG_TYPE, X)
-#define INFO(X) DEBUG_WITH_TYPE(INFO_TYPE, X)
+#define DBG(X) DEBUG_WITH_TYPE("ptsan-dbg", X)
+#define INFO(X) DEBUG_WITH_TYPE("ptsan-info", X)
 
 namespace llvm::ptsan {
 
@@ -98,8 +98,6 @@ extern cl::opt<bool> ClClearIdsOnCmp;
 extern cl::opt<bool> ClQuietErrors;
 extern cl::opt<bool> ClStrictMode;
 extern cl::opt<bool> ClNoPTSanOpts;
-extern cl::opt<bool> ClNoStripIDHoist;
-extern cl::opt<bool> ClUseLocalStripIDHoist;
 extern cl::opt<bool> ClUseReturnedMallocSize;
 extern cl::opt<bool> ClAbortOnError;
 extern cl::opt<bool> ClPTSanPreanalyzeLoops;
@@ -120,7 +118,6 @@ Value *findPTSanBasePointer(Value *Start, PTSanUtils &PTU);
 bool isUntaggedConstantPtr(Value *V);
 optional<uint64_t> getStaticGlobalSize(const GlobalVariable *GV,
                                        const DataLayout &DL);
-bool isStdLibraryGlobal(const GlobalVariable &GV);
 
 class PointerTagSanitizer;
 
@@ -144,14 +141,17 @@ struct RangeCheckInfo {
 struct StaticObjectBounds {
   Value *Base;
   const SCEVConstant *Size;
+  // Object bounds can prove accesses safe even when the runtime uses a larger
+  // shared range. Only exact runtime bounds may replace a bounds load.
+  bool CanFoldRuntimeBounds;
 };
 
 class PTSanAnalysisState;
 class PTSanDiscoverer;
 class PTSanOptimizer;
+class PTSanPreanalysisElider;
 class PTSanAnchorOptimizer;
 class PTSanMetadataLowerer;
-class PTSanStripIDHoister;
 class PTSanMinCutStripIDHoister;
 class PTSanMinCutGraphBuilder;
 class PTSanMinCutRewriter;
@@ -180,6 +180,7 @@ class TagAnchor;
 class ValidateArithAnchor;
 class PositionedAnchor;
 class FunctionExitAnchor;
+class SetjmpAnchor;
 class LibcCallAnchor;
 class SpecialStripAnchor;
 
@@ -202,13 +203,14 @@ private:
   friend class ValidateArithAnchor;
   friend class PositionedAnchor;
   friend class FunctionExitAnchor;
+  friend class SetjmpAnchor;
   friend class LibcCallAnchor;
   friend class SpecialStripAnchor;
   friend class PTSanDiscoverer;
   friend class PTSanOptimizer;
+  friend class PTSanPreanalysisElider;
   friend class PTSanAnchorOptimizer;
   friend class PTSanMetadataLowerer;
-  friend class PTSanStripIDHoister;
   friend class PTSanMinCutStripIDHoister;
   friend class PTSanMinCutGraphBuilder;
   friend class PTSanMinCutRewriter;
@@ -231,6 +233,8 @@ private:
   // Real -> Proxy
   DenseMap<GlobalVariable *, GlobalVariable *> GlobalVariableProxies;
   DenseMap<GlobalAlias *, GlobalAlias *>GlobalAliasProxies;
+  // TLS keeps only the ID; threadlocal.address supplies the current address.
+  DenseMap<GlobalValue *, GlobalValue *> TLSIDs;
   // Proxy -> Real
   DenseMap<GlobalValue *, GlobalVariable *> GlobalProxyTargets;
 
@@ -252,8 +256,13 @@ private:
   ConstantInt *IDMask;
   ConstantInt *DefaultIDNo;
 
-  // Instrumentation-inserted values
-  SmallPtrSet<Value *, 16> InstrVals;
+  // Instrumentation status belongs to the specific value we created, not to
+  // an arbitrary value that later replaces it. Deletion still removes the
+  // entry automatically.
+  struct InstrValueMapConfig : ValueMapConfig<const Value *> {
+    enum { FollowRAUW = false };
+  };
+  ValueMap<const Value *, bool, InstrValueMapConfig> InstrVals;
 
   SmallPtrSet<Value *, 8> AnchorCallees;
 
@@ -269,11 +278,23 @@ private:
   FunctionCallee FreeStackIDs3;
   FunctionCallee FreeStackIDs4;
   FunctionCallee FreeStackIDsN;
+  FunctionCallee GetRepeatableAllocaIDsContainer;
+  FunctionCallee GetRepeatableAllocaID;
+  FunctionCallee FreeRepeatableAllocaIDs;
+  FunctionCallee SaveStackIDCheckpoint;
+  FunctionCallee RestoreStackIDCheckpoint;
+  FunctionCallee InitVAListX86_64;
+  FunctionCallee InitVAListAArch64;
 
   FunctionCallee LogAllocaInfo;
   FunctionCallee LogCheckCalled;
   FunctionCallee GetNextGlobalID;
+  FunctionCallee GetConstantGlobalID;
+  FunctionCallee RegisterTLS;
+  FunctionCallee InitTLS;
+  FunctionCallee DestroyTLS;
   FunctionCallee ReportGenericError;
+  FunctionCallee ReportVectorError;
   FunctionCallee EnableLibcInstr;
   FunctionCallee ValidateFunctionStart;
   FunctionCallee ValidateArithmetic;
@@ -292,10 +313,12 @@ private:
   FunctionCallee PTSanTagged;
   FunctionCallee PTSanTag;
   FunctionCallee PTSanFunctionExit;
+  FunctionCallee PTSanSetjmp;
   FunctionCallee PTSanValidateArith;
   FunctionCallee PTSanLibcCall;
   FunctionCallee PTSanSpecialStrip;
   GlobalValue *PTSanUnmaterializedRange;
+  GlobalValue *PTSanVarargSentinel;
   GlobalValue *BoundsArray;
   GlobalValue *TypesArray;
   GlobalValue *OverflowIDBoundsPtr;
@@ -305,9 +328,10 @@ private:
   GlobalValue *PTSanInLibc;
 
   void initializeModule();
+  bool shouldUseInlineStrip() const;
   void markAsInstr(Value *V);
   void unmarkAsInstr(Value *V);
-  bool isInstr(Value *V);
+  bool isInstr(const Value *V);
   bool isAnchor(Value *V) const;
   template <typename AnchorT>
   SmallVector<AnchorT, 16> collectAnchors(Function &F);
@@ -322,6 +346,8 @@ public:
   template <typename AnchorT>
     optional<AnchorT> getAsAnchor(Value *V);
   PointerTagSanitizer(Module &M);
+  // Return the tagged-pointer proxy for a global or alias, if one exists.
+  GlobalValue *getGlobalProxy(Value *V) const;
   bool sanitizeModule();
   void finalize() { DIB.finalize(); }
 };
@@ -346,3 +372,6 @@ struct PTSanIRB
 };
 
 } // namespace llvm::ptsan
+
+#undef DEBUG_TYPE
+#undef INFO_TYPE

@@ -2,7 +2,7 @@
 // RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names \
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
 // RUN:   -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats \
-// RUN:   -o %exe %s
+// RUN:   -mllvm -ptsan-abort-on-error=0 -o %exe %s
 // RUN: ./%exe 4 2> good.err && FileCheck %s --check-prefixes=GOOD,STATS < good.err
 // RUN: ./%exe 5 2> bad.err && FileCheck %s --check-prefixes=BAD,STATS < bad.err
 

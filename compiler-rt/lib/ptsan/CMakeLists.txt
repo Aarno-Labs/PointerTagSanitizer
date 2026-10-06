@@ -1,4 +1,17 @@
-include_directories(..)
+include_directories(. ..)
+
+option(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC
+  "Build PTSan for use with an instrumented libc instead of libc interceptors"
+  OFF)
+set(COMPILER_RT_PTSAN_MUSL_SOURCE_DIR "" CACHE PATH
+  "Path to the musl source tree used by the instrumented-libc PTSan runtime")
+
+if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC AND
+   NOT IS_DIRECTORY "${COMPILER_RT_PTSAN_MUSL_SOURCE_DIR}/arch")
+  message(FATAL_ERROR
+    "COMPILER_RT_PTSAN_MUSL_SOURCE_DIR must name a musl source tree when "
+    "COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC is enabled")
+endif()
 
 set(PTSAN_RTL_SOURCES
   ptsan_bounds.cpp
@@ -10,10 +23,20 @@ set(PTSAN_RTL_SOURCES
   # ptsan_tsearch.c
   ptsan_preinit.cpp
   ptsan_thread.cpp
-  interceptors/ptsan_interceptors_with_libc_headers.cpp
-  interceptors/ptsan_interceptors_format.cpp
   interceptors/ptsan_ir_interceptor_helpers.cpp
 )
+
+if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC)
+  list(APPEND PTSAN_RTL_SOURCES
+    ptsan_musl_internal.c
+    interceptors/ptsan_musl_interceptors.cpp
+    interceptors/ptsan_musl_syscalls.cpp
+  )
+else()
+  list(APPEND PTSAN_RTL_SOURCES
+    interceptors/ptsan_interceptors_with_libc_headers.cpp
+  )
+endif()
 
 # We keep track of this header list as usual:
 set(PTSAN_RTL_HEADERS
@@ -25,11 +48,20 @@ set(PTSAN_RTL_HEADERS
   ptsan.h
   ptsan_thread.h
   ptsan_ptr_utils.h
+  ptsan_musl_interception.h
+  ptsan_musl_internal.h
   interceptors/ptsan_common_interceptors.inc
   interceptors/ptsan_libc.inc
+  musl_overlay/syscall.h
 )
 
 set(PTSAN_COMMON_CFLAGS ${SANITIZER_COMMON_CFLAGS} -g )
+append_list_if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC
+  -DPTSAN_INSTRUMENTED_LIBC PTSAN_COMMON_CFLAGS)
+# This runtime currently uses musl's static linker-wrapped API boundaries.
+# Keep that mechanism separate from instrumented-libc initialization policy.
+append_list_if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC
+  -DPTSAN_MUSL_INTERCEPTION PTSAN_COMMON_CFLAGS)
 append_rtti_flag(OFF PTSAN_COMMON_CFLAGS)
 # Prevent clang from generating libc calls.
 append_list_if(COMPILER_RT_HAS_FFREESTANDING_FLAG -ffreestanding PTSAN_COMMON_CFLAGS)
@@ -99,34 +131,69 @@ endfunction()
 
 function(ptsan_add_runtime_variant runtime_name arch)
   set(PTSAN_CFLAGS ${PTSAN_COMMON_CFLAGS} ${ARGN})
+  if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC)
+    if(NOT EXISTS
+       "${COMPILER_RT_PTSAN_MUSL_SOURCE_DIR}/arch/${arch}/syscall_arch.h")
+      message(FATAL_ERROR
+        "musl has no syscall_arch.h for compiler-rt architecture ${arch}")
+    endif()
+    list(APPEND PTSAN_CFLAGS
+      -I${COMPILER_RT_PTSAN_MUSL_SOURCE_DIR}/arch/${arch}
+      -iquote${COMPILER_RT_PTSAN_MUSL_SOURCE_DIR})
+  endif()
   set(PTSAN_OBJ_GENEX_${runtime_name}_${arch} "")
 
-  ptsan_add_interceptor_obj(
-    ${runtime_name}
-    ${arch}
-    interceptors/ptsan_interceptors.cpp
-    EXTRA_DEPS ${CMAKE_CURRENT_SOURCE_DIR}/interceptors/ptsan_common_interceptors.inc
-    CFLAGS ${PTSAN_CFLAGS}
-    PASS -mllvm -ptsan-strip-ids
-  )
-
-  set(PTSAN_INTERCEPTOR_SRCS
-    interceptors/ptsan_tsearch.c
-    interceptors/ptsan_env.c
-    interceptors/ptsan_exec.c
-    interceptors/ptsan_obstack.cpp
-    interceptors/ptsan_qsort.c
-  )
-
-  foreach(src IN LISTS PTSAN_INTERCEPTOR_SRCS)
+  if(NOT COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC)
     ptsan_add_interceptor_obj(
       ${runtime_name}
       ${arch}
-      ${src}
+      interceptors/ptsan_interceptors.cpp
+      EXTRA_DEPS ${CMAKE_CURRENT_SOURCE_DIR}/interceptors/ptsan_common_interceptors.inc
       CFLAGS ${PTSAN_CFLAGS}
       PASS -mllvm -ptsan-strip-ids
     )
-  endforeach()
+
+    # va_arg loads through backing pointers that may carry IDs. Let the
+    # strip-only pass handle those loads without depending on va_list's ABI.
+    ptsan_add_interceptor_obj(
+      ${runtime_name}
+      ${arch}
+      interceptors/ptsan_interceptors_format.cpp
+      EXTRA_DEPS ${CMAKE_CURRENT_SOURCE_DIR}/interceptors/ptsan_libc.inc
+      CFLAGS ${PTSAN_CFLAGS}
+      PASS -mllvm -ptsan-strip-ids
+    )
+
+    set(PTSAN_INTERCEPTOR_SRCS
+      interceptors/ptsan_tsearch.c
+      interceptors/ptsan_env.c
+      interceptors/ptsan_exec.c
+      interceptors/ptsan_obstack.cpp
+      interceptors/ptsan_qsort.c
+    )
+
+    foreach(src IN LISTS PTSAN_INTERCEPTOR_SRCS)
+      ptsan_add_interceptor_obj(
+        ${runtime_name}
+        ${arch}
+        ${src}
+        CFLAGS ${PTSAN_CFLAGS}
+        PASS -mllvm -ptsan-strip-ids
+      )
+    endforeach()
+  endif()
+
+  set(PTSAN_COMMON_OBJECTS
+    $<TARGET_OBJECTS:RTSanitizerCommon.${arch}>
+    $<TARGET_OBJECTS:RTSanitizerCommonLibc.${arch}>
+  )
+  if(NOT COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC)
+    list(APPEND PTSAN_COMMON_OBJECTS
+      $<TARGET_OBJECTS:RTInterception.${arch}>
+      $<TARGET_OBJECTS:RTSanitizerCommonSymbolizer.${arch}>
+      $<TARGET_OBJECTS:RTSanitizerCommonSymbolizerInternal.${arch}>
+    )
+  endif()
 
   add_compiler_rt_runtime(clang_rt.${runtime_name}
     STATIC
@@ -134,11 +201,7 @@ function(ptsan_add_runtime_variant runtime_name arch)
     SOURCES
       ${PTSAN_RTL_SOURCES}
       ${PTSAN_OBJ_GENEX_${runtime_name}_${arch}}
-      $<TARGET_OBJECTS:RTInterception.${arch}>
-      $<TARGET_OBJECTS:RTSanitizerCommon.${arch}>
-      $<TARGET_OBJECTS:RTSanitizerCommonLibc.${arch}>
-      $<TARGET_OBJECTS:RTSanitizerCommonSymbolizer.${arch}>
-      $<TARGET_OBJECTS:RTSanitizerCommonSymbolizerInternal.${arch}>
+      ${PTSAN_COMMON_OBJECTS}
     ADDITIONAL_HEADERS ${PTSAN_RTL_HEADERS}
     CFLAGS ${PTSAN_CFLAGS}
     PARENT_TARGET ptsan)
@@ -153,6 +216,12 @@ endfunction()
 # -------------------------------------------------------------------
 
 foreach(arch ${PTSAN_SUPPORTED_ARCH})
+  get_compiler_rt_output_dir(${arch} ptsan_output_dir)
+  get_compiler_rt_install_dir(${arch} ptsan_install_dir)
+  configure_file(ptsan-init-ro.ld ${ptsan_output_dir}/ptsan-init-ro.ld COPYONLY)
+  install(FILES ptsan-init-ro.ld DESTINATION ${ptsan_install_dir}
+    COMPONENT ptsan)
+
   ptsan_add_runtime_variant(ptsan ${arch})
   ptsan_add_runtime_variant(ptsan_validate ${arch} -DPTSAN_VALIDATE)
   # AArch64 uses software masking; LAM is an x86-64 hardware feature.

@@ -48,7 +48,7 @@ entry:
 ; PREPARE-NOT: call i64 @__ptsan_static_base
 ; PREPARE-NOT: call i64 @__ptsan_static_span
 ; PREPARE-NOT: call {{.*}} @__ptsan_strip
-; PREPARE-NOT: call void (...) @__ptsan_source
+; PREPARE-NOT: call ptr @__ptsan_source
 ; PREPARE-NOT: call void (...) @__ptsan_function_exit
 
 ; DISCOVERY-DAG: [[ID:%.*]] = call i64 @__ptsan_get_id(ptr %p)
@@ -59,7 +59,9 @@ entry:
 ; DISCOVERY-DAG: call ptr @__ptsan_strip(ptr %p)
 ; DISCOVERY-DAG: call i64 @__ptsan_strip_i64(i64 %pi)
 ; DISCOVERY-DAG: call i64 @__ptsan_strip_i64(i64 %qi)
-; DISCOVERY-DAG: call void (...) @__ptsan_source
+; DISCOVERY-DAG: call ptr @__ptsan_source
+; DISCOVERY-DAG: [[LOCAL_SOURCE:%.*]] = call ptr @__ptsan_source(ptr %buf)
+; DISCOVERY-DAG: invoke void @read_arg(ptr [[LOCAL_SOURCE]])
 ; DISCOVERY-DAG: call void (...) @__ptsan_function_exit
 ; DISCOVERY: declare void @__ptsan_access(...)
 ; DISCOVERY: declare i64 @__ptsan_get_id(ptr)
@@ -75,7 +77,7 @@ entry:
 ; OPT-DAG: call ptr @__ptsan_strip(ptr %p)
 ; OPT-DAG: call i64 @__ptsan_strip_i64(i64 %pi)
 ; OPT-DAG: call i64 @__ptsan_strip_i64(i64 %qi)
-; OPT-DAG: call void (...) @__ptsan_source
+; OPT-DAG: call ptr @__ptsan_source
 ; OPT-DAG: call void (...) @__ptsan_function_exit
 ; OPT: declare void @__ptsan_access(...)
 ; OPT: declare i64 @__ptsan_get_id(ptr)
@@ -91,7 +93,7 @@ entry:
 ; META-DAG: call ptr @__ptsan_strip(ptr %p)
 ; META-DAG: call i64 @__ptsan_strip_i64(i64 %pi)
 ; META-DAG: call i64 @__ptsan_strip_i64(i64 %qi)
-; META-DAG: call void (...) @__ptsan_source
+; META-DAG: call ptr @__ptsan_source
 ; META-DAG: call void (...) @__ptsan_function_exit
 ; META: declare void @__ptsan_access(...)
 ; META: declare i64 @__ptsan_get_id(ptr)
@@ -108,7 +110,7 @@ entry:
 ; LATE-DAG: call ptr @__ptsan_strip(ptr %p)
 ; LATE-DAG: call i64 @__ptsan_strip_i64(i64 %pi)
 ; LATE-DAG: call i64 @__ptsan_strip_i64(i64 %qi)
-; LATE-DAG: call void (...) @__ptsan_source
+; LATE-DAG: call ptr @__ptsan_source
 ; LATE-DAG: call void (...) @__ptsan_function_exit
 ; LATE: declare void @__ptsan_access(...)
 ; LATE: declare i64 @__ptsan_get_id(ptr)
@@ -124,6 +126,6 @@ entry:
 ; LOWER-NOT: call i64 @__ptsan_static_base
 ; LOWER-NOT: call i64 @__ptsan_static_span
 ; LOWER-NOT: call {{.*}} @__ptsan_strip
-; LOWER-NOT: call void (...) @__ptsan_source
+; LOWER-NOT: call ptr @__ptsan_source
 ; LOWER-NOT: call void (...) @__ptsan_function_exit
 ; LOWER: call void @ptsan_complain

@@ -35,7 +35,7 @@ void ptsan_log_alloca_info(char *FnName, u16 id, bool IsLocal, bool ShortPath) {
 
   if (id == 0) {
     Printf("Allocas should not have id = 0!\n");
-    Abort();
+    internal__exit(1);
   }
 }
 
@@ -43,7 +43,7 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE
 void ptsan_validate_function_start() {
   if(ptsan_in_libc != 0) {
     Printf("All user functions should be called with ptsan_in_libc = 0\n");
-    Abort();
+    internal__exit(1);
   }
 }
 

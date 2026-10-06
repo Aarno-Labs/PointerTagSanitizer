@@ -6,10 +6,10 @@
 // RUN: ./zero zero > zero.out 2> zero.err
 // RUN: FileCheck %s --check-prefix=ZERO < zero.out
 // RUN: %clang_raw -fsanitize=ptsan -g -O2 -pthread -mllvm -ptsan-stack-id-thread-buckets=129 -o too_many %s
-// RUN: not --crash ./too_many 2> too_many.err
+// RUN: not ./too_many 2> too_many.err
 // RUN: FileCheck %s --check-prefix=TOO-MANY < too_many.err
 // RUN: %clang_raw -fsanitize=ptsan -g -O2 -pthread -mllvm -ptsan-stack-ids-per-bucket=32767 -mllvm -ptsan-stack-id-thread-buckets=1 -o too_wide %s
-// RUN: not --crash ./too_wide 2> too_wide.err
+// RUN: not ./too_wide 2> too_wide.err
 // RUN: FileCheck %s --check-prefix=TOO-WIDE < too_wide.err
 
 #include <pthread.h>

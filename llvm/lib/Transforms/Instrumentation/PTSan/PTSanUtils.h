@@ -8,8 +8,10 @@
 
 #pragma once
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/ScalarEvolution.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/IR/GlobalValue.h"
@@ -20,27 +22,63 @@
 
 namespace llvm::ptsan {
 
+// Parse the ptsan.loop.ids node for an instruction into a typed list
+inline SmallVector<uint64_t, 2> getPTSanLoopIDs(const Instruction &I) {
+  SmallVector<uint64_t, 2> IDs;
+  if (MDNode *Node = I.getMetadata(LLVMContext::MD_ptsan_loop_ids)) {
+    for (const MDOperand &Op : Node->operands()) {
+      IDs.push_back(mdconst::extract<ConstantInt>(Op)->getZExtValue());
+    }
+  }
+  return IDs;
+}
+
+inline void addPTSanLoopID(Instruction &I, uint64_t ID) {
+  SmallVector<Metadata *, 4> IDs;
+  if (MDNode *Node = I.getMetadata(LLVMContext::MD_ptsan_loop_ids)) {
+    IDs.append(Node->op_begin(), Node->op_end());
+  }
+  IDs.push_back(ConstantAsMetadata::get(
+      ConstantInt::get(Type::getInt64Ty(I.getContext()), ID)));
+  I.setMetadata(LLVMContext::MD_ptsan_loop_ids,
+                MDNode::get(I.getContext(), IDs));
+}
+
 #define die() \
   assert(false); \
   exit(EXIT_FAILURE);
 
 class AccessRange;
+class SimpleAccessRange;
 
 enum class CmpResult { LTE, GTE, EQ, Unknown };
 CmpResult swapOpsCmpResult(CmpResult C);
 bool materializeConstantUsersOfGlobal(Function &F, GlobalValue *G);
+GlobalVariable *getPTSanDataGlobal(Value *V);
+bool addNoBuiltinForPointerFns(Module &M);
+bool lowerLoadRelativeIntrinsics(Module &M);
 
 enum class Polarity {
   Tagged,
   Stripped,
 };
 
-StringRef getPTSanPolarityName(Polarity P);
-void setPTSanPolarityMetadata(Value *V, Polarity P,
-                              StringRef Prefix = "ptsan.");
-std::optional<Polarity>
-getPTSanPolarityMetadata(Value *V, StringRef Prefix = "ptsan.");
-void clearPTSanPolarityMetadata(Function &F, StringRef Prefix = "ptsan.");
+void setPTSanPolarityMetadata(Instruction &I, Polarity P);
+
+class PointerTagSanitizer;
+
+// Required value polarity, or nullopt when MinCut may choose either.
+// Operand polarity constraints are checked separately.
+std::optional<Polarity> getRequiredPolarity(PointerTagSanitizer &DS, Value *V);
+
+class PTSanPolarityReader {
+  PointerTagSanitizer &DS;
+
+public:
+  PTSanPolarityReader(PointerTagSanitizer &DS, Function &F);
+
+  Polarity getPolarity(Value *V);
+};
 
 // Returns the pointer operand use for operations whose result can be modeled as
 // a rewriteable pointer dataflow boundary. Use this in transformations that may
@@ -52,65 +90,47 @@ Use *getPTSanRewriteablePointerUse(Instruction &I);
 // the same underlying object, but the call operand use must not be rewritten.
 Value *getPTSanPointerPeel(Value *V);
 
+// Return whether a shuffle's mask reads from its first and second operands.
+// Only operands that contribute lanes are pointer-dataflow boundaries: an
+// unused operand must not affect the min-cut or polarity validation. This is
+// especially common for splats, whose second operand is usually poison.
+std::pair<bool, bool>
+getPTSanUsedShuffleOperands(const ShuffleVectorInst &Shuffle);
+
 typedef std::shared_ptr<AccessRange> AccessRangePtr;
 
 struct SerializeBoundsInfo {
   LLVMContext &Ctx;
+  DenseMap<Value *, unsigned> CaptureIndices;
+  SmallVector<Value *, 8> Captures;
 
   SerializeBoundsInfo(LLVMContext &Ctx): Ctx(Ctx) {}
-  SerializeBoundsInfo(const Loop *L): Ctx(L->getHeader()->getContext()) {}
 
   MDNode *serializeSCEV(const SCEV *S);
   MDNode *serializeBaseRangeEntry(Value *Base, SmallVector<AccessRangePtr> &Ranges);
   MDNode *serializeSolvedRanges(bool Complete,
     DenseMap<Value *, SmallVector<AccessRangePtr>> &SolvedRanges);
   Metadata *serializeValue(Value *V);
-  Metadata *serializeType(Type *Ty);
-  void addLoopTag(Loop *L, MDNode *Tag);
-  MDNode *getPTSanBounds(const MDNode *LoopID);
-  MDNode *getOrCreateValueID(Value *V);
+  ArrayRef<Value *> getCaptures() { return Captures; }
 };
 
 struct PTSanUtils;
 
 struct DeserializeBoundsInfo {
   ScalarEvolution &SE;
-  LoopInfo &LI;
-  DominatorTree &DT;
-  Instruction *IP; // Will insert before-or-at
-  bool CanSynthesize;
-  DenseMap<const MDNode *, Value *> IDToValue;
-  DenseSet<const MDNode *> AmbiguousValueIDs;
+  SmallVector<Value *, 8> Captures;
 
-  DeserializeBoundsInfo(ScalarEvolution &SE, LoopInfo &LI, DominatorTree &DT,
-                        Instruction *IP, bool CanSynthesize = true):
-    SE(SE), LI(LI), DT(DT), IP(IP), CanSynthesize(CanSynthesize) {
-    for (BasicBlock &BB : *IP->getFunction()) {
-      for (Instruction &I : BB) {
-        MDNode *ID = I.getMetadata("ptsan.value.id");
-        if (ID) {
-          auto [It, Inserted] = IDToValue.try_emplace(ID, &I);
-          if (!Inserted && It->second != &I) {
-            AmbiguousValueIDs.insert(ID);
-          }
-        }
-      }
-    }
-  }
+  DeserializeBoundsInfo(ScalarEvolution &SE, ArrayRef<Value *> Captures)
+      : SE(SE), Captures(Captures) {}
 
   std::pair<bool, DenseMap<Value *, SmallVector<AccessRangePtr>>>
   deserializeSolvedRanges(MDNode *Root);
 
-  std::optional<std::pair<Value *, SmallVector<AccessRangePtr>>>
+  std::pair<Value *, SmallVector<AccessRangePtr>>
   deserializeBaseRangeEntry(MDNode *Entry);
 
   Value *deserializeValue(Metadata *M);
-  Type *deserializeType(Metadata* M);
-
   const SCEV *deserializeSCEV(Metadata *M);
-
-  bool isValidToInsert(Value *V);
-  void rememberDeserializedValue(MDNode *Node, Value *V);
 };
 
 
@@ -153,16 +173,31 @@ struct PTSanUtils {
   Value *findBasePointer(Value *Start);
   CmpResult compareSCEVs(const SCEV *A, const SCEV *B);
   SmallPtrSet<Instruction *, 8> getSCEVInstrs(const SCEV *Expr);
+  bool depsDominateLoc(const SmallPtrSetImpl<Instruction *> &Deps,
+                       Instruction *Loc);
   bool depsDominateLoc(const SCEV *S, Instruction *Loc);
   void indexInstructionSCEVs();
   Instruction *findLocalSCEVRepresentative(const SCEV *S, Instruction *Loc);
+  const SCEV *getAddRecFreeRepresentation(const SCEV *S, Instruction *Loc);
   const SCEV * solveAccessExtent(Loop *L, const SCEV *S, bool FindMin);
-  std::shared_ptr<AccessRange> getLoopAccessExtent (Value *V, Value *TypeSize, Loop *L);
+  // Return the ordinary scalar range for an unmasked access, or the smallest
+  // contiguous scalar range covering every active lane of a fully constant
+  // fixed-vector mask. An empty mask has a zero-sized envelope; unknown masks
+  // have no scalar envelope.
+  std::shared_ptr<SimpleAccessRange>
+  getScalarEnvelope(Value *Ptr, Value *ElementSize, Value *Mask,
+                    Instruction *Access);
+  std::shared_ptr<AccessRange>
+  getLoopAccessExtent(const SimpleAccessRange &Range, Loop *L);
   SmallPtrSet<const BasicBlock *, 16> getEscapeBlocks(Loop *L);
   bool isValidCheckBlock(BasicBlock *BB, Instruction *Sink);
   bool hoistTargetDominates(HoistTarget Target, Instruction *Pos);
-  HoistTarget getFirstCommonInsertionPoint(std::initializer_list<Value*> Points);
+  HoistTarget
+  getFirstCommonInsertionPoint(std::initializer_list<HoistTarget> Targets);
   HoistTarget getFirstIPAfter(Value *V);
+  // Return V unchanged when it already has Ty; otherwise splat scalar V to
+  // match vector Ty.
+  Value *splatToMatchType(Value *V, Type *Ty);
   bool isKnownSpatiallyValid(Use *U);
   bool isUnfreeableMemory(Value *V);
 };
@@ -196,21 +231,11 @@ static inline const char *ChkTyToString(CHK_TY Ty) {
 
 #undef X
 
-static bool isPtrOrVecOfPtrType(Type *T) {
-  if (T->isPointerTy()) {
-    return true;
-  }
-  if (auto *VT = dyn_cast<VectorType>(T)) {
-    return isPtrOrVecOfPtrType(VT->getElementType());
-  }
-  return false;
-}
-
-
 struct PtrOp {
   Use *U;
   CHK_TY CheckTy;
   Value *Size;
+  Value *Mask = nullptr;
   PtrOp() = delete;
 
   void validate() {
@@ -219,7 +244,7 @@ struct PtrOp {
     if (isa<PtrToIntInst>(V)) {
       return;
     }
-    if (isPtrOrVecOfPtrType(V->getType())) {
+    if (V->getType()->isPtrOrPtrVectorTy()) {
       return;
     }
 
@@ -241,8 +266,9 @@ struct PtrOp {
     validate();
   }
 
-  PtrOp(Instruction *I, int Idx, CHK_TY CheckTy, Value *Size)
-      : U(&I->getOperandUse(Idx)), CheckTy(CheckTy), Size(Size) {
+  PtrOp(Instruction *I, int Idx, CHK_TY CheckTy, Value *Size,
+        Value *Mask = nullptr)
+      : U(&I->getOperandUse(Idx)), CheckTy(CheckTy), Size(Size), Mask(Mask) {
     if (this->Size == nullptr && CheckTy != NO_CHECK && CheckTy != PREANALYZED_LOOP) {
       errs() << "Null size. This will be an underestimate\n";
       Type *U64Ty = IntegerType::get(I->getContext(), 64);
@@ -287,6 +313,7 @@ public:
     K_Base,         // rarely used directly
     K_SimpleRange,
     K_LoopRange,
+    K_VectorRange,
   };
 
   Kind getKind() const { return K; }
@@ -302,12 +329,12 @@ public:
     PTSanUtils *PTU, SCEVExpander &Expander, Instruction *IP) const = 0;
   virtual void dump(int spaces) const = 0;
   virtual SmallVector<const SCEV *, 4> getAllSCEVs() const = 0;
-  virtual MDNode *toMD(LLVMContext &Ctx) const = 0;
+  virtual MDNode *toMD(SerializeBoundsInfo &SBI) const = 0;
   static AccessRangePtr fromMD(DeserializeBoundsInfo &DBI , MDNode *MD);
 
   bool isSafeToExpandAt(SCEVExpander &Expander, Instruction *Pos) const;
 
-  SmallPtrSet<Instruction *, 8> getDeps(PTSanUtils *PTU) const;
+  virtual SmallPtrSet<Instruction *, 8> getDeps(PTSanUtils *PTU) const;
 
   virtual std::shared_ptr<AccessRange> clone() const = 0;
 
@@ -320,10 +347,10 @@ private:
 };
 
 class SimpleAccessRange : public AccessRange {
-private:
+public:
   const SCEV *Min;
   const SCEV *Size;
-public:
+
   SimpleAccessRange(ScalarEvolution&SE, const SCEV *Min, const SCEV *Size):
     AccessRange(K_SimpleRange, SE), Min(Min), Size(Size) {
       if (SE.isKnownNegative(Size)) {
@@ -338,7 +365,7 @@ public:
   std::pair<Value *, Value *> materializeMinSize(
     PTSanUtils *PTU, SCEVExpander &Expander, Instruction *IP) const override;
   void dump(int spaces) const override;
-  MDNode *toMD(LLVMContext &Ctx) const override;
+  MDNode *toMD(SerializeBoundsInfo &SBI) const override;
   std::shared_ptr<AccessRange> clone() const override;
 
   SmallVector<const SCEV *, 4> getAllSCEVs() const override {
@@ -353,17 +380,65 @@ public:
   }
 };
 
+// A masked vector memory access whose active lanes all have the same size.
+// Each lane covers LaneSize bytes. For an explicit pointer vector, lane I
+// starts at Pointer[I] + Offset and Stride is unused. For a contiguous access,
+// lane I starts at Pointer + Offset + I * Stride.
+//
+// Source accesses initially have equal LaneSize and Stride. Keeping them
+// separate lets merging widen LaneSize without changing the original lane
+// addresses.
+class VectorAccessRange : public AccessRange {
+private:
+  Value *Pointer;
+  int64_t Offset;
+  Value *Mask;
+  int64_t LaneSize;
+  int64_t Stride;
+
+  bool hasExplicitLanePointers() const {
+    return Pointer->getType()->isVectorTy();
+  }
+
+public:
+  VectorAccessRange(ScalarEvolution &SE, Value *Pointer, int64_t Offset,
+                    Value *Mask, int64_t LaneSize, int64_t Stride)
+      : AccessRange(K_VectorRange, SE), Pointer(Pointer), Offset(Offset),
+        Mask(Mask), LaneSize(LaneSize), Stride(Stride) {
+    assert(LaneSize >= 0);
+  }
+
+  RangeCmpResult cmp(PTSanUtils *PTU, const AccessRange *Other) const override;
+  bool mergeIn(PTSanUtils *PTU, const AccessRange *Other) override;
+  bool isSizeZero() const override;
+  std::pair<Value *, Value *> materializeMinSize(
+    PTSanUtils *PTU, SCEVExpander &Expander, Instruction *IP) const override;
+  void dump(int spaces) const override;
+  MDNode *toMD(SerializeBoundsInfo &SBI) const override;
+  std::shared_ptr<AccessRange> clone() const override;
+  SmallPtrSet<Instruction *, 8> getDeps(PTSanUtils *PTU) const override;
+
+  Value *getMask() const { return Mask; }
+
+  SmallVector<const SCEV *, 4> getAllSCEVs() const override {
+    return {};
+  }
+
+  static bool classof(const AccessRange *AR) {
+    return AR->getKind() == K_VectorRange;
+  }
+};
+
 class LoopAccessRange : public AccessRange {
 private:
   const SCEV *First;
   const SCEV *Last;
   const SCEV *Delta;
   const SCEV *TypeSize;
-  const Loop *L;
 
 public:
-  LoopAccessRange(ScalarEvolution &SE, const SCEV *First, const SCEV *Last, const SCEV *Delta, const SCEV *TypeSize, const Loop *L):
-    AccessRange(K_LoopRange, SE), First(First), Last(Last), Delta(Delta), TypeSize(TypeSize), L(L) {
+  LoopAccessRange(ScalarEvolution &SE, const SCEV *First, const SCEV *Last, const SCEV *Delta, const SCEV *TypeSize):
+    AccessRange(K_LoopRange, SE), First(First), Last(Last), Delta(Delta), TypeSize(TypeSize) {
       if (SE.isKnownNegative(Delta) || SE.isKnownPositive(Delta)) {
         errs() << "Delta should not be known! This should be a SimpleRange " << *Delta << "\n";
         //die();
@@ -376,7 +451,7 @@ public:
   std::pair<Value *, Value *> materializeMinSize(
     PTSanUtils *PTU, SCEVExpander &Expander, Instruction *IP) const override;
   void dump(int spaces) const override;
-  MDNode *toMD(LLVMContext &Ctx) const override;
+  MDNode *toMD(SerializeBoundsInfo &SBI) const override;
   std::shared_ptr<AccessRange> clone() const override;
 
   SmallVector<const SCEV *, 4> getAllSCEVs() const override {

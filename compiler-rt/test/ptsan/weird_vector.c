@@ -1,3 +1,4 @@
+// REQUIRES: x86_64-target-arch
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -mavx2 -o %exe %s
 // RUN: ./%exe 2> err.txt

@@ -5,12 +5,10 @@
 // RUN: cat out.txt | FileCheck %s
 
 // C++ variant of vararg_forward_vprintf.c (minimized from 531.deepsjeng_r).
-//
-// In C++ on AArch64, clang names the va_list type "struct.std::__va_list" (vs
-// the C "struct.__va_list"), so the by-type recognition in PTSanDiscovery.cpp's
-// isVaList() must match both -- otherwise clang's va_list *copy* is tagged
-// and forwarding it to libc vprintf faults under software masking. This uses
-// only <cstdio>/<cstdarg> (no STL), so it needs no instrumented C++ stdlib.
+// This uses only <cstdio>/<cstdarg> (no STL), so it needs no instrumented C++
+// standard library. On AArch64, C++ gives va_list a different source-level
+// type from C, but both reach the interceptor through an indirectly passed
+// address which must have its ID stripped before the va_list is accessed.
 
 // ERR: Unreclaimed IDs at exit: 0
 // CHECK: hello 42 world sum=100

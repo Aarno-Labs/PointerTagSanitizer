@@ -31,9 +31,7 @@
 #include "sanitizer_common/sanitizer_type_traits.h"
 #include "sanitizer_common/sanitizer_allocator_internal.h"
 
-// Redefine each internal_XXX libc function to clear ids and set return values.
-// These are common enough (and there are few enough) that we can just ~do them by hand.~
-// make chatGPT do them. Put them in a seperate file because they're Quite Long
+// Internal libc helpers that handle PTSan-tagged pointers.
 #include "ptsan_libc.inc"
 
 using namespace __sanitizer;
@@ -144,6 +142,21 @@ private:
 };
 
 using Eater = void(*)(va_list *);
+
+// A va_list parameter is represented as a pointer on x86-64, but as a struct
+// passed indirectly on AArch64. In either case an instrumented caller may pass
+// the address of its tagged va_list storage to this uninstrumented interceptor.
+// Strip that address at the interceptor boundary before va_copy/va_arg access
+// the storage. For an indirect struct parameter, &ap is the ABI-provided
+// pointer; for a pointer parameter, ap is the pointer itself.
+template <typename T>
+static decltype(auto) stripVaListID(T &ap) {
+  if constexpr (is_pointer<T>::value) {
+    return clear_id(ap);
+  } else {
+    return *clear_id(&ap);
+  }
+}
 
 class ArgHandler {
   va_list ap;
@@ -802,9 +815,8 @@ DECLARE_REAL(SIZE_T, fwrite, const void *p, uptr size, uptr nmemb, void *file)
 
 int __ptsan_vfprintf(FILE *stream, const char *format, va_list ap) {
   char str[4096];
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int ret = format_buffer(str, 4096, format, ap);
-  ptsan_in_libc--;
 
 
   if (ret < 0) {
@@ -813,9 +825,7 @@ int __ptsan_vfprintf(FILE *stream, const char *format, va_list ap) {
 
   CHECK(ret < 4096);
 
-  ptsan_in_libc++;
   size_t written = REAL(fwrite)(str, 1, ret, stream);
-  ptsan_in_libc--;
 
   CHECK((size_t)ret == written);
   return ret;
@@ -827,16 +837,14 @@ int __ptsan_vprintf(const char *format, va_list ap) {
 
 
 int __ptsan_vsprintf(char *str, const char *format, va_list ap) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int ret = format_buffer(str, INT32_MAX, format, ap);
-  ptsan_in_libc--;
   return ret;
 }
 
 int __ptsan_vsnprintf(char *str, SIZE_T size, const char *format, va_list ap) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int ret = format_buffer(str, size, format, ap);
-  ptsan_in_libc--;
   return ret;
 }
 
@@ -861,24 +869,24 @@ int __ptsan_vasprintf(char **strp_tagged, const char *format, va_list ap) {
 
 // Interceptors
 INTERCEPTOR(int, vprintf, const char *format, va_list ap) {
-  return __ptsan_vprintf(format, ap);
+  return __ptsan_vprintf(format, stripVaListID(ap));
 }
 
 INTERCEPTOR(int, vfprintf, FILE *stream, const char *format, va_list ap) {
-  return __ptsan_vfprintf(stream, format, ap);
+  return __ptsan_vfprintf(stream, format, stripVaListID(ap));
 }
 
 INTERCEPTOR(int, vsprintf, char *str, const char *format, va_list ap) {
-  return __ptsan_vsprintf(str, format, ap);
+  return __ptsan_vsprintf(str, format, stripVaListID(ap));
 }
 
 INTERCEPTOR(int, vsnprintf, char *str, SIZE_T size, const char *format, va_list ap) {
-  return __ptsan_vsnprintf(str, size, format, ap);
+  return __ptsan_vsnprintf(str, size, format, stripVaListID(ap));
 }
 
 // XXX: Properly calculate the desired size
 INTERCEPTOR(int, vasprintf, char **strp, const char *format, va_list ap) {
-  return __ptsan_vasprintf(strp, format, ap);
+  return __ptsan_vasprintf(strp, format, stripVaListID(ap));
 }
 
 ////////////////////////
@@ -933,9 +941,8 @@ INTERCEPTOR(int, snprintf, char *str, SIZE_T size, const char *format, ...) {
 #define SCANF_BODY(src, fn)                                                    \
   va_list ap;                                                                  \
   va_start(ap, format);                                                        \
-  ptsan_in_libc++;                                                             \
+  InLibcGuard _ig;                                                             \
   int ret = scan_buffer(src, REAL(fn), format, ap);                            \
-  ptsan_in_libc--;                                                             \
   va_end(ap);                                                                  \
   return ret;
 
@@ -981,9 +988,8 @@ INTERCEPTOR(int, __isoc23_scanf, const char *format, ...) {
 ///////////////////////
 
 #define VSCANF_BODY(src, fn)                                                   \
-  ptsan_in_libc++;                                                             \
-  int ret = scan_buffer(src, REAL(fn), format, ap);                            \
-  ptsan_in_libc--;                                                             \
+  InLibcGuard _ig;                                                             \
+  int ret = scan_buffer(src, REAL(fn), format, stripVaListID(ap));             \
   return ret;
 
 INTERCEPTOR(int, vsscanf, const char *str, const char *format, va_list ap) {

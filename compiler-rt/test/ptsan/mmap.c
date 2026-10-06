@@ -8,8 +8,9 @@
 // OUT: Mapped byte = 0x42
 // OUT: Invalid access =
 
+// ERR: Startup IDs: [[#STARTUP:]]
 // ERR: Found bad POINT access
-// ERR: Max used IDs at once: 1
+// ERR: Max used IDs at once: [[#STARTUP + 1]]
 
 
 #include <sys/mman.h>
@@ -18,7 +19,10 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+extern volatile uint64_t __ptsan_used_ids;
+
 int main(void) {
+    fprintf(stderr, "Startup IDs: %lu\n", __ptsan_used_ids);
     /* 1. figure out a page size */
     size_t length = sysconf(_SC_PAGESIZE);
     if (length == (size_t)-1) {

@@ -9,6 +9,8 @@
 #pragma once
 
 #include "PTSanInternal.h"
+#include "llvm/IR/IntrinsicInst.h"
+#include "llvm/IR/Intrinsics.h"
 
 namespace llvm::ptsan {
 
@@ -34,6 +36,22 @@ public:
     return Anchor(DS, CI);
   }
 
+  // Create a polymorphic compiler-only anchor call. Derive its parameter
+  // types from the actual operands while retaining AnchorKind's canonical
+  // callee operand, which is how PTSan recognizes the anchor later.
+  static Anchor create(PointerTagSanitizer &DS, FunctionCallee AnchorKind,
+                       Type *ReturnTy, Instruction *IP,
+                       ArrayRef<Value *> Args = {}) {
+    SmallVector<Type *> ParamTys;
+    for (Value *Arg : Args) {
+      ParamTys.push_back(Arg->getType());
+    }
+
+    FunctionType *CallTy =
+        FunctionType::get(ReturnTy, ParamTys, /*isVarArg=*/false);
+    return create(DS, FunctionCallee(CallTy, AnchorKind.getCallee()), IP, Args);
+  }
+
   bool isCallTo(FunctionCallee Expected) const {
     return Call->getCalledOperand() == Expected.getCallee();
   }
@@ -44,7 +62,84 @@ public:
   }
 };
 
-// __ptsan_source carries the pointer source to tag as operand 0.
+// Loop preanalysis associates three pieces of IR using one numeric ID per
+// original loop:
+//
+//   !bounds = !{!"ptsan.loop.bounds", i1 <complete>, !base0, !base1, ...}
+//
+//   %access = load ..., !ptsan.loop.ids !{i64 <loop-id>, ...}
+//
+//   call void @llvm.sideeffect()
+//       [ "ptsan.loop.preheader"(i64 <loop-id>),
+//         "deopt"(<capture0>, <capture1>, ...) ],
+//       !ptsan.loop.bounds !bounds
+//
+// LoopPreheaderAnchor is the typed view over that relationship. Loop
+// transformations clone the marker and remap its captured SSA operands before
+// PTSan consumes the surviving calls as anchors. Raw bounds-node construction
+// and range serialization remain in SerializeBoundsInfo/DeserializeBoundsInfo.
+class LoopPreheaderAnchor : public Anchor {
+  static constexpr StringLiteral BundleName = "ptsan.loop.preheader";
+
+public:
+  LoopPreheaderAnchor(Anchor A) : Anchor(A) {}
+
+  static bool isMarker(const Instruction &I) {
+    auto *Intrinsic = dyn_cast<IntrinsicInst>(&I);
+    return Intrinsic && Intrinsic->getIntrinsicID() == Intrinsic::sideeffect;
+  }
+
+  static bool classof(const Anchor *Anchor) {
+    return isMarker(*Anchor->Call);
+  }
+
+  // Loop-info gathering runs before PointerTagSanitizer exists, so creation
+  // emits the durable marker directly. PTSan wraps surviving copies in this
+  // anchor view after loop optimization.
+  static CallInst *create(Loop &L, uint64_t ID, MDNode &SerializedBounds,
+                          ArrayRef<Value *> Captures) {
+    assert(L.getLoopPreheader() && "preanalyzed loop requires a preheader");
+    Module *M = L.getHeader()->getModule();
+    Instruction *InsertBefore = L.getLoopPreheader()->getTerminator();
+    Function *SideEffect = Intrinsic::getDeclaration(M, Intrinsic::sideeffect);
+    Value *IDValue = ConstantInt::get(Type::getInt64Ty(M->getContext()), ID);
+    SmallVector<Value *, 1> MarkerInputs{IDValue};
+    OperandBundleDef MarkerBundle(BundleName.str(), MarkerInputs);
+    // Keep captured SSA values in a deopt bundle so LLVM treats pointer
+    // captures as nonescaping and remaps every capture when cloning the marker.
+    // PTSan never deoptimizes through this call.
+    OperandBundleDef CaptureBundle("deopt", Captures);
+    CallInst *Marker = CallInst::Create(
+        SideEffect, {}, {MarkerBundle, CaptureBundle}, "", InsertBefore);
+    Marker->setMetadata(LLVMContext::MD_ptsan_loop_bounds, &SerializedBounds);
+    return Marker;
+  }
+
+  uint64_t getLoopID() {
+    auto Bundle = Call->getOperandBundle(BundleName);
+    assert(Bundle && Bundle->Inputs.size() == 1 &&
+           "PTSan loop preheader marker requires a loop ID");
+    return cast<ConstantInt>(Bundle->Inputs[0].get())->getZExtValue();
+  }
+
+  MDNode &getBoundsMetadata() {
+    MDNode *Bounds = Call->getMetadata(LLVMContext::MD_ptsan_loop_bounds);
+    return *Bounds;
+  }
+
+  SmallVector<Value *, 8> getCaptures() {
+    auto Bundle = Call->getOperandBundle(LLVMContext::OB_deopt);
+    assert(Bundle && "PTSan loop preheader marker requires a capture bundle");
+    SmallVector<Value *, 8> Captures;
+    for (const Use &Input : Bundle->Inputs) {
+      Captures.push_back(Input.get());
+    }
+    return Captures;
+  }
+};
+
+// __ptsan_source Identifies an allocation whose bounds PTSan can supply. The result is the
+// raw pointer, not its tagged representation; GetIDAnchor requests its ID.
 class SourceAnchor : public Anchor {
 public:
   SourceAnchor(Anchor A) : Anchor(A) {}
@@ -56,13 +151,26 @@ public:
   static SourceAnchor create(PointerTagSanitizer &DS, PTSanUtils &PTU,
                              Value *Source) {
     Instruction *IP = PTU.getFirstIPAfter(Source).getIP();
-    return SourceAnchor(Anchor::create(DS, DS.PTSanSource, IP, {Source}));
+    SourceAnchor Result(Anchor::create(DS, DS.PTSanSource, Source->getType(),
+                                       IP, {Source}));
+    Source->replaceUsesWithIf(Result.Call, [&](Use &U) {
+      return U.getUser() != Result.Call;
+    });
+    return Result;
   }
 
   Value *getSource() const { return Call->getArgOperand(0); }
+
+  // An ID request for these sources allocates an ID owned by this frame.
+  // TLS sources instead reuse an existing thread-owned ID.
+  bool needsFrameID() const {
+    return isa<AllocaInst, Argument>(getSource());
+  }
 };
 
-// __ptsan_get_id(base) materializes the PTSan ID for a base pointer.
+// __ptsan_get_id(base) materializes the PTSan ID for a base pointer. For a
+// SourceAnchor this is the allocation's assigned ID; otherwise it is extracted
+// from the tagged pointer.
 class GetIDAnchor : public Anchor {
 public:
   GetIDAnchor(Anchor A) : Anchor(A) {}
@@ -73,13 +181,16 @@ public:
 
   static GetIDAnchor create(PointerTagSanitizer &DS, Instruction *IP,
                             Value *Base) {
-    return GetIDAnchor(Anchor::create(DS, DS.PTSanGetID, IP, {Base}));
+    assert(Base->getType()->isPtrOrPtrVectorTy() &&
+           "get-id anchor expects pointer or pointer vector");
+    Type *IDTy = Base->getType()->getWithNewType(DS.U64Ty);
+    return GetIDAnchor(Anchor::create(DS, DS.PTSanGetID, IDTy, IP, {Base}));
   }
 
   Value *getBase() const { return Call->getArgOperand(0); }
 };
 
-// Bound anchors return one scalar bound value consumed by check anchors.
+// Bound anchors return bounds with the same scalar or vector shape as the ID.
 class BoundAnchor : public Anchor {
 public:
   BoundAnchor(Anchor A) : Anchor(A) {}
@@ -101,6 +212,18 @@ public:
 };
 
 class LoadBoundAnchor : public BoundAnchor {
+  static LoadBoundAnchor create(PointerTagSanitizer &DS, FunctionCallee Callee,
+                                Instruction *IP, GetIDAnchor ID, Value *Mask) {
+    assert(ID.Call->getType()->isVectorTy() == (Mask != nullptr) &&
+           "vector bounds loads require a mask");
+    SmallVector<Value *> Args = {ID.Call};
+    if (Mask) {
+      Args.push_back(Mask);
+    }
+    return LoadBoundAnchor(
+        Anchor::create(DS, Callee, ID.Call->getType(), IP, Args));
+  }
+
 public:
   LoadBoundAnchor(Anchor A) : BoundAnchor(A) {}
 
@@ -110,20 +233,22 @@ public:
   }
 
   static LoadBoundAnchor createBase(PointerTagSanitizer &DS, Instruction *IP,
-                                    GetIDAnchor ID) {
-    return LoadBoundAnchor(Anchor::create(DS, DS.PTSanLoadBase, IP,
-                                          {ID.Call}));
+                                    GetIDAnchor ID, Value *Mask = nullptr) {
+    return create(DS, DS.PTSanLoadBase, IP, ID, Mask);
   }
 
   static LoadBoundAnchor createSpan(PointerTagSanitizer &DS, Instruction *IP,
-                                    GetIDAnchor ID) {
-    return LoadBoundAnchor(Anchor::create(DS, DS.PTSanLoadSpan, IP,
-                                          {ID.Call}));
+                                    GetIDAnchor ID, Value *Mask = nullptr) {
+    return create(DS, DS.PTSanLoadSpan, IP, ID, Mask);
   }
 
   // Load-bound IDs begin as GetIDAnchors, but late optimization may replace
-  // them with materialized scalar SSA values such as PHIs or selects.
+  // them with materialized SSA values such as PHIs or selects.
   Value *getID() const { return Call->getArgOperand(0); }
+  bool isVector() const { return Call->arg_size() == 2; }
+  Value *getMask() const {
+    return isVector() ? Call->getArgOperand(1) : nullptr;
+  }
 };
 
 class StaticBoundAnchor : public BoundAnchor {
@@ -211,8 +336,9 @@ public:
   }
 };
 
-// __ptsan_access(id, base, span, range_min, range_size, size, type, index)
-// describes a pointer use.
+// __ptsan_access(id, base, span, range_min, range_size, size, type, index,
+//                [mask]) describes a pointer use. Mask is present only for a
+// masked vector access.
 class AccessAnchor : public CheckAnchor {
 public:
   AccessAnchor(Anchor A) : CheckAnchor(A) {}
@@ -230,9 +356,12 @@ public:
     Value *RangeSize = ConstantInt::get(DS.U64Ty, 0);
     Value *OperandIndex = ConstantInt::get(DS.U32Ty, Op.U->getOperandNo());
     Value *CheckTy = ConstantInt::get(DS.U32Ty, Op.CheckTy);
-    SmallVector<Value*> Args = {ID.Call, BaseBound.Call, SpanBound.Call,
-                                    RangeMin, RangeSize, Op.Size, CheckTy,
-                                    OperandIndex};
+    SmallVector<Value *> Args = {ID.Call,   BaseBound.Call, SpanBound.Call,
+                                 RangeMin, RangeSize,       Op.Size,
+                                 CheckTy,  OperandIndex};
+    if (Op.Mask) {
+      Args.push_back(Op.Mask);
+    }
     return AccessAnchor(Anchor::create(DS, DS.PTSanAccess, IP, Args));
   }
 
@@ -245,6 +374,12 @@ public:
 
   unsigned getOperandIndex() const {
     return cast<ConstantInt>(Call->getArgOperand(7))->getZExtValue();
+  }
+
+  bool isVector() const { return Call->arg_size() == 9; }
+
+  Value *getMask() const {
+    return isVector() ? Call->getArgOperand(8) : nullptr;
   }
 
   // Return the exact use in the following real instruction described by index.
@@ -288,17 +423,18 @@ public:
 
   static StripAnchor create(PointerTagSanitizer &DS, Instruction *IP,
                             Value *Ptr) {
-    FunctionCallee Callee;
-    if (Ptr->getType()->isPointerTy()) {
-      Callee = DS.PTSanStrip;
-    } else if (Ptr->getType() == DS.U64Ty) {
-      Callee = DS.PTSanStripI64;
-    } else {
+    bool IsPointer = Ptr->getType()->isPtrOrPtrVectorTy();
+    if (!IsPointer && Ptr->getType() != DS.U64Ty) {
       errs() << "Unsupported strip anchor type: " << *Ptr->getType() << "\n";
       die();
     }
 
-    return StripAnchor(Anchor::create(DS, Callee, IP, {Ptr}));
+    StripAnchor Strip(
+        IsPointer
+            ? Anchor::create(DS, DS.PTSanStrip, Ptr->getType(), IP, {Ptr})
+            : Anchor::create(DS, DS.PTSanStripI64, IP, {Ptr}));
+    setPTSanPolarityMetadata(*Strip.Call, Polarity::Stripped);
+    return Strip;
   }
 
   Value *getValue() const { return Call->getArgOperand(0); }
@@ -317,13 +453,16 @@ public:
 
   static TaggedAnchor create(PointerTagSanitizer &DS, Instruction *IP,
                              Value *Ptr) {
-    assert(Ptr->getType()->isPointerTy() &&
-           "tagged anchor expects pointer value");
+    assert(Ptr->getType()->isPtrOrPtrVectorTy() &&
+           "tagged anchor expects pointer or pointer vector");
     assert(!DS.getAsAnchor<TaggedAnchor>(Ptr) &&
            "tagged anchor should not wrap another tagged anchor");
     assert(!DS.getAsAnchor<StripAnchor>(Ptr) &&
            "tagged anchor should not wrap a stripped pointer");
-    return TaggedAnchor(Anchor::create(DS, DS.PTSanTagged, IP, {Ptr}));
+    TaggedAnchor Tagged(
+        Anchor::create(DS, DS.PTSanTagged, Ptr->getType(), IP, {Ptr}));
+    setPTSanPolarityMetadata(*Tagged.Call, Polarity::Tagged);
+    return Tagged;
   }
 
   Value *getValue() const { return Call->getArgOperand(0); }
@@ -340,9 +479,15 @@ public:
 
   static TagAnchor create(PointerTagSanitizer &DS, Instruction *IP,
                           Value *Ptr, Value *ID) {
-    assert(Ptr->getType()->isPointerTy() && "tag anchor expects pointer value");
-    assert(ID->getType() == DS.U64Ty && "tag anchor expects i64 ID");
-    return TagAnchor(Anchor::create(DS, DS.PTSanTag, IP, {Ptr, ID}));
+    assert(Ptr->getType()->isPtrOrPtrVectorTy() &&
+           "tag anchor expects pointer or pointer vector");
+    Type *PointerIDTy = Ptr->getType()->getWithNewType(DS.U64Ty);
+    assert((ID->getType() == PointerIDTy || ID->getType() == DS.U64Ty) &&
+           "tag anchor expects a per-lane or scalar-common ID");
+    TagAnchor Tag(
+        Anchor::create(DS, DS.PTSanTag, Ptr->getType(), IP, {Ptr, ID}));
+    setPTSanPolarityMetadata(*Tag.Call, Polarity::Tagged);
+    return Tag;
   }
 
   Value *getValue() const { return Call->getArgOperand(0); }
@@ -388,6 +533,19 @@ public:
 
   static FunctionExitAnchor create(PointerTagSanitizer &DS, Instruction *IP) {
     return FunctionExitAnchor(Anchor::create(DS, DS.PTSanFunctionExit, IP));
+  }
+};
+
+class SetjmpAnchor : public PositionedAnchor {
+public:
+  SetjmpAnchor(Anchor A) : PositionedAnchor(A) {}
+
+  static bool classof(const Anchor *Anchor) {
+    return Anchor->isCallTo(Anchor->DS.PTSanSetjmp);
+  }
+
+  static SetjmpAnchor create(PointerTagSanitizer &DS, CallBase *CB) {
+    return SetjmpAnchor(Anchor::create(DS, DS.PTSanSetjmp, CB));
   }
 };
 
@@ -452,7 +610,9 @@ struct PlaceablePtrCheck : public BoundedPtrCheck {
       UsesCovering.insert(Op.U);
     }
 
-  Instruction *getCheckIP(DominatorTree &DT) const {
+  static Instruction *
+  getCheckIP(const SmallPtrSetImpl<Instruction *> &CheckIPs,
+             DominatorTree &DT) {
     Instruction *CheckIP = nullptr;
     for (Instruction *NewIP : CheckIPs) {
       if (!CheckIP || DT.dominates(NewIP, CheckIP)) {
@@ -461,6 +621,10 @@ struct PlaceablePtrCheck : public BoundedPtrCheck {
     }
     assert(CheckIP && "optimized PTSan check must have an insertion point");
     return CheckIP;
+  }
+
+  Instruction *getCheckIP(DominatorTree &DT) const {
+    return getCheckIP(CheckIPs, DT);
   }
 };
 

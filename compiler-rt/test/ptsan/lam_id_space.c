@@ -1,3 +1,4 @@
+// REQUIRES: x86_64-target-arch
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_raw -fsanitize=ptsan -g -O2 -fno-discard-value-names -mllvm -ptsan-lam -I%crt_src/include -o %exe %s
 // RUN: ./%exe

@@ -7,6 +7,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTSanPhases.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/Transforms/Utils/EscapeEnumerator.h"
 
 namespace llvm::ptsan {
 
@@ -26,6 +28,7 @@ private:
   void addPtrSink(const PtrOp &Op);
   void IRStripFn(CallBase &CB);
   void IRStripSpecialFn(CallBase &CB);
+  void discoverFunctionExits();
 
 public:
   PTSanDiscoverer(PTSanAnalysisState &PTA)
@@ -36,9 +39,6 @@ public:
   void visitAllocaInst(AllocaInst &I);
   void visitCallBase(CallBase &CB);
   void visitGetElementPtrInst(GetElementPtrInst &I);
-  void visitResumeInst(ResumeInst &I);
-  void visitUnreachableInst(UnreachableInst &I);
-  void visitReturnInst(ReturnInst &I);
   void visitCmpInst(CmpInst &CI);
   void visitBinaryOperator(BinaryOperator &I);
 
@@ -93,8 +93,9 @@ void PTSanDiscoverer::addPtrSink(const PtrOp &Op) {
   Ptr = BoundedPtrCheck::getUnstrippedPtrFromUse(Op.U, DS);
   Value *Base = findPTSanBasePointer(Ptr, PTA.PTU);
   auto ID = GetIDAnchor::create(DS, UserI, Base);
-  auto BaseBound = LoadBoundAnchor::createBase(DS, UserI, ID);
-  auto SpanBound = LoadBoundAnchor::createSpan(DS, UserI, ID);
+  Value *BoundsMask = ID.Call->getType()->isVectorTy() ? Op.Mask : nullptr;
+  auto BaseBound = LoadBoundAnchor::createBase(DS, UserI, ID, BoundsMask);
+  auto SpanBound = LoadBoundAnchor::createSpan(DS, UserI, ID, BoundsMask);
   AccessAnchor::create(DS, UserI, Op, ID, BaseBound, SpanBound);
 }
 
@@ -121,6 +122,14 @@ void PTSanDiscoverer::run() {
 
   handleMainIfMain();
 
+  // A byval parameter points at an ABI-created copy, not the caller's object.
+  // Treat that copy like a stack allocation so it receives fresh bounds and a
+  // fresh ID for this invocation.
+  for (Argument &Arg : F.args()) {
+    if (Arg.hasByValAttr())
+      SourceAnchor::create(DS, PTA.PTU, &Arg);
+  }
+
   SmallVector<PtrOp, 4> MemOps;
   FindMemAccesses FMA(DS.DL, MemOps);
   for (BasicBlock *BB : depth_first(&F.getEntryBlock())) {
@@ -137,6 +146,8 @@ void PTSanDiscoverer::run() {
       }
     }
   }
+
+  discoverFunctionExits();
 
   DBG(
     assert(DT.verify());
@@ -164,69 +175,44 @@ static bool shouldClearIDForUse(const PtrOp &Op) {
 }
 
 
-static bool isVaList(AllocaInst *AI) {
-  // If this alloca is ever passed to a va_list intrinsic, it must
-  // be a va_list
-  for (User *U : AI->users()) {
-    if (auto *II = dyn_cast<IntrinsicInst>(U)) {
-      switch (II->getIntrinsicID()) {
-        case Intrinsic::vastart:
-        case Intrinsic::vaend:
-        case Intrinsic::vacopy:
-          return true;
-        default:
-          break;
-      }
-    }
-  }
-
-  // A va_list *copy* -- e.g. the temporary clang materializes to pass a va_list
-  // by value on AArch64 (where va_list is a struct passed by reference) -- is
-  // never handed to va_start/va_copy, so the intrinsic scan above misses it.
-  // Recognize va_list allocas by type as well. The struct name varies by target
-  // and language:
-  //   C   AArch64: struct.__va_list        C   x86-64: struct.__va_list_tag
-  //   C++ AArch64: struct.std::__va_list    C++ x86-64: struct.std::__va_list_tag
-  // so match any struct whose name contains "__va_list".
-  Type *T = AI->getAllocatedType();
-  if (auto *AT = dyn_cast<ArrayType>(T)) {
-    T = AT->getElementType();
-  }
-  auto *ST = dyn_cast<StructType>(T);
-  if (!ST || !ST->hasName()) {
-    return false;
-  }
-  return ST->getName().contains("__va_list");
-}
-
 void PTSanDiscoverer::visitAllocaInst(AllocaInst &I) {
   //DBG(errs() << "alloca: " << I << "\n");
   auto Size = I.getAllocationSize(DS.DL);
-  if (!Size) {
-    DBG(errs() << "Not Implemented: Variable-Size Allocas: " << I << "\n");
-    return;
-  }
-
-  if (isVaList(&I)) {
-    return;
-  }
-
-  // Size > 2^32 causes problems with packing sizes later
-  assert(*Size <  0xFFFFFFFFULL);
+  // Size > 2^32 causes problems with packing sizes later. Variable-sized
+  // allocas initialize their bounds separately, without packing the size.
+  assert((!Size || *Size < 0xFFFFFFFFULL) &&
+         "PTSan source alloca is too large");
 
   SourceAnchor::create(DS, PTA.PTU, &I);
 }
 
-void PTSanDiscoverer::visitResumeInst(ResumeInst &I) {
-  FunctionExitAnchor::create(DS, &I);
-}
+void PTSanDiscoverer::discoverFunctionExits() {
+  // TLS sources do not allocate frame-owned IDs. Other sources may need
+  // cleanup, although optimization can later remove their ID requests.
+  bool HasStackSources = llvm::any_of(
+      DS.collectAnchors<SourceAnchor>(F), [](SourceAnchor Source) {
+        return Source.needsFrameID();
+      });
 
-void PTSanDiscoverer::visitReturnInst(ReturnInst &I) {
-  FunctionExitAnchor::create(DS, &I);
-}
+  bool HasVAStart = llvm::any_of(instructions(F), [](Instruction &I) {
+    auto *II = dyn_cast<IntrinsicInst>(&I);
+    return II && II->getIntrinsicID() == Intrinsic::vastart;
+  });
 
-void PTSanDiscoverer::visitUnreachableInst(UnreachableInst &I) {
-  FunctionExitAnchor::create(DS, &I);
+  // Finish visiting calls before replacing them with invokes. Anchors remain
+  // before their instructions; later phases see the final call/exit topology.
+  // Always enumerate existing returns/resumes; create unwind paths for
+  // throwing calls only when frame-owned IDs may need cleanup.
+  EscapeEnumerator EE(F, "ptsan.cleanup",
+                      /*HandleExceptions=*/HasStackSources || HasVAStart,
+                      &PTA.DTU);
+  while (IRBuilder<> *AtExit = EE.Next()) {
+    FunctionExitAnchor::create(DS, &*AtExit->GetInsertPoint());
+  }
+
+  // EscapeEnumerator updates dominance but not LoopInfo.
+  LI.releaseMemory();
+  LI.analyze(DT);
 }
 
 void PTSanDiscoverer::visitGetElementPtrInst(GetElementPtrInst &I) {
@@ -244,12 +230,6 @@ void PTSanDiscoverer::visitCmpInst(CmpInst &CI) {
   Type *Ty = CI.getOperand(0)->getType();
   assert(Ty == CI.getOperand(1)->getType());
 
-  if (auto *VTy = dyn_cast<VectorType>(Ty)) {
-    if(VTy->getElementType()->isPointerTy()) {
-      errs() << "Handle ptr vector cmps like this one " << CI << "\n";
-    }
-  }
-
   Value *Op0 = CI.getOperand(0);
   Value *Op1 = CI.getOperand(1);
   // Stripping ids off of cmps is a bit sus, since sometimes (mmap failure
@@ -261,14 +241,13 @@ void PTSanDiscoverer::visitCmpInst(CmpInst &CI) {
     return;
   }
 
-  if (Ty->isPointerTy()) {
+  if (Ty->isPtrOrPtrVectorTy()) {
     addPtrSink(PtrOp(&CI, 0));
     addPtrSink(PtrOp(&CI, 1));
   }
 
-  if (!(Ty->isPointerTy() ||
-      (isa<PtrToIntInst>(Op0) &&
-       isa<PtrToIntInst>(Op1)))) {
+  if (!(Ty->isPtrOrPtrVectorTy() ||
+        (isa<PtrToIntInst>(Op0) && isa<PtrToIntInst>(Op1)))) {
     return;
   }
 
@@ -277,10 +256,12 @@ void PTSanDiscoverer::visitCmpInst(CmpInst &CI) {
     addPtrSink(PtrOp(&CI, 1));
   }
 
-  if (ClValidateArith && ClValidate) {
+  // The runtime arithmetic validator accepts scalar pointer values. Vector
+  // comparisons are still stripped above, but cannot use that scalar-only
+  // diagnostic interface.
+  if (ClValidateArith && ClValidate && !Ty->isVectorTy()) {
     ValidateArithAnchor::create(DS, &CI, Op0, Op1);
   }
-
 }
 
 // If we're dealing with c++, we can't garantee that pointers
@@ -314,21 +295,10 @@ void PTSanDiscoverer::visitBinaryOperator(BinaryOperator &I) {
   }
 }
 
-static bool isPtrOrVecOfPtr(Type *Ty) {
-  if (Ty->isPointerTy())
-    return true;
-
-  if (auto *VTy = dyn_cast<VectorType>(Ty))
-    return VTy->getElementType()->isPointerTy();
-
-  return false;
-}
-
-
 static bool callHasPointerArg(llvm::CallBase &CB) {
   for (unsigned i = 0; i < CB.arg_size(); ++i) {
     Value *Arg = CB.getArgOperand(i);
-    if (isPtrOrVecOfPtr(Arg->getType())) {
+    if (Arg->getType()->isPtrOrPtrVectorTy()) {
       return true;
     }
   }
@@ -341,15 +311,17 @@ static bool callReturnsPtr(llvm::CallBase &CB) {
 }
 
 void PTSanDiscoverer::IRStripFn(CallBase &CB) {
-  static const SmallSet<StringRef, 8> StripList = []() {
-    SmallSet<StringRef, 8> S;
+  static const SmallSet<StringRef, 16> StripList = []() {
+    SmallSet<StringRef, 16> S;
     S.insert("__cxa_guard_abort");
-    S.insert("_setjmp");
-    S.insert("__sigsetjmp");
     S.insert("dlsym");
     S.insert("setcontext");
     S.insert("getcontext");
     S.insert("swapcontext");
+    S.insert("__unw_getcontext");
+    S.insert("unw_getcontext");
+    S.insert("__libunwind_Registers_x86_64_jumpto");
+    S.insert("__libunwind_Registers_arm64_jumpto");
     S.insert("__kmp_invoke_microtask");
     return S;
   }();
@@ -362,7 +334,8 @@ void PTSanDiscoverer::IRStripFn(CallBase &CB) {
 
   DBG(errs() << "Found " << Callee->getName() << ". Stripping ID\n");
   for (unsigned i = 0; i < CB.arg_size(); i++) {
-    if (CB.getOperand(i)->getType()->isPointerTy()) {
+    if (CB.getOperand(i)->getType()->isPtrOrPtrVectorTy() ||
+        isa<PtrToIntInst>(CB.getOperand(i))) {
       addPtrSink(PtrOp(&CB, i));
     }
   }
@@ -417,8 +390,8 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
     if (CB.paramHasAttr(ArgIdx, llvm::Attribute::ByVal)) {
 
       llvm::Value *Arg = CB.getArgOperand(ArgIdx);
-      llvm::errs() << "argument #" << ArgIdx
-                  << " is passed by value (" << *Arg << ")\n";
+      DBG(errs() << "Argument #" << ArgIdx
+                 << " is passed by value (" << *Arg << ")\n");
 
       assert(Arg->getType()->isPointerTy());
       addPtrSink(PtrOp(&CB, ArgIdx));
@@ -439,7 +412,7 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
     DBG(errs() << "Found inline ASM " << CB << "\n");
     for (unsigned ArgIdx = 0; ArgIdx < CB.arg_size(); ++ArgIdx) {
       llvm::Value *Arg = CB.getArgOperand(ArgIdx);
-      if (Arg->getType()->isPointerTy()) {
+      if (Arg->getType()->isPtrOrPtrVectorTy() || isa<PtrToIntInst>(Arg)) {
         DBG(errs() << "\tStripping ptr from arg " << ArgIdx << "\n");
         addPtrSink(PtrOp(&CB, ArgIdx));
       }
@@ -449,6 +422,14 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
   }
 
   if (!Callee) {
+    return;
+  }
+
+  StringRef Name = Callee->getName();
+  if (Name == "setjmp" || Name == "_setjmp" || Name == "__setjmp" ||
+      Name == "sigsetjmp" || Name == "__sigsetjmp") {
+    addPtrSink(PtrOp(&CB, 0));
+    SetjmpAnchor::create(DS, &CB);
     return;
   }
 
@@ -475,18 +456,28 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
 
   // Gotta strip IDs from intrinsics' ptr args
   switch(Callee->getIntrinsicID()){
-    case Intrinsic::eh_typeid_for:
     case Intrinsic::stacksave:
     case Intrinsic::stackrestore:
-    case Intrinsic::vastart:
-    case Intrinsic::vaend:
-    case Intrinsic::vacopy:
     case Intrinsic::prefetch:
     case Intrinsic::returnaddress:
     case Intrinsic::addressofreturnaddress:
     case Intrinsic::sponentry:
     case Intrinsic::frameaddress:
     case Intrinsic::thread_pointer:
+      return;
+    case Intrinsic::eh_typeid_for:
+      // Code generation needs the type-info symbol, not a tagged proxy load.
+      // Record raw demand here; stripping the global folds back to the symbol.
+      addPtrSink(PtrOp(&CB, 0));
+      return;
+    case Intrinsic::vastart:
+    case Intrinsic::vaend:
+    case Intrinsic::vacopy:
+      for (unsigned ArgIdx = 0; ArgIdx < CB.arg_size(); ++ArgIdx) {
+        if (CB.getArgOperand(ArgIdx)->getType()->isPtrOrPtrVectorTy()) {
+          addPtrSink(PtrOp(&CB, ArgIdx));
+        }
+      }
       return;
     // Ptrmask is just arithmetic, so we don't have to do anything to it,
     // If we run into an instruction which is masking any of the top 16
@@ -505,12 +496,20 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
       return;
     // Unary ops we want to strip:
     case Intrinsic::threadlocal_address:
-      // XXX: When we implement ids for globals, we'll need to
-      // handle this carefully.
+      // LLVM requires the operand to remain a literal GlobalValue. It is
+      // therefore inherently raw rather than an ordinary tagged pointer use, which
+      // also means we can't use a StripAnchor here; we have to special-case it in
+      // PTSanLateOptimization
+      // Preserve the raw per-thread address. A tagged use requests its TLS ID.
+      if (DS.TLSIDs.contains(cast<GlobalValue>(CB.getArgOperand(0)))) {
+        SourceAnchor::create(DS, PTA.PTU, &CB);
+      }
       return;
     // Handled in FindMemAccess
     case Intrinsic::masked_load:
     case Intrinsic::masked_store:
+    case Intrinsic::masked_gather:
+    case Intrinsic::masked_scatter:
     case Intrinsic::x86_sse_ldmxcsr:
     case Intrinsic::x86_sse_stmxcsr:
     case Intrinsic::x86_umonitor:

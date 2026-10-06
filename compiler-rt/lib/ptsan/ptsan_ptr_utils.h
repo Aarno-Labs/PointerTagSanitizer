@@ -17,7 +17,7 @@
 #include "ptsan.h"
 #include "ptsan_constants.h"
 #include "ptsan_bounds.h"
-#include "interception/interception.h"
+#include "ptsan_musl_interception.h"
 
 template<typename T> struct is_pointer { static constexpr bool value = false; };
 template<typename T> struct is_pointer<T*> { static constexpr bool value = true; };
@@ -139,6 +139,69 @@ inline bool check_range(T ptr, u64 size) {
   return addr_in_range(ptr, id, size) || size == 0;
 }
 
+// Use the tagged address, just as addr_in_range does: bounds bases include
+// their ID. Reserved IDs are governed by their table entries too, including
+// the empty bounds installed when strict-mode initialization finishes.
+template <typename T>
+inline u64 bytes_remaining(T ptr) {
+  const auto &bounds = ptsan_bounds[get_id(ptr)];
+  const u64 offset = (u64)ptr - bounds.base;
+  return offset <= bounds.span ? bounds.span - offset : 0;
+}
+
+inline void report_scan_read(const void *ptr, u64 index) {
+  ptsan_complain(0, 0xdeadbeef, get_id(ptr), "read", get_addr(ptr) + index, 1);
+}
+
+// Return the first matching byte's offset, or size if none matches. A match
+// before the bounds end is valid even when size extends beyond it;
+// size == 0 never reads or reports.
+// Bounds are loaded once; report before the first invalid read. If reporting
+// returns, continue with the ordinary operation, as other interceptors do.
+// The predicate can also express set membership for strpbrk/strcspn, or
+// non-membership for strspn, without duplicating the bounds-aware scan.
+template <typename Matches>
+inline u64 find_matching_byte(const void *source, u64 size, Matches matches) {
+  const auto *raw = (const unsigned char *)clear_id(source);
+  const u64 available = bytes_remaining(source);
+  for (u64 index = 0; index < size; ++index) {
+    if (index == available) {
+      report_scan_read(source, index);
+    }
+    if (matches(raw[index])) {
+      return index;
+    }
+  }
+  return size;
+}
+
+// Stop at the target or NUL, whichever comes first.
+inline u64 find_cstring_character(const char *source, int character) {
+  const unsigned char target = (unsigned char)character;
+  return find_matching_byte(source, UINT64_MAX, [target](unsigned char value) {
+    return value == target || value == '\0';
+  });
+}
+
+inline u64 find_bounded_character(const void *source, int character, u64 size) {
+  const unsigned char target = (unsigned char)character;
+  return find_matching_byte(source, size, [target](unsigned char value) {
+    return value == target;
+  });
+}
+
+template <typename T>
+inline bool check_range_and_report(u32 check_id, T ptr, u64 size,
+                                   const char *action, u64 extra_space = 0) {
+  if (!check_range(ptr, size + extra_space)) {
+    // String callers check an additional terminator byte, but diagnostics
+    // retain the caller's original size, as in the existing interceptors.
+    ptsan_complain(check_id, 0xdeadbeef, get_id(ptr), action, get_addr(ptr), size);
+    return false;
+  }
+  return true;
+}
+
 template <typename DstT, typename SrcT>
 inline DstT copy_id(DstT dest, SrcT src) {
   if (dest == nullptr) {
@@ -199,4 +262,34 @@ inline void resize_buffer(T ptr, u64 new_size) {
   }
 
   ptsan_bounds[id].span = new_size;
+}
+
+// new_ptr is the raw, untagged allocator result (possibly null).
+// old_ptr retains the caller's original pointer and ID (possibly null).
+template <typename T>
+T *tag_realloc(T *new_ptr, T* old_ptr, SIZE_T new_size) {
+  // If realloc failed, nothing changed memory-wise:
+  if (new_ptr == nullptr) {
+    return new_ptr;
+  }
+
+  // If old_ptr was null, this is just a malloc:
+  if (old_ptr == nullptr) {
+    return tag_with_next_id(new_ptr, new_size, FREE_TY::MALLOC);
+  }
+
+  // If old_ptr == new_ptr, it's still valid, so we
+  // do *not* want to change the ID, just resize it
+  if (new_ptr == clear_id(old_ptr)) {
+    resize_buffer(old_ptr, new_size);
+    return old_ptr;
+  }
+
+  // If we get here, old_ptr was freed and we need a new id:
+  if(!ptsan_mark_ptr_freed((void*)old_ptr, FREE_TY::MALLOC)) {
+    Printf("PTSan found bad realloc. Deal with this\n");
+    internal__exit(1);
+  }
+
+  return tag_with_next_id(new_ptr, new_size, FREE_TY::MALLOC);
 }

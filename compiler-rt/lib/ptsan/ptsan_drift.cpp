@@ -26,8 +26,18 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
                                                  bool request_fast,
                                                  u32 max_depth) {
-    return Unwind(max_depth, pc, bp, context, 0, 0, false);
-  }
+#ifdef PTSAN_INSTRUMENTED_LIBC
+  // The initial static instrumented-libc runtime deliberately omits the
+  // symbolizer and platform unwinder.  PTSan does not currently report this
+  // trace, but sanitizer_common still requires an UnwindImpl definition.
+  top_frame_bp = max_depth ? bp : 0;
+  size = max_depth ? 1 : 0;
+  if (size)
+    trace_buffer[0] = pc;
+#else
+  return Unwind(max_depth, pc, bp, context, 0, 0, false);
+#endif
+}
 
 extern "C" {
   SANITIZER_INTERFACE_ATTRIBUTE
@@ -60,6 +70,6 @@ void ptsan_handle_error(u32 check_id, u64 function_id, u64 ptr_id,
       longjmp(ptsan_jmp_env, 1);
     default:
       Printf("Unknown patch type!. Exiting!\n");
-      Abort();
+      internal__exit(1);
   }
 }

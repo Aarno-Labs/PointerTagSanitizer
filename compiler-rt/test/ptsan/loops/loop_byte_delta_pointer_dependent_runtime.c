@@ -10,9 +10,11 @@
 // OUT: Checks called:
 // OUT: COMPOUND: {{[1-9][0-9]*}}
 
-// Runtime smoke test for the pointer-dependent x264-style vectorized loop
-// shape covered more precisely by x264_loop_hoist_profitability.c. The
-// runtime may merge the loop checks into COMPOUND checks after instrumentation.
+// Runtime smoke test for the x264-style vectorized loop shape covered more
+// precisely by x264_loop_hoist_profitability.c.  Its inner-loop endpoints are
+// rewritten in terms of the current outer-loop pointer, exposing an integer
+// byte delta.  The runtime may merge the loop checks into COMPOUND checks after
+// instrumentation.
 
 #include <stdint.h>
 #include <stdlib.h>

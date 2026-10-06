@@ -1,5 +1,6 @@
+// REQUIRES: x86_64-target-arch
 // RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NORMAL
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-lam -S -emit-llvm -o - %s | FileCheck %s --check-prefix=LAM
+// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-lam -S -emit-llvm -o - %s | FileCheck %s --check-prefix=LAM --implicit-check-not='asm "andq'
 
 #include <stdatomic.h>
 
@@ -18,8 +19,12 @@ int __attribute__((noinline)) direct_ops(int *p, int *q) {
 }
 
 // NORMAL-LABEL: define {{.*}} @direct_ops(
-// NORMAL-DAG: [[QTRUE:%[^ ]+]] = {{.*}}call ptr @llvm.ptrmask{{.*}}ptr %q,
-// NORMAL-DAG: [[PTRUE:%[^ ]+]] = {{.*}}call ptr @llvm.ptrmask{{.*}}ptr %p,
+// NORMAL-DAG: [[QINT:%[^ ]+]] = ptrtoint ptr %q to i64
+// NORMAL-DAG: [[QBITS:%[^ ]+]] = {{.*}}call i64 asm "andq $2, $0", "=r,0,r,~{flags}"(i64 [[QINT]], i64 281474976710655)
+// NORMAL-DAG: [[QTRUE:%[^ ]+]] = inttoptr i64 [[QBITS]] to ptr
+// NORMAL-DAG: [[PINT:%[^ ]+]] = ptrtoint ptr %p to i64
+// NORMAL-DAG: [[PBITS:%[^ ]+]] = {{.*}}call i64 asm "andq $2, $0", "=r,0,r,~{flags}"(i64 [[PINT]], i64 281474976710655)
+// NORMAL-DAG: [[PTRUE:%[^ ]+]] = inttoptr i64 [[PBITS]] to ptr
 // NORMAL: load i32, ptr [[PTRUE]]
 // NORMAL: store i32 {{.*}}, ptr [[QTRUE]]
 // NORMAL: atomicrmw add ptr [[QTRUE]]

@@ -33,10 +33,12 @@
 #include <stdarg.h>
 #include <pthread.h>
 #include <time.h>
+#include <sys/time.h>
 #include <signal.h>
 #include <stdio.h>
 #include <getopt.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -52,6 +54,19 @@
 #include <wchar.h>   // wcsncpy, wchar_t
 #include <locale.h>
 #include <glob.h>
+
+// libffi is optional. Probe with the compiler so availability follows the
+// runtime's target and sysroot, independently of LLVM's interpreter support.
+#if __has_include(<ffi.h>)
+#include <ffi.h>
+#define PTSAN_HAS_LIBFFI 1
+#elif __has_include(<ffi/ffi.h>)
+#include <ffi/ffi.h>
+#define PTSAN_HAS_LIBFFI 1
+#else
+#define PTSAN_HAS_LIBFFI 0
+#endif
+
 struct obstack;
 
 #include "sanitizer_common/sanitizer_linux.h"
@@ -59,35 +74,18 @@ struct obstack;
 using namespace __sanitizer;
 using namespace __ptsan;
 
-// Used for execv-`not-e` and tz-time family interceptors
-extern char **environ;
+// environ, ptsan_env_lock, used by PTSAN_ENV_GUARD machinery
+__sanitizer::Mutex ptsan_env_lock;
 
+void ptsan_strv_deep_untag_into(char *const *src_in, char **dst, size_t n) {
+  char *const *src = clear_id(src_in);
+  for (size_t i = 0; i < n; i++) {
+    dst[i] = clear_id(src[i]);  // void* -> char* is implicit in C
+  }
+  dst[n] = 0;
+}
 
-
-/* Shared lock guarding temporary environ swaps */
-static pthread_mutex_t ptsan_env_lock = PTHREAD_MUTEX_INITIALIZER;
-
-// Swap in and out an untagged environment
-#define PTSAN_ENV_GUARD_BEGIN()                                                 \
-  ENSURE_PTSAN_INITED();                                                        \
-  ptsan_in_libc++;                                                              \
-  pthread_mutex_lock(&ptsan_env_lock);                                          \
-  char **__ptsan_saved_env = environ;                                           \
-  size_t __ptsan_envc = ptsan_strv_len(environ);                                \
-  char **__ptsan_clean_envp = (char **)__builtin_alloca(                        \
-      (__ptsan_envc + 1) * sizeof(*__ptsan_clean_envp));                        \
-  ptsan_strv_deep_untag_into(environ, __ptsan_clean_envp, __ptsan_envc);        \
-  environ = __ptsan_clean_envp;
-
-#define PTSAN_ENV_GUARD_END()                                                   \
-  environ = __ptsan_saved_env;                                                  \
-  pthread_mutex_unlock(&ptsan_env_lock);                                        \
-  ptsan_in_libc--;
-
-
-// Redefine each internal_XXX libc function to clear ids and set return values.
-// These are common enough (and there are few enough) that we can just ~do them by hand.~
-// make chatGPT do them. Put them in a seperate file because they're Quite Long
+// Internal libc helpers that handle PTSan-tagged pointers.
 #include "ptsan_libc.inc"
 
 DECLARE_REAL(void *, calloc, SIZE_T nmemb, SIZE_T size)
@@ -100,7 +98,7 @@ DECLARE_REAL(void, free, void *ptr)
 
 // Take a (potentially tagged) null-terminated list and find
 // how many elements it has
-static size_t ptsan_strv_len(char *const *v_in) {
+size_t ptsan_strv_len(char *const *v_in) {
   char *const *v = clear_id(v_in);
   if (v == 0) {
     return 0;
@@ -110,14 +108,6 @@ static size_t ptsan_strv_len(char *const *v_in) {
     n++;
   }
   return n;
-}
-
-static void ptsan_strv_deep_untag_into(char *const *src_in, char **dst, size_t n) {
-  char *const *src = clear_id(src_in);
-  for (size_t i = 0; i < n; i++) {
-    dst[i] = clear_id(src[i]);  // void* -> char* is implicit in C
-  }
-  dst[n] = 0;
 }
 
 /* Count how many varargs (each const char*) appear after arg0,
@@ -163,60 +153,53 @@ static void ptsan_build_argv_from_varargs_into(const char *arg0, va_list &ap,
 INTERCEPTOR(int, pthread_mutex_init,
             pthread_mutex_t *m, const pthread_mutexattr_t *attr) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_mutex_init)(clear_id(m), clear_id(attr));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_mutex_destroy, pthread_mutex_t *m) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_mutex_destroy)(clear_id(m));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_mutex_lock, pthread_mutex_t *m) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_mutex_lock)(clear_id(m));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_mutex_trylock, pthread_mutex_t *m) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_mutex_trylock)(clear_id(m));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_mutex_timedlock,
             pthread_mutex_t *m, const struct timespec *abstime) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res =
       REAL(pthread_mutex_timedlock)(clear_id(m), clear_id(abstime));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_mutex_unlock, pthread_mutex_t *m) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_mutex_unlock)(clear_id(m));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_mutexattr_init, pthread_mutexattr_t *__attr) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_mutexattr_init)(clear_id(__attr));
-  ptsan_in_libc--;
 
   return res;
 }
@@ -225,9 +208,8 @@ INTERCEPTOR(int, pthread_mutexattr_init, pthread_mutexattr_t *__attr) {
 INTERCEPTOR(int, pthread_mutexattr_setprotocol, pthread_mutexattr_t *__attr, int protocol) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_mutexattr_setprotocol)(clear_id(__attr), protocol);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -235,9 +217,8 @@ INTERCEPTOR(int, pthread_mutexattr_setprotocol, pthread_mutexattr_t *__attr, int
 INTERCEPTOR(int, pthread_mutexattr_settype, pthread_mutexattr_t *__attr, int type) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_mutexattr_settype)(clear_id(__attr), type);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -245,9 +226,8 @@ INTERCEPTOR(int, pthread_mutexattr_settype, pthread_mutexattr_t *__attr, int typ
 INTERCEPTOR(int, pthread_attr_init, pthread_attr_t *__attr) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_attr_init)(clear_id(__attr));
-  ptsan_in_libc--;
 
   return res;
 }
@@ -255,9 +235,8 @@ INTERCEPTOR(int, pthread_attr_init, pthread_attr_t *__attr) {
 INTERCEPTOR(int, pthread_attr_setstack, pthread_attr_t *__attr, void *stackaddr, size_t stackSize) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_attr_setstack)(clear_id(__attr), clear_id(stackaddr), stackSize);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -265,9 +244,8 @@ INTERCEPTOR(int, pthread_attr_setstack, pthread_attr_t *__attr, void *stackaddr,
 INTERCEPTOR(int, pthread_attr_setdetachstate, pthread_attr_t *__attr, int __detachstate) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_attr_setdetachstate)(clear_id(__attr), __detachstate);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -275,9 +253,8 @@ INTERCEPTOR(int, pthread_attr_setdetachstate, pthread_attr_t *__attr, int __deta
 INTERCEPTOR(int, pthread_attr_setstacksize, pthread_attr_t *__attr, size_t __stacksize) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_attr_setstacksize)(clear_id(__attr), __stacksize);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -285,9 +262,8 @@ INTERCEPTOR(int, pthread_attr_setstacksize, pthread_attr_t *__attr, size_t __sta
 INTERCEPTOR(int, pthread_attr_setinheritsched, pthread_attr_t *__attr, int __inherit) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_attr_setinheritsched)(clear_id(__attr), __inherit);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -295,9 +271,8 @@ INTERCEPTOR(int, pthread_attr_setinheritsched, pthread_attr_t *__attr, int __inh
 INTERCEPTOR(int, pthread_attr_setschedpolicy, pthread_attr_t *__attr, int __policy) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_attr_setschedpolicy)(clear_id(__attr), __policy);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -305,24 +280,21 @@ INTERCEPTOR(int, pthread_attr_setschedpolicy, pthread_attr_t *__attr, int __poli
 INTERCEPTOR(int, pthread_attr_destroy, pthread_attr_t *__attr) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_attr_destroy)(clear_id(__attr));
-  ptsan_in_libc--;
 
   return res;
 }
 
 INTERCEPTOR(int, pthread_getattr_np, pthread_t thread, pthread_attr_t *attr) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int out = REAL(pthread_getattr_np)(thread, clear_id(attr));
-  ptsan_in_libc--;
   return out;
 }
 
 INTERCEPTOR(int, pthread_attr_setguardsize, pthread_attr_t *attr, size_t guardsize) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int out = REAL(pthread_attr_setguardsize)(clear_id(attr), guardsize);
-  ptsan_in_libc--;
   return out;
 }
 
@@ -333,27 +305,24 @@ INTERCEPTOR(int, pthread_attr_setguardsize, pthread_attr_t *attr, size_t guardsi
 INTERCEPTOR(int, pthread_cond_init,
             pthread_cond_t *c, const pthread_condattr_t *attr) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_cond_init)(clear_id(c), clear_id(attr));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_cond_destroy, pthread_cond_t *c) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_cond_destroy)(clear_id(c));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_cond_wait,
             pthread_cond_t *c, pthread_mutex_t *m) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res =
       REAL(pthread_cond_wait)(clear_id(c), clear_id(m));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -361,63 +330,57 @@ INTERCEPTOR(int, pthread_cond_timedwait,
             pthread_cond_t *c, pthread_mutex_t *m,
             const struct timespec *abstime) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_cond_timedwait)(clear_id(c), clear_id(m),
                                          clear_id(abstime));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_cond_signal, pthread_cond_t *c) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_cond_signal)(clear_id(c));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_cond_broadcast, pthread_cond_t *c) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_cond_broadcast)(clear_id(c));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_condattr_init, pthread_condattr_t *attr) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_condattr_init)(
     (pthread_condattr_t *)clear_id((void *)attr)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_condattr_setclock, pthread_condattr_t *attr, clockid_t clock_id) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_condattr_setclock)(
     (pthread_condattr_t *)clear_id((void *)attr),
     clock_id
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_condattr_destroy, pthread_condattr_t *attr) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_condattr_destroy)(
     (pthread_condattr_t *)clear_id((void *)attr)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -425,36 +388,33 @@ INTERCEPTOR(int, timer_create, clockid_t __clock_id,
 			 struct sigevent *__restrict __evp,
 			 timer_t *__restrict __timerid) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   struct sigevent *cleared_evp = clear_id(__evp);
   // if(NULL != cleared_evp) {
   //   cleared_evp->_sigev_un._sigev_thread._function = clear_id(__evp->_sigev_un._sigev_thread._function);
   //   cleared_evp->_sigev_un._sigev_thread._attribute = clear_id(__evp->_sigev_un._sigev_thread._attribute);
   // }
   int res = REAL(timer_create)(__clock_id, cleared_evp, clear_id(__timerid));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(void, pthread_exit, void *retval) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   REAL(pthread_exit)(retval);
-  ptsan_in_libc--; // unreachable
 }
 
 INTERCEPTOR(int, pthread_register_cancel, __pthread_unwind_buf_t *__buf) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_register_cancel)(clear_id_preserve_align(__buf));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(void, __pthread_unwind_next, __pthread_unwind_buf_t *exc)
 {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   REAL(__pthread_unwind_next)(clear_id_preserve_align(exc));
 
@@ -484,40 +444,37 @@ INTERCEPTOR(int, mq_open, const char *__name, int __oflag, ...) {
       va_end (ap);
   }
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = (__oflag & O_CREAT)
     ? REAL(mq_open)(__name_clear, __oflag, mode, attr)
     : REAL(mq_open)(__name_clear, __oflag);
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(int, mq_unlink, const char *name) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(mq_unlink)(clear_id(name));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(ssize_t, mq_receive, int mqdes, char *msg_ptr, size_t msg_len, unsigned *msg_prio) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   ssize_t res = REAL(mq_receive)(
     mqdes,
     clear_id(msg_ptr),
     msg_len,
     clear_id(msg_prio)
   );
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(ssize_t, mq_timedreceive, int mqdes, char *msg_ptr, size_t msg_len,
             unsigned *msg_prio, const struct timespec *abs_timeout) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   ssize_t res = REAL(mq_timedreceive)(
     mqdes,
     clear_id(msg_ptr),
@@ -525,14 +482,13 @@ INTERCEPTOR(ssize_t, mq_timedreceive, int mqdes, char *msg_ptr, size_t msg_len,
     clear_id(msg_prio),
     clear_id(abs_timeout)
   );
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, mq_timedsend, int mqdes, const char *msg_ptr, size_t msg_len,
             unsigned msg_prio, const struct timespec *abs_timeout) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(mq_timedsend)(
     mqdes,
     clear_id(msg_ptr),
@@ -540,7 +496,6 @@ INTERCEPTOR(int, mq_timedsend, int mqdes, const char *msg_ptr, size_t msg_len,
     msg_prio,
     clear_id(abs_timeout)
   );
-  ptsan_in_libc--;
   return res;
 }
 
@@ -548,36 +503,39 @@ INTERCEPTOR(int, mq_timedsend, int mqdes, const char *msg_ptr, size_t msg_len,
 #include <sys/socket.h>
 #include <sys/uio.h>
 
-INTERCEPTOR(ssize_t, sendmsg, int sockfd, const struct msghdr *msg, int flags) {
-  ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+// Iovec-using functions. Need to strip ids on iovec->iov_base
 
-  struct msghdr clean_msg;
-  if (msg) {
-    const struct msghdr *clear_msg = clear_id(msg);
-    clean_msg = *clear_msg;
+static void ptsan_copy_clear_iovecs(struct iovec *dst,
+                                    const struct iovec *src,
+                                    size_t cnt) {
+  for (size_t i = 0; i < cnt; i++) {
+    dst[i].iov_base = clear_id(clear_id(src)[i].iov_base);
+    dst[i].iov_len = clear_id(src)[i].iov_len;
+  }
+}
 
-    // Pointers inside msghdr
-    clean_msg.msg_name    = clear_id(clear_msg->msg_name);
-    clean_msg.msg_control = clear_id(clear_msg->msg_control);
-
-    if (clear_msg->msg_iov) {
-      // Cast away const so we can walk the array
-      struct iovec *iov = (struct iovec *)clear_id(clear_msg->msg_iov);
-      for (size_t i = 0; i < clear_msg->msg_iovlen; i++) {
-        iov[i].iov_base = clear_id(iov[i].iov_base);
-      }
-      clean_msg.msg_iov = (struct iovec *)clear_id((void *)clear_msg->msg_iov);
-    }
+#define COPY_CLEAR_IOVEC(vec, n)                                               \
+  if (vec && n > 0) {                                                          \
+    struct iovec *tmp =                                                        \
+        (struct iovec *)__builtin_alloca(sizeof(struct iovec) * n);            \
+    ptsan_copy_clear_iovecs(tmp, vec, n);                                      \
+    vec = tmp;                                                                 \
   }
 
-  ssize_t res = REAL(sendmsg)(
-    sockfd,
-    msg ? &clean_msg : NULL,
-    flags
-  );
-
-  ptsan_in_libc--;
+INTERCEPTOR(ssize_t, sendmsg, int sockfd, const struct msghdr *msg, int flags) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  const struct msghdr *m = clear_id(msg);
+  if (!m)
+    return REAL(sendmsg)(sockfd, m, flags);
+  // shadow msghdr/iovec with cleared pointers: the caller's tagged fields are never modified
+  struct msghdr shadow = *m;
+  shadow.msg_name = clear_id(shadow.msg_name);
+  shadow.msg_control = clear_id(shadow.msg_control);
+  struct iovec *iov = shadow.msg_iov;
+  COPY_CLEAR_IOVEC(iov, shadow.msg_iovlen);
+  shadow.msg_iov = clear_id(iov);
+  ssize_t res = REAL(sendmsg)(sockfd, &shadow, flags);
   return res;
 }
 
@@ -587,74 +545,65 @@ INTERCEPTOR(ssize_t, sendmsg, int sockfd, const struct msghdr *msg, int flags) {
 INTERCEPTOR(int, pthread_rwlock_init,
             pthread_rwlock_t *rw, const pthread_rwlockattr_t *attr) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_rwlock_init)(clear_id(rw), clear_id(attr));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_rwlock_destroy, pthread_rwlock_t *rw) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_rwlock_destroy)(clear_id(rw));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_rwlock_rdlock, pthread_rwlock_t *rw) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_rwlock_rdlock)(clear_id(rw));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_rwlock_tryrdlock, pthread_rwlock_t *rw) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_rwlock_tryrdlock)(clear_id(rw));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_rwlock_wrlock, pthread_rwlock_t *rw) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_rwlock_wrlock)(clear_id(rw));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_rwlock_trywrlock, pthread_rwlock_t *rw) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_rwlock_trywrlock)(clear_id(rw));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_rwlock_unlock, pthread_rwlock_t *rw) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_rwlock_unlock)(clear_id(rw));
-  ptsan_in_libc--;
   return res;
 }
 
 /* sysconf */
 INTERCEPTOR(long, sysconf, int name) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   long res = REAL(sysconf)(name);
-  ptsan_in_libc--;
   return res;
 }
 /* pthread_cancel */
 INTERCEPTOR(int, pthread_cancel, pthread_t thread) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_cancel)(thread);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -664,9 +613,8 @@ INTERCEPTOR(int, pthread_cancel, pthread_t thread) {
 // ------------------------------
 INTERCEPTOR(void *, __cxa_allocate_exception, size_t sz) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   void * res = REAL(__cxa_allocate_exception)(sz);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -681,54 +629,48 @@ INTERCEPTOR(void *, __cxa_allocate_exception, size_t sz) {
 // __sigaddset(set, sig)
 INTERCEPTOR(int, sigaddset, sigset_t *set, int sig) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(sigaddset)(clear_id(set), sig);
-  ptsan_in_libc--;
   return res;
 }
 
 // __sigdelset(set, sig)
 INTERCEPTOR(int, sigdelset, sigset_t *set, int sig) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(sigdelset)(clear_id(set), sig);
-  ptsan_in_libc--;
   return res;
 }
 
 // __sigismember(set, sig)
 INTERCEPTOR(int, sigismember, const sigset_t *set, int sig) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(sigismember)(clear_id(set), sig);
-  ptsan_in_libc--;
   return res;
 }
 
 // __sigisemptyset(set)
 INTERCEPTOR(int, sigisemptyset, const sigset_t *set) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(sigisemptyset)(clear_id(set));
-  ptsan_in_libc--;
   return res;
 }
 
 // __sigaddsetp(set, sig) – synonym that some libcs export
 INTERCEPTOR(int, sigaddsetp, sigset_t *set, int sig) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(sigaddsetp)(clear_id(set), sig);
-  ptsan_in_libc--;
   return res;
 }
 
 // __sigdelsetp(set, sig)
 INTERCEPTOR(int, sigdelsetp, sigset_t *set, int sig) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(sigdelsetp)(clear_id(set), sig);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -736,9 +678,8 @@ INTERCEPTOR(int, sigdelsetp, sigset_t *set, int sig) {
 
 INTERCEPTOR(int, getrusage, int who, struct rusage *usage) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(getrusage)(who, clear_id(usage));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -746,17 +687,15 @@ INTERCEPTOR(int, getrusage, int who, struct rusage *usage) {
 INTERCEPTOR(int, getrlimit, int resource, struct rlimit *rlim) {
 
   COMMON_INTERCEPTOR_ENTER(getrlimit, resource, rlim);
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(getrlimit)(resource, clear_id(rlim));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, setrlimit, int resource, const struct rlimit *rlim) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(setrlimit)(resource, clear_id(rlim));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -764,10 +703,9 @@ INTERCEPTOR(int, prlimit,
             pid_t pid, int resource,
             const struct rlimit *new_limit, struct rlimit *old_limit) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(prlimit)(pid, resource,
                           clear_id(new_limit), clear_id(old_limit));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -779,44 +717,39 @@ INTERCEPTOR(int, prlimit,
 INTERCEPTOR(int, fseek,
             FILE *stream, long int offset, int whence) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(fseek)(clear_id(stream), offset, whence);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(long int, ftell,
             FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   long int res = REAL(ftell)(clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(void, rewind,
             FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   REAL(rewind)(clear_id(stream));
-  ptsan_in_libc--;
 }
 
 INTERCEPTOR(int, fgetpos,
             FILE *stream, fpos_t *pos) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(fgetpos)(clear_id(stream), clear_id(pos));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, fsetpos,
             FILE *stream, const fpos_t *pos) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(fsetpos)(clear_id(stream), clear_id(pos));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -826,14 +759,67 @@ INTERCEPTOR(int, fsetpos,
 
 
 // int getopt(int argc, char *const argv[], const char *optstring);
+// getopt* strip ids from the caller's argv for the uninstrumented libc call,
+// then restore them so later argv accesses stay covered. Restore is unambiguous
+// because getopt* only permute argv: each slot maps back to one saved entry.
+
+// Save the tagged argv[0..n-1] into `saved`, then strip the ids in place so the
+// uninstrumented libc getopt* call can scan the strings without faulting.
+static void ptsan_argv_save_and_untag(char **argv, int n, char **saved) {
+  for (int i = 0; i < n; i++) {
+    saved[i] = argv[i];
+    argv[i] = clear_id(argv[i]);
+  }
+}
+
+// Restore each slot's original tag (matched by stripped address), and re-tag
+// `optarg`, which when set points at or into one of the argv strings.
+static void ptsan_argv_restore_tags(char **argv, int n, char *const *saved) {
+  for (int i = 0; i < n; i++) {
+    char *cur = argv[i];
+    for (int j = 0; j < n; j++) {
+      if (clear_id(saved[j]) == cur) {
+        argv[i] = saved[j];
+        break;
+      }
+    }
+  }
+  // optarg points at/into an argv string but came back stripped; re-tag it by
+  // finding which entry's range it falls in and copying that entry's id back on.
+  if (optarg) {
+    char *oa = clear_id(optarg);
+    for (int j = 0; j < n; j++) {
+      char *base = clear_id(saved[j]);
+      if (oa >= base && oa <= base + internal_strlen(base)) {
+        optarg = copy_id(oa, saved[j]);
+        break;
+      }
+    }
+  }
+}
+
 INTERCEPTOR(int, getopt,
             int argc, char *const *argv, const char *optstring) {
+  // NOT threadsafe as is getopt()
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  char **w = (char **)clear_id(argv);
+  // degenerate call: nothing to save/restore; libc bails before touching argv
+  if (!w || argc <= 0) {
+    PTSAN_ENV_GUARD();
+    return REAL(getopt)(argc, clear_id(argv), clear_id(optstring));
+  }
+
+  // libc getopt() scans (and permutes) the caller's argv; strip ids for the REAL
+  // call, then restore the tags afterward.
+  char **saved = (char **)__builtin_alloca(argc * sizeof(*saved));
+  ptsan_argv_save_and_untag(w, argc, saved);
+
+  // getopt() reads environ internally; swap in an untagged env for the REAL call.
+  PTSAN_ENV_GUARD();
   int res = REAL(getopt)(argc,
                          clear_id(argv),
                          clear_id(optstring));
-  ptsan_in_libc--;
+  ptsan_argv_restore_tags(w, argc, saved);
   return res;
 }
 
@@ -849,17 +835,31 @@ static void copy_option(struct option &out, const struct option &in) {
 INTERCEPTOR(int, getopt_long,
             int argc, char *const *argv, const char *optstring,
             const struct option *longopts, int *longindex) {
+  // NOT threadsafe as is getopt_long()
   ENSURE_PTSAN_INITED();
+  char **w = (char **)clear_id(argv);
+  // degenerate call: nothing to save/restore; libc bails before touching argv/longopts
+  if (!w || argc <= 0) {
+    PTSAN_ENV_GUARD();
+    return REAL(getopt_long)(argc, clear_id(argv), clear_id(optstring),
+                             clear_id(longopts), clear_id(longindex));
+  }
+  // libc getopt_long() scans (and permutes) the caller's argv; strip ids for the
+  // REAL call, then restore the tags afterward.
+  char **saved = (char **)__builtin_alloca(argc * sizeof(*saved));
+  ptsan_argv_save_and_untag(w, argc, saved);
 
-  ptsan_in_libc++;
-
+  // getopt_long() reads environ internally; swap in an untagged env for the REAL call.
+  PTSAN_ENV_GUARD();
   const struct option *lo_true = clear_id(longopts);
   int n = 0;
   while (lo_true[n].name != nullptr) {
     n++;
   }
 
-  struct option *stripped = (struct option *)REAL(calloc)(n + 1, sizeof(struct option));
+  struct option *stripped = (struct option *)__builtin_alloca((n + 1) * sizeof(*stripped));
+  // zero the null-named terminator entry (calloc used to cover this)
+  stripped[n] = {};
   for (int i = 0; i < n; i++) {
     copy_option(stripped[i], lo_true[i]);
   }
@@ -871,9 +871,8 @@ INTERCEPTOR(int, getopt_long,
       stripped,
       clear_id(longindex));
 
-  REAL(free)(stripped);
+  ptsan_argv_restore_tags(w, argc, saved);
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -881,21 +880,35 @@ INTERCEPTOR(int, getopt_long,
 INTERCEPTOR(int, getopt_long_only,
             int argc, char *const *argv, const char *optstring,
             const struct option *longopts, int *longindex) {
+  // NOT threadsafe as is getopt_long_only()
   ENSURE_PTSAN_INITED();
+  char **w = (char **)clear_id(argv);
+  // degenerate call: nothing to save/restore; libc bails before touching argv/longopts
+  if (!w || argc <= 0) {
+    PTSAN_ENV_GUARD();
+    return REAL(getopt_long_only)(argc, clear_id(argv), clear_id(optstring),
+                                  clear_id(longopts), clear_id(longindex));
+  }
+  // libc getopt_long_only() scans (and permutes) the caller's argv; strip ids for
+  // the REAL call, then restore the tags afterward.
+  char **saved = (char **)__builtin_alloca(argc * sizeof(*saved));
+  ptsan_argv_save_and_untag(w, argc, saved);
 
+  // getopt_long_only() reads environ internally; swap in an untagged env for the REAL call.
+  PTSAN_ENV_GUARD();
   const struct option *lo_true = clear_id(longopts);
   int n = 0;
   while (lo_true[n].name != nullptr) {
     n++;
   }
 
-  struct option *stripped = (struct option *)REAL(calloc)(n + 1, sizeof(struct option));
+  struct option *stripped = (struct option *)__builtin_alloca((n + 1) * sizeof(*stripped));
+  // zero the null-named terminator entry (calloc used to cover this)
+  stripped[n] = {};
   for (int i = 0; i < n; i++) {
     copy_option(stripped[i], lo_true[i]);
   }
 
-
-  ptsan_in_libc++;
   int res = REAL(getopt_long_only)(
       argc,
       clear_id(argv),
@@ -903,9 +916,8 @@ INTERCEPTOR(int, getopt_long_only,
       stripped,
       clear_id(longindex));
 
-  REAL(free)(stripped);
+  ptsan_argv_restore_tags(w, argc, saved);
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -924,9 +936,8 @@ INTERCEPTOR(int, getsubopt,
 INTERCEPTOR(int, mkdir,
             const char *pathname, mode_t mode) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(mkdir)(clear_id(pathname), mode);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -934,9 +945,8 @@ INTERCEPTOR(int, mkdir,
 INTERCEPTOR(int, mkdirat,
             int dirfd, const char *pathname, mode_t mode) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(mkdirat)(dirfd, clear_id(pathname), mode);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -946,9 +956,8 @@ INTERCEPTOR(int, mkdirat,
 
 INTERCEPTOR(int, fgetc, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(fgetc)(clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -956,18 +965,16 @@ INTERCEPTOR(int, fgetc, FILE *stream) {
 // int getc(FILE *stream);  (usually a macro, but a real symbol exists)
 INTERCEPTOR(int, getc, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(getc)(clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 // int getchar(void);
 INTERCEPTOR(int, getchar) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(getchar)();
-  ptsan_in_libc--;
   return res;
 }
 
@@ -975,9 +982,8 @@ INTERCEPTOR(int, getchar) {
 // int putchar(int c);
 INTERCEPTOR(int, putchar, int c) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(putchar)(c);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -985,9 +991,8 @@ INTERCEPTOR(int, putchar, int c) {
 // int fputc(int c, FILE *stream);
 INTERCEPTOR(int, fputc, int c, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(fputc)(c, clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -995,9 +1000,8 @@ INTERCEPTOR(int, fputc, int c, FILE *stream) {
 // int putc(int c, FILE *stream);               (usually a macro)
 INTERCEPTOR(int, putc, int c, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(putc)(c, clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1008,27 +1012,24 @@ INTERCEPTOR(int, putc, int c, FILE *stream) {
 // int setuid(uid_t uid);
 INTERCEPTOR(int, setuid, uid_t uid) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(setuid)(uid);
-  ptsan_in_libc--;
   return res;
 }
 
 // int setgid(gid_t gid);
 INTERCEPTOR(int, setgid, gid_t gid) {                 /* “setguid” → setgid */
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(setgid)(gid);
-  ptsan_in_libc--;
   return res;
 }
 
 // uid_t geteuid(void);
 INTERCEPTOR(uid_t, geteuid) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   uid_t res = REAL(geteuid)();
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1045,26 +1046,24 @@ INTERCEPTOR(int, open, const char *pathname, int flags, ...) {
   }
 
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int fd = (flags & O_CREAT)
              ? REAL(open)(clear_id(pathname), flags, mode)
              : REAL(open)(clear_id(pathname), flags);
 
-  ptsan_in_libc--;
   return fd;
 }
 
 /* opendir */
 INTERCEPTOR(DIR *, opendir, const char *name) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   const char *clear_name = (const char *)clear_id(name);
 
   DIR *res = REAL(opendir)(clear_name);
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1079,13 +1078,12 @@ INTERCEPTOR(int, openat, int dirfd, const char *pathname, int flags, ...) {
   }
 
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int fd = (flags & O_CREAT)
              ? REAL(openat)(dirfd, clear_id(pathname), flags, mode)
              : REAL(openat)(dirfd, clear_id(pathname), flags);
 
-  ptsan_in_libc--;
   return fd;
 }
 
@@ -1093,19 +1091,17 @@ INTERCEPTOR(int, openat, int dirfd, const char *pathname, int flags, ...) {
 
 INTERCEPTOR(DIR *, __fdopendir, int fd) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   DIR *res = REAL(__fdopendir)(fd);
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, creat, const char *pathname, mode_t mode) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int fd = REAL(creat)(clear_id(pathname), mode);
-  ptsan_in_libc--;
   return fd;
 }
 
@@ -1120,13 +1116,12 @@ INTERCEPTOR(int, open64, const char *pathname, int flags, ...) {
   }
 
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int fd = (flags & O_CREAT)
              ? REAL(open64)(clear_id(pathname), flags, mode)
              : REAL(open64)(clear_id(pathname), flags);
 
-  ptsan_in_libc--;
   return fd;
 }
 
@@ -1142,21 +1137,19 @@ INTERCEPTOR(int, openat64, int dirfd, const char *pathname, int flags, ...) {
   }
 
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int fd = (flags & O_CREAT)
              ? REAL(openat64)(dirfd, clear_id(pathname), flags, mode)
              : REAL(openat64)(dirfd, clear_id(pathname), flags);
 
-  ptsan_in_libc--;
   return fd;
 }
 
 INTERCEPTOR(int, creat64, const char *pathname, mode_t mode) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int fd = REAL(creat64)(clear_id(pathname), mode);
-  ptsan_in_libc--;
   return fd;
 }
 
@@ -1164,114 +1157,101 @@ INTERCEPTOR(int, creat64, const char *pathname, mode_t mode) {
 
 INTERCEPTOR(int, mkstemp, char *__template) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(mkstemp)(clear_id(__template));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, mkostemp, char *__template, int flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(mkostemp)(clear_id(__template), flags);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, mkstemps, char *__template, int suffixlen) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(mkstemps)(clear_id(__template), suffixlen);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, mkostemps, char *__template, int suffixlen, int flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(mkostemps)(clear_id(__template), suffixlen, flags);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(char *, mktemp, char *__template) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(mktemp)(clear_id(__template));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(char *, mkdtemp, char *tmpl) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(mkdtemp)(clear_id(tmpl));
   res = copy_id(res, tmpl);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, rmdir, const char *pathname) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(rmdir)(clear_id(pathname));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, chmod, const char *pathname, mode_t mode) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(chmod)(clear_id(pathname), mode);
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(int, closedir, DIR *dirp) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(closedir)(clear_id(dirp));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, link, const char *oldpath, const char *newpath) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(link)(clear_id(oldpath), clear_id(newpath));
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, linkat, int olddirfd, const char *oldpath,
             int newdirfd, const char *newpath, int flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(linkat)(olddirfd, clear_id(oldpath),
                          newdirfd, clear_id(newpath), flags);
 
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(int, unlink, const char *pathname) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(unlink)(clear_id(pathname));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, unlinkat, int dirfd, const char *pathname, int flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(unlinkat)(dirfd, clear_id(pathname), flags);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1374,52 +1354,46 @@ INTERCEPTOR(void, siglongjmp, jmp_buf env, int val) {
 
 INTERCEPTOR(nl_catd, catopen, const char *name, int oflag) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   nl_catd res = REAL(catopen)(clear_id(name), oflag);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(char *, catgets, nl_catd catd, int set_id, int msg_id, const char *s) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(catgets)(catd, set_id, msg_id, clear_id(s));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, catclose, nl_catd catd) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(catclose)(catd);
-  ptsan_in_libc--;
   return res;
 }
 
 /*-------------------------------- strcoll -------------------------------*/
 INTERCEPTOR(int, strcoll, const char *s1, const char *s2) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(strcoll)(clear_id(s1), clear_id(s2));
-  ptsan_in_libc--;
   return res;
 }
 
 /*------------------------------ strcoll_l -------------------------------*/
 INTERCEPTOR(int, strcoll_l, const char *s1, const char *s2, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(strcoll_l)(clear_id(s1), clear_id(s2), loc);
-  ptsan_in_libc--;
   return res;
 }
 
 /*------------------------------ wcscoll ---------------------------------*/
 INTERCEPTOR(int, wcscoll, const wchar_t *s1, const wchar_t *s2) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(wcscoll)(clear_id(s1), clear_id(s2));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1428,9 +1402,8 @@ INTERCEPTOR(int, wcscoll, const wchar_t *s1, const wchar_t *s2) {
 /*---------------------------  tmpfile  ----------------------------*/
 INTERCEPTOR(FILE *, tmpfile) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   FILE *res = REAL(tmpfile)();
-  ptsan_in_libc--;
   /* TODO: tag res if necessary */
   return res;
 }
@@ -1438,9 +1411,8 @@ INTERCEPTOR(FILE *, tmpfile) {
 /* Some libcs provide the large-file alias tmpfile64. */
 INTERCEPTOR(FILE *, tmpfile64) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   FILE *res = REAL(tmpfile64)();
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1452,11 +1424,10 @@ INTERCEPTOR(int, sigaction,
             const struct sigaction *act,
             struct sigaction *oldact) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(sigaction)(signum,
                             clear_id(act),
                             clear_id(oldact));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1466,10 +1437,9 @@ INTERCEPTOR(sighandler_t, signal,
             int signum,
             sighandler_t handler) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   sighandler_t res = REAL(signal)(signum,
                                   clear_id(handler));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1482,121 +1452,42 @@ INTERCEPTOR(int, pthread_key_create, pthread_key_t *key, void (*destructor)(void
 
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_key_create)(clear_id(key), destructor);
-  ptsan_in_libc--;
   return res;
 }
 INTERCEPTOR(int, pthread_setschedparam, pthread_t thread, int policy, const struct sched_param *param) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_setschedparam)(thread, policy, clear_id(param));
-  ptsan_in_libc--;
   return res;
 }
 INTERCEPTOR(int, pthread_attr_setschedparam, pthread_attr_t *attr, const struct sched_param *param) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pthread_attr_setschedparam)(
     clear_id(attr),
     clear_id(param)
   );
-  ptsan_in_libc--;
   return res;
 }
 
-struct pthread_unwind_buf
-{
-  struct
-  {
-    __jmp_buf jmp_buf;
-    int mask_was_saved;
-  } cancel_jmp_buf[1];
-
-  union
-  {
-    /* This is the placeholder of the public version.  */
-    void *pad[4];
-
-    struct
-    {
-      /* Pointer to the previous cleanup buffer.  */
-      struct pthread_unwind_buf *prev;
-
-      /* Backward compatibility: state of the old-style cleanup
-	 handler at the time of the previous new-style cleanup handler
-	 installment.  */
-      struct _pthread_cleanup_buffer *cleanup;
-
-      /* Cancellation type before the push call.  */
-      int canceltype;
-    } data;
-  } priv;
-};
-
 INTERCEPTOR(void, __pthread_register_cancel, __pthread_unwind_buf_t *__buf) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
-  __pthread_unwind_buf_t *ibuf = clear_id(__buf);
-  struct pthread_unwind_buf *clear_buf = (struct pthread_unwind_buf *) ibuf;
-  clear_buf->priv.data.prev = clear_id(clear_buf->priv.data.prev);
-  clear_buf->priv.data.cleanup = clear_id(clear_buf->priv.data.cleanup);
-  // unsigned int count = 1;
-  // while(ibuf) {
-  //   printf ("lahtinen %u %p\n", count, ibuf);
-  //   struct pthread_unwind_buf *clear_buf = (struct pthread_unwind_buf *) ibuf;
-  //   if(clear_buf->priv.data.prev)
-  //     clear_buf->priv.data.prev = clear_id(clear_buf->priv.data.prev);
-  //   if(clear_buf->priv.data.cleanup)
-  //     clear_buf->priv.data.cleanup = clear_id(clear_buf->priv.data.cleanup);
-  //   ibuf = clear_buf->priv.data.prev;
-  //   ++count;
-  // }
-  REAL(__pthread_register_cancel)(ibuf);
-  ptsan_in_libc--;
+  InLibcGuard _ig;
+  REAL(__pthread_register_cancel)(clear_id_preserve_align(__buf));
 }
 
 INTERCEPTOR(void, ___pthread_unregister_cancel, __pthread_unwind_buf_t *buf) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
-
-  __pthread_unwind_buf_t *ibuf = clear_id(buf);
-  struct pthread_unwind_buf *clear_buf = (struct pthread_unwind_buf *) ibuf;
-  clear_buf->priv.data.prev = clear_id(clear_buf->priv.data.prev);
-  clear_buf->priv.data.cleanup = clear_id(clear_buf->priv.data.cleanup);
-  // while(ibuf) {
-  //   struct pthread_unwind_buf *clear_buf = (struct pthread_unwind_buf *) ibuf;
-  //   if(clear_buf->priv.data.prev)
-  //     clear_buf->priv.data.prev = clear_id(clear_buf->priv.data.prev);
-  //   if(clear_buf->priv.data.cleanup)
-  //     clear_buf->priv.data.cleanup = clear_id(clear_buf->priv.data.cleanup);
-  //   ibuf = clear_id(clear_buf->priv.data.prev);
-  // }
-
-  REAL(___pthread_unregister_cancel)(ibuf);
-  ptsan_in_libc--;
+  InLibcGuard _ig;
+  REAL(___pthread_unregister_cancel)(clear_id_preserve_align(buf));
 }
 
 INTERCEPTOR(void, __pthread_unregister_cancel, __pthread_unwind_buf_t *buf) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
-
-  __pthread_unwind_buf_t *ibuf = clear_id(buf);
-  // struct pthread_unwind_buf *clear_buf = (struct pthread_unwind_buf *) ibuf;
-  // clear_buf->priv.data.prev = clear_id(clear_buf->priv.data.prev);
-  // clear_buf->priv.data.cleanup = clear_id(clear_buf->priv.data.cleanup);
-  // printf("lahtinen 2__pthread_unregister_cancel:\n");
-  // while(ibuf) {
-  //   struct pthread_unwind_buf *clear_buf = (struct pthread_unwind_buf *) ibuf;
-  //   if(clear_buf->priv.data.prev)
-  //     clear_buf->priv.data.prev = clear_id(clear_buf->priv.data.prev);
-  //   if(clear_buf->priv.data.cleanup)
-  //     clear_buf->priv.data.cleanup = clear_id(clear_buf->priv.data.cleanup);
-  //   ibuf = clear_id(clear_buf->priv.data.prev);
-  // }
-
-  REAL(__pthread_unregister_cancel)(ibuf);
-  ptsan_in_libc--;
+  InLibcGuard _ig;
+  REAL(__pthread_unregister_cancel)(clear_id_preserve_align(buf));
 }
 
 #include <time.h>
@@ -1604,7 +1495,7 @@ INTERCEPTOR(void, __pthread_unregister_cancel, __pthread_unwind_buf_t *buf) {
 INTERCEPTOR(int, clock_nanosleep, clockid_t clock_id, int flags,
             const struct timespec *request, struct timespec *remain) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(clock_nanosleep)(
     clock_id,
@@ -1613,14 +1504,13 @@ INTERCEPTOR(int, clock_nanosleep, clockid_t clock_id, int flags,
     clear_id(remain)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, setsockopt, int sockfd, int level, int optname,
             const void *optval, socklen_t optlen) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(setsockopt)(
     sockfd,
@@ -1630,7 +1520,6 @@ INTERCEPTOR(int, setsockopt, int sockfd, int level, int optname,
     optlen
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1638,7 +1527,7 @@ INTERCEPTOR(int, setsockopt, int sockfd, int level, int optname,
 INTERCEPTOR(int, timer_settime, timer_t timerid, int flags,
             const struct itimerspec *new_value, struct itimerspec *old_value) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(timer_settime)(
     timerid,
@@ -1647,7 +1536,6 @@ INTERCEPTOR(int, timer_settime, timer_t timerid, int flags,
     clear_id(old_value)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1657,7 +1545,7 @@ INTERCEPTOR(int, select, int nfds,
             fd_set *exceptfds,
             struct timeval *timeout) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(select)(
     nfds,
@@ -1667,14 +1555,13 @@ INTERCEPTOR(int, select, int nfds,
     clear_id(timeout)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, sched_setaffinity, pid_t pid, size_t cpusetsize,
             const cpu_set_t *mask) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(sched_setaffinity)(
     pid,
@@ -1682,14 +1569,13 @@ INTERCEPTOR(int, sched_setaffinity, pid_t pid, size_t cpusetsize,
     clear_id(mask)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_setaffinity_np, pthread_t thread, size_t cpusetsize,
             const cpu_set_t *cpuset) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_setaffinity_np)(
     thread,
@@ -1697,14 +1583,13 @@ INTERCEPTOR(int, pthread_setaffinity_np, pthread_t thread, size_t cpusetsize,
     clear_id(cpuset)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, futex, int *uaddr, int futex_op, int val,
             const struct timespec *timeout, int *uaddr2, int val3) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(futex)(
     clear_id(uaddr),
@@ -1715,23 +1600,20 @@ INTERCEPTOR(int, futex, int *uaddr, int futex_op, int val,
     val3
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_join, pthread_t thread, void **retval) {
     ENSURE_PTSAN_INITED();
-    ptsan_in_libc++;
+    InLibcGuard _ig;
     int res = REAL(pthread_join)(thread, clear_id(retval));
-    ptsan_in_libc--;
     return res;
 }
 
 INTERCEPTOR(int, ___pthread_join, pthread_t thread, void **retval) {
     ENSURE_PTSAN_INITED();
-    ptsan_in_libc++;
+    InLibcGuard _ig;
     int res = REAL(___pthread_join)(thread, clear_id(retval));
-    ptsan_in_libc--;
     return res;
 }
 
@@ -1740,34 +1622,30 @@ INTERCEPTOR(int, __pthread_clockjoin_ex,
             const struct timespec *abstime,
             clockid_t clockid) {
     ENSURE_PTSAN_INITED();
-    ptsan_in_libc++;
+    InLibcGuard _ig;
     int res = REAL(__pthread_clockjoin_ex)(thread, clear_id(retval), clear_id(abstime), clockid);
-    ptsan_in_libc--;
 
     return res;
 }
 
 INTERCEPTOR(void, sigcancel_handler, int sig, siginfo_t *si, void *uc) {
     ENSURE_PTSAN_INITED();
-    ptsan_in_libc++;
+    InLibcGuard _ig;
     REAL(sigcancel_handler)(sig, clear_id(si), clear_id(uc));
-    ptsan_in_libc--;
 }
 
 INTERCEPTOR(int, pthread_barrierattr_setpshared, pthread_barrierattr_t *attr, int pshared) {
     ENSURE_PTSAN_INITED();
-    ptsan_in_libc++;
+    InLibcGuard _ig;
     int res = REAL(pthread_barrierattr_setpshared)(clear_id(attr), pshared);
-    ptsan_in_libc--;
     return res;
 }
 
 /*------------- rename ------------------------------------------------*/
 INTERCEPTOR(int, rename, const char *oldp, const char *newp) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(rename)(clear_id(oldp), clear_id(newp));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1776,12 +1654,11 @@ INTERCEPTOR(int, renameat,
             int olddirfd, const char *oldp,
             int newdirfd, const char *newp) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(renameat)(olddirfd,
                            clear_id(oldp),
                            newdirfd,
                            clear_id(newp));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1791,79 +1668,62 @@ INTERCEPTOR(int, renameat2,
             int newdirfd, const char *newp,
             unsigned int flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(renameat2)(olddirfd,
                             clear_id(oldp),
                             newdirfd,
                             clear_id(newp),
                             flags);
-  ptsan_in_libc--;
   return res;
 }
 
 /*------------- remove ------------------------------------------------*/
 INTERCEPTOR(int, remove, const char *path) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(remove)(clear_id(path));
-  ptsan_in_libc--;
   return res;
 }
 
-
-/*=================== wmemchr =========================================*/
-INTERCEPTOR(wchar_t *, wmemchr,
-            const wchar_t *s, wchar_t c, size_t n) {
-  ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
-  wchar_t *res = REAL(wmemchr)(clear_id(s), c, n);
-  ptsan_in_libc--;
-  return copy_id(res, s);
-}
 
 /*=================== wmemcmp =========================================*/
 INTERCEPTOR(int, wmemcmp,
             const wchar_t *s1, const wchar_t *s2, size_t n) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(wmemcmp)(clear_id(s1), clear_id(s2), n);
-  ptsan_in_libc--;
   return res;
 }
 
 /*---------------------------  chdir  ---------------------------*/
 INTERCEPTOR(int, chdir, const char *path) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(chdir)(clear_id(path));
-  ptsan_in_libc--;
   return res;
 }
 
 /*---------------------------  fchdir ---------------------------*/
 INTERCEPTOR(int, fchdir, int fd) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(fchdir)(fd);
-  ptsan_in_libc--;
   return res;
 }
 
 /*------------------------------ pipe --------------------------------*/
 INTERCEPTOR(int, pipe, int pipefd[2]) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pipe)(clear_id(pipefd));
-  ptsan_in_libc--;
   return res;
 }
 
 /*------------------------------ pipe2 -------------------------------*/
 INTERCEPTOR(int, pipe2, int pipefd[2], int flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(pipe2)(clear_id(pipefd), flags);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1871,9 +1731,8 @@ INTERCEPTOR(int, set_robust_list,
             struct robust_list_head *head, size_t len)
 {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(set_robust_list)(clear_id(head), len);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1918,7 +1777,7 @@ INTERCEPTOR(int, execve,
             const char *pathname,
             char *const argv[],
             char *const envp[]) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   const char *clean_path = clear_id(pathname);
 
@@ -1932,13 +1791,12 @@ INTERCEPTOR(int, execve,
 
   int res = REAL(execve)(clean_path, clean_argv, clean_envp);
 
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(int, fexecve, int fd, char *const argv[], char *const envp[]) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   size_t argc = ptsan_strv_len(argv);
   char **clean_argv = (char **)__builtin_alloca((argc + 1) * sizeof(*clean_argv));
@@ -1950,12 +1808,11 @@ INTERCEPTOR(int, fexecve, int fd, char *const argv[], char *const envp[]) {
 
   int res = REAL(fexecve)(fd, clean_argv, clean_envp);
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, execv, const char *path, char *const argv[]) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   const char *clean_path = clear_id(path);
 
@@ -1969,24 +1826,28 @@ INTERCEPTOR(int, execv, const char *path, char *const argv[]) {
 
   int res = REAL(execve)(clean_path, clean_argv, clean_envp);
 
-  ptsan_in_libc--;
   return res;
 }
 
 /* GNU extension */
 INTERCEPTOR(int, execvpe, const char *file, char *const argv[], char *const envp[]) {
-  ptsan_in_libc++;
+  // __ptsan_execvpe re-enters interceptors (PATH search), so call it outside the guard
+  const char *clean_file;
+  char **clean_argv;
+  char **clean_envp;
+  {
+    InLibcGuard _ig;
 
-  const char *clean_file = clear_id(file);
+    clean_file = clear_id(file);
 
-  size_t argc = ptsan_strv_len(argv);
-  char **clean_argv = (char **)__builtin_alloca((argc + 1) * sizeof(*clean_argv));
-  ptsan_strv_deep_untag_into(argv, clean_argv, argc);
+    size_t argc = ptsan_strv_len(argv);
+    clean_argv = (char **)__builtin_alloca((argc + 1) * sizeof(*clean_argv));
+    ptsan_strv_deep_untag_into(argv, clean_argv, argc);
 
-  size_t envc = ptsan_strv_len(envp);
-  char **clean_envp = (char **)__builtin_alloca((envc + 1) * sizeof(*clean_envp));
-  ptsan_strv_deep_untag_into(envp, clean_envp, envc);
-  ptsan_in_libc--;
+    size_t envc = ptsan_strv_len(envp);
+    clean_envp = (char **)__builtin_alloca((envc + 1) * sizeof(*clean_envp));
+    ptsan_strv_deep_untag_into(envp, clean_envp, envc);
+  }
 
   // Still have to clean envp (and maybe argv?), since it's passed into a syscall
   int res = __ptsan_execvpe(clean_file, clean_argv, clean_envp);
@@ -1996,18 +1857,22 @@ INTERCEPTOR(int, execvpe, const char *file, char *const argv[], char *const envp
 
 
 INTERCEPTOR(int, execvp, const char *file, char *const argv[]) {
-  ptsan_in_libc++;
+  const char *clean_file;
+  char **clean_argv;
+  char **clean_envp;
+  {
+    InLibcGuard _ig;
 
-  const char *clean_file = clear_id(file);
+    clean_file = clear_id(file);
 
-  size_t argc = ptsan_strv_len(argv);
-  char **clean_argv = (char **)__builtin_alloca((argc + 1) * sizeof(*clean_argv));
-  ptsan_strv_deep_untag_into(argv, clean_argv, argc);
+    size_t argc = ptsan_strv_len(argv);
+    clean_argv = (char **)__builtin_alloca((argc + 1) * sizeof(*clean_argv));
+    ptsan_strv_deep_untag_into(argv, clean_argv, argc);
 
-  size_t envc = ptsan_strv_len(environ);
-  char **clean_envp = (char **)__builtin_alloca((envc + 1) * sizeof(*clean_envp));
-  ptsan_strv_deep_untag_into(environ, clean_envp, envc);
-  ptsan_in_libc--;
+    size_t envc = ptsan_strv_len(environ);
+    clean_envp = (char **)__builtin_alloca((envc + 1) * sizeof(*clean_envp));
+    ptsan_strv_deep_untag_into(environ, clean_envp, envc);
+  }
 
   // Still have to clean envp (and maybe argv?), since it's passed into a syscall
   int res = __ptsan_execvpe(clean_file, clean_argv, clean_envp);
@@ -2017,7 +1882,7 @@ INTERCEPTOR(int, execvp, const char *file, char *const argv[]) {
 
 
 INTERCEPTOR(int, execl, const char *path, const char *arg0, ...) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   va_list ap_count;
   va_start(ap_count, arg0);
@@ -2041,33 +1906,35 @@ INTERCEPTOR(int, execl, const char *path, const char *arg0, ...) {
 
   int res = REAL(execve)(clean_path, argv, clean_envp);
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, execlp, const char *file, const char *arg0, ...) {
-  ptsan_in_libc++;
+  const char *clean_file;
+  char **argv;
+  char **clean_envp;
+  {
+    InLibcGuard _ig;
 
-  va_list ap_count;
-  va_start(ap_count, arg0);
-  size_t extra = ptsan_count_varargs_until_null(ap_count);
-  va_end(ap_count);
+    va_list ap_count;
+    va_start(ap_count, arg0);
+    size_t extra = ptsan_count_varargs_until_null(ap_count);
+    va_end(ap_count);
 
-  size_t argc = 1 + extra;
-  char **argv = (char **)__builtin_alloca((argc + 1) * sizeof(*argv));
+    size_t argc = 1 + extra;
+    argv = (char **)__builtin_alloca((argc + 1) * sizeof(*argv));
 
-  va_list ap_build;
-  va_start(ap_build, arg0);
-  ptsan_build_argv_from_varargs_into(arg0, ap_build, argv, argc);
-  va_end(ap_build);
+    va_list ap_build;
+    va_start(ap_build, arg0);
+    ptsan_build_argv_from_varargs_into(arg0, ap_build, argv, argc);
+    va_end(ap_build);
 
-  const char *clean_file = clear_id(file);
+    clean_file = clear_id(file);
 
-  size_t envc = ptsan_strv_len(environ);
-  char **clean_envp = (char **)__builtin_alloca((envc + 1) * sizeof(*clean_envp));
-  ptsan_strv_deep_untag_into(environ, clean_envp, envc);
-
-  ptsan_in_libc--;
+    size_t envc = ptsan_strv_len(environ);
+    clean_envp = (char **)__builtin_alloca((envc + 1) * sizeof(*clean_envp));
+    ptsan_strv_deep_untag_into(environ, clean_envp, envc);
+  }
 
   /* Use execvpe so we can pass envp explicitly */
   int res = __ptsan_execvpe(clean_file, argv, clean_envp);
@@ -2077,7 +1944,7 @@ INTERCEPTOR(int, execlp, const char *file, const char *arg0, ...) {
 // Execle's signature is: `path, args..., (void*)0, envp`. Why they
 // did this is beyond me.
 INTERCEPTOR(int, execle, const char *path, const char *arg0, ...) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   /* Count args to size argv. */
   va_list ap_count;
@@ -2107,7 +1974,6 @@ INTERCEPTOR(int, execle, const char *path, const char *arg0, ...) {
 
   int res = REAL(execve)(clean_path, argv, clean_envp);
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2154,7 +2020,7 @@ INTERCEPTOR(int, clone,
   }
 
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(clone)(clear_id(fn),
                         clear_id(child_stack),
@@ -2164,7 +2030,6 @@ INTERCEPTOR(int, clone,
                         clear_id(newtls),
                         clear_id(ctid));
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2174,16 +2039,15 @@ INTERCEPTOR(int, __cxa_atexit,
     return REAL(__cxa_atexit)(func, arg, dso_handle);
   }
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(__cxa_atexit)(clear_id(func), clear_id(arg), clear_id(dso_handle));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, epoll_ctl, int epfd, int op, int fd,
-            struct epoll_event *_Nullable event) {
+            struct epoll_event *event) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(epoll_ctl)(epfd,
                             op,
@@ -2191,13 +2055,12 @@ INTERCEPTOR(int, epoll_ctl, int epfd, int op, int fd,
                             clear_id(event));
 
   /* execve() does not return on success */
-  ptsan_in_libc--;
   return res;
 }\
 
 INTERCEPTOR(char *, strtok_r, char *str, const char *delim, char **saveptr) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   char *res = REAL(strtok_r)(
     (char *)clear_id(str),
@@ -2206,76 +2069,70 @@ INTERCEPTOR(char *, strtok_r, char *str, const char *delim, char **saveptr) {
   );
 
   copy_id(*saveptr, str);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_spin_init, pthread_spinlock_t *lock, int pshared) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_spin_init)(
     (pthread_spinlock_t *)clear_id((void *)lock),
     pshared
   );
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_spin_destroy, pthread_spinlock_t *lock) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_spin_destroy)(
     (pthread_spinlock_t *)clear_id((void *)lock)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(int, pthread_spin_trylock, pthread_spinlock_t *lock) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_spin_trylock)(
     (pthread_spinlock_t *)clear_id((void *)lock)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(int, pthread_spin_lock, pthread_spinlock_t *lock) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_spin_lock)(
     (pthread_spinlock_t *)clear_id((void *)lock)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, pthread_spin_unlock, pthread_spinlock_t *lock) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(pthread_spin_unlock)(
     (pthread_spinlock_t *)clear_id((void *)lock)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(int, strcasecmp_l, const char *s1, const char *s2, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(strcasecmp_l)(
     (const char *)clear_id((void *)s1),
@@ -2283,14 +2140,13 @@ INTERCEPTOR(int, strcasecmp_l, const char *s1, const char *s2, locale_t loc) {
     (locale_t)clear_id((void *)loc)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(int, strncasecmp_l, const char *s1, const char *s2, size_t n, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   int res = REAL(strncasecmp_l)(
     (const char *)clear_id((void *)s1),
@@ -2299,14 +2155,15 @@ INTERCEPTOR(int, strncasecmp_l, const char *s1, const char *s2, size_t n, locale
     (locale_t)clear_id((void *)loc)
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(size_t, strlcpy, char *dst, const char *src, size_t size) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  const size_t length = find_cstring_character(src, '\0');
+  check_range_and_report(0, dst, Min(size, length + 1), "write");
+  InLibcGuard _ig;
 
   size_t res = REAL(strlcpy)(
     (char *)clear_id((void *)dst),
@@ -2314,14 +2171,13 @@ INTERCEPTOR(size_t, strlcpy, char *dst, const char *src, size_t size) {
     size
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(size_t, strlcat, char *dst, const char *src, size_t size) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   size_t res = REAL(strlcat)(
     (char *)clear_id((void *)dst),
@@ -2329,59 +2185,23 @@ INTERCEPTOR(size_t, strlcat, char *dst, const char *src, size_t size) {
     size
   );
 
-  ptsan_in_libc--;
   return res;
 }
 
 
-// Wide-string length & friends
-INTERCEPTOR(wchar_t *, wcschr, const wchar_t *s, wchar_t c) {
-  ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
-  wchar_t *res = REAL(wcschr)(clear_id(s), c);
-  ptsan_in_libc--;
-  return copy_id(res, s);
-}
-
-INTERCEPTOR(wchar_t *, wcsrchr, const wchar_t *s, wchar_t c) {
-  ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
-  wchar_t *res = REAL(wcsrchr)(clear_id(s), c);
-  ptsan_in_libc--;
-  return copy_id(res, s);
-}
-
-INTERCEPTOR(wchar_t *, wcsstr, const wchar_t *haystack, const wchar_t *needle) {
-  ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
-  wchar_t *res = REAL(wcsstr)(clear_id(haystack), clear_id(needle));
-  ptsan_in_libc--;
-  return copy_id(res, haystack);
-}
-
-INTERCEPTOR(wchar_t *, wcspbrk, const wchar_t *s, const wchar_t *accept) {
-  ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
-  wchar_t *res = REAL(wcspbrk)(clear_id(s), clear_id(accept));
-  ptsan_in_libc--;
-  return copy_id(res, s);
-}
-
-// Spans
+// Wide-string spans
 
 INTERCEPTOR(size_t, wcsspn, const wchar_t *s, const wchar_t *accept) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   size_t res = REAL(wcsspn)(clear_id(s), clear_id(accept));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(size_t, wcscspn, const wchar_t *s, const wchar_t *reject) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   size_t res = REAL(wcscspn)(clear_id(s), clear_id(reject));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2390,9 +2210,8 @@ INTERCEPTOR(size_t, wcscspn, const wchar_t *s, const wchar_t *reject) {
 
 INTERCEPTOR(int, wcsncmp, const wchar_t *s1, const wchar_t *s2, size_t n) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(wcsncmp)(clear_id(s1), clear_id(s2), n);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2400,17 +2219,15 @@ INTERCEPTOR(int, wcsncmp, const wchar_t *s1, const wchar_t *s2, size_t n) {
 
 INTERCEPTOR(wchar_t *, wcscpy, wchar_t *dst, const wchar_t *src) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   wchar_t *res = REAL(wcscpy)(clear_id(dst), clear_id(src));
-  ptsan_in_libc--;
   return copy_id(res, dst);
 }
 
 INTERCEPTOR(wchar_t *, wcsncpy, wchar_t *dst, const wchar_t *src, size_t n) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   wchar_t *res = REAL(wcsncpy)(clear_id(dst), clear_id(src), n);
-  ptsan_in_libc--;
   return copy_id(res, dst);
 }
 
@@ -2419,34 +2236,30 @@ INTERCEPTOR(wchar_t *, wcsncpy, wchar_t *dst, const wchar_t *src, size_t n) {
 /* rewinddir */
 INTERCEPTOR(void, rewinddir, DIR *dirp) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   REAL(rewinddir)(clear_id(dirp));
-  ptsan_in_libc--;
 }
 
 /* seekdir */
 INTERCEPTOR(void, seekdir, DIR *dirp, long loc) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   REAL(seekdir)(clear_id(dirp), loc);
-  ptsan_in_libc--;
 }
 
 /* telldir */
 INTERCEPTOR(long, telldir, DIR *dirp) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   long res = REAL(telldir)(clear_id(dirp));
-  ptsan_in_libc--;
   return res;
 }
 
 /* dirfd */
 INTERCEPTOR(int, dirfd, DIR *dirp) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(dirfd)(clear_id(dirp));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2458,9 +2271,8 @@ INTERCEPTOR(int, scandirat,
             int (*compar)(const struct dirent **, const struct dirent **)) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(scandirat)(dirfd, clear_id(dirp), clear_id(namelist), filter, compar);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2471,9 +2283,8 @@ INTERCEPTOR(int, scandirat64,
             int (*filter)(const struct dirent64 *),
             int (*compar)(const struct dirent64 **, const struct dirent64 **)) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(scandirat64)(dirfd, clear_id(dirp), clear_id(namelist), filter, compar);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2527,11 +2338,10 @@ struct __spawn_action
 INTERCEPTOR(int, posix_spawn_file_actions_adddup2,
             posix_spawn_file_actions_t *fa, int fd, int newfd) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   posix_spawn_file_actions_t *clear_fa = clear_id(fa);
   clear_fa->__actions = clear_id(clear_fa->__actions);
   int res = REAL(posix_spawn_file_actions_adddup2)(clear_fa, fd, newfd);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2540,7 +2350,7 @@ INTERCEPTOR(int, posix_spawn_file_actions_addopen,
             posix_spawn_file_actions_t *fa, int fd,
             const char *path, int oflag, mode_t mode) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   posix_spawn_file_actions_t *clear_fa = clear_id(fa);
   clear_fa->__actions = clear_id(clear_fa->__actions);
   // clear_fa->__actions = clear_id(&clear_fa->__actions[clear_fa->__used]);
@@ -2549,7 +2359,6 @@ INTERCEPTOR(int, posix_spawn_file_actions_addopen,
                                                    clear_id(path),
                                                    oflag,
                                                    mode);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2557,24 +2366,22 @@ INTERCEPTOR(int, posix_spawn_file_actions_addopen,
 INTERCEPTOR(int, posix_spawn_file_actions_addclose,
             posix_spawn_file_actions_t *fa, int fd) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   posix_spawn_file_actions_t *clear_fa = clear_id(fa);
   clear_fa->__actions = clear_id(clear_fa->__actions);
   // clear_fa->__actions = clear_id(&clear_fa->__actions[clear_fa->__used]);
 
   int res = REAL(posix_spawn_file_actions_addclose)(clear_fa, fd);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, posix_spawn_file_actions_init, posix_spawn_file_actions_t *fa) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   posix_spawn_file_actions_t *clear_fa = clear_id(fa);
   clear_fa->__actions = clear_id(clear_fa->__actions);
 
   int res = REAL(posix_spawn_file_actions_init)(clear_fa);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2582,17 +2389,16 @@ INTERCEPTOR(int, posix_spawn_file_actions_init, posix_spawn_file_actions_t *fa) 
 INTERCEPTOR(int, posix_spawn_file_actions_addclosefrom_np,
             posix_spawn_file_actions_t *fa, int lowfd) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   posix_spawn_file_actions_t *clear_fa = clear_id(fa);
   clear_fa->__actions = clear_id(clear_fa->__actions);
   int res = REAL(posix_spawn_file_actions_addclosefrom_np)(clear_fa, lowfd);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, posix_spawn_file_actions_destroy, posix_spawn_file_actions_t *fa) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   posix_spawn_file_actions_t *clear_fa = clear_id(fa);
   clear_fa->__actions = clear_id(clear_fa->__actions);
   for (int i = 0; i < clear_fa->__used; ++i)
@@ -2615,7 +2421,6 @@ INTERCEPTOR(int, posix_spawn_file_actions_destroy, posix_spawn_file_actions_t *f
     }
 
   int res = REAL(posix_spawn_file_actions_destroy)(clear_fa);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2625,9 +2430,8 @@ INTERCEPTOR(int, posix_spawn_file_actions_destroy, posix_spawn_file_actions_t *f
 INTERCEPTOR(int, posix_spawnattr_init,
             posix_spawnattr_t *attr) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_init)(clear_id(attr));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2635,9 +2439,8 @@ INTERCEPTOR(int, posix_spawnattr_init,
 INTERCEPTOR(int, posix_spawnattr_destroy,
             posix_spawnattr_t *attr) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_destroy)(clear_id(attr));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2645,18 +2448,16 @@ INTERCEPTOR(int, posix_spawnattr_destroy,
 INTERCEPTOR(int, posix_spawnattr_setflags,
             posix_spawnattr_t *attr, short flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_setflags)(clear_id(attr), flags);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, posix_spawnattr_getflags,
             const posix_spawnattr_t *attr, short *flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_getflags)(clear_id(attr), clear_id(flags));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2664,18 +2465,16 @@ INTERCEPTOR(int, posix_spawnattr_getflags,
 INTERCEPTOR(int, posix_spawnattr_setsigmask,
             posix_spawnattr_t *attr, const sigset_t *sigmask) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_setsigmask)(clear_id(attr), clear_id(sigmask));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, posix_spawnattr_getsigmask,
             const posix_spawnattr_t *attr, sigset_t *sigmask) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_getsigmask)(clear_id(attr), clear_id(sigmask));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2683,18 +2482,16 @@ INTERCEPTOR(int, posix_spawnattr_getsigmask,
 INTERCEPTOR(int, posix_spawnattr_setsigdefault,
             posix_spawnattr_t *attr, const sigset_t *sigdefault) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_setsigdefault)(clear_id(attr), clear_id(sigdefault));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, posix_spawnattr_getsigdefault,
             const posix_spawnattr_t *attr, sigset_t *sigdefault) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_getsigdefault)(clear_id(attr), clear_id(sigdefault));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2702,18 +2499,16 @@ INTERCEPTOR(int, posix_spawnattr_getsigdefault,
 INTERCEPTOR(int, posix_spawnattr_setpgroup,
             posix_spawnattr_t *attr, pid_t pgroup) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_setpgroup)(clear_id(attr), pgroup);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, posix_spawnattr_getpgroup,
             const posix_spawnattr_t *attr, pid_t *pgroup) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_getpgroup)(clear_id(attr), clear_id(pgroup));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2721,18 +2516,16 @@ INTERCEPTOR(int, posix_spawnattr_getpgroup,
 INTERCEPTOR(int, posix_spawnattr_setschedpolicy,
             posix_spawnattr_t *attr, int policy) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_setschedpolicy)(clear_id(attr), policy);
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, posix_spawnattr_getschedpolicy,
             const posix_spawnattr_t *attr, int *policy) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_getschedpolicy)(clear_id(attr), clear_id(policy));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2740,18 +2533,16 @@ INTERCEPTOR(int, posix_spawnattr_getschedpolicy,
 INTERCEPTOR(int, posix_spawnattr_setschedparam,
             posix_spawnattr_t *attr, const struct sched_param *param) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_setschedparam)(clear_id(attr), clear_id(param));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(int, posix_spawnattr_getschedparam,
             const posix_spawnattr_t *attr, struct sched_param *param) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(posix_spawnattr_getschedparam)(clear_id(attr), clear_id(param));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2765,7 +2556,7 @@ INTERCEPTOR(int, posix_spawn,
             char *const argv[], char *const envp[])
 {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   pid_t *clear_pid = (pid_t *)clear_id(pid);
   const char *clear_path = (const char *)clear_id(path);
@@ -2791,12 +2582,11 @@ INTERCEPTOR(int, posix_spawn,
   int res = REAL(posix_spawn)(clear_pid, clear_path,
                               clear_fa, clear_attr,
                               clear_argv, clear_envp);
-  ptsan_in_libc--;
   return res;
 }
 
 
-#include <ffi.h>
+#if PTSAN_HAS_LIBFFI
 
 /* ffi_prep_cif */
 INTERCEPTOR(ffi_status, ffi_prep_cif,
@@ -2804,7 +2594,7 @@ INTERCEPTOR(ffi_status, ffi_prep_cif,
             unsigned int nargs, ffi_type *rtype,
             ffi_type **atypes) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   ffi_cif *clear_cif   = (ffi_cif *)clear_id(cif);
   ffi_type *clear_rtype = (ffi_type *)clear_id(rtype);
@@ -2818,7 +2608,6 @@ INTERCEPTOR(ffi_status, ffi_prep_cif,
 
   ffi_status res = REAL(ffi_prep_cif)(clear_cif, abi,
                                       nargs, clear_rtype, clear_atypes);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -2829,7 +2618,7 @@ INTERCEPTOR(void, ffi_call,
             void *rvalue,
             void **avalue) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   ffi_cif *clear_cif = (ffi_cif *)clear_id(cif);
   void (*clear_fn)(void) = (void (*)(void))clear_id((void *)fn);
@@ -2844,47 +2633,42 @@ INTERCEPTOR(void, ffi_call,
 
   REAL(ffi_call)(clear_cif, clear_fn, clear_rvalue, clear_avalue);
 
-  ptsan_in_libc--;
 }
+#endif // PTSAN_HAS_LIBFFI
 
 /*----------------------- classic multibyte APIs -----------------------*/
 INTERCEPTOR(int, mblen, const char *s, size_t n) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   int res = REAL(mblen)(clear_id(s), n);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(int, mbtowc, wchar_t *pwc, const char *s, size_t n) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   int res = REAL(mbtowc)(clear_id(pwc), clear_id(s), n);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(int, wctomb, char *s, wchar_t wc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   int res = REAL(wctomb)(clear_id(s), wc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, mbstowcs, wchar_t *pwcs, const char *s, size_t n) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(mbstowcs)(clear_id(pwcs), clear_id(s), n);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, wcstombs, char *s, const wchar_t *pwcs, size_t n) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(wcstombs)(clear_id(s), clear_id(pwcs), n);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
@@ -2892,46 +2676,41 @@ INTERCEPTOR(size_t, wcstombs, char *s, const wchar_t *pwcs, size_t n) {
 /*---------------------- restartable-stateful APIs ---------------------*/
 INTERCEPTOR(size_t, mbrlen, const char *s, size_t n, mbstate_t *ps) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(mbrlen)(clear_id(s), n, clear_id(ps));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, mbrtowc, wchar_t *pwc, const char *s, size_t n,
             mbstate_t *ps) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(mbrtowc)(clear_id(pwc), clear_id(s), n, clear_id(ps));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, wcrtomb, char *s, wchar_t wc, mbstate_t *ps) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(wcrtomb)(clear_id(s), wc, clear_id(ps));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, mbsrtowcs, wchar_t *dst, const char **src, size_t len,
             mbstate_t *ps) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(mbsrtowcs)(clear_id(dst), clear_id(src), len,
                                clear_id(ps));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, wcsrtombs, char *dst, const wchar_t **src, size_t len,
             mbstate_t *ps) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(wcsrtombs)(clear_id(dst), clear_id(src), len,
                                clear_id(ps));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
@@ -2939,73 +2718,64 @@ INTERCEPTOR(size_t, wcsrtombs, char *dst, const wchar_t **src, size_t len,
 /*--------------------------- *_l variants -----------------------------*/
 INTERCEPTOR(size_t, mbrlen_l, const char *s, size_t n, mbstate_t *ps, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(mbrlen_l)(clear_id(s), n, clear_id(ps), loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, mbrtowc_l, wchar_t *pwc, const char *s, size_t n, mbstate_t *ps, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(mbrtowc_l)(clear_id(pwc), clear_id(s), n, clear_id(ps), loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, wcrtomb_l, char *s, wchar_t wc, mbstate_t *ps, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(wcrtomb_l)(clear_id(s), wc, clear_id(ps), loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, mbsrtowcs_l, wchar_t *dst, const char **src, size_t len, mbstate_t *ps, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(mbsrtowcs_l)(clear_id(dst), clear_id(src), len, clear_id(ps), loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, wcsrtombs_l, char *dst, const wchar_t **src, size_t len, mbstate_t *ps, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(wcsrtombs_l)(clear_id(dst), clear_id(src), len, clear_id(ps), loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 /* Some libcs also provide non-restartable *_l forms: */
 INTERCEPTOR(int, mbtowc_l, wchar_t *pwc, const char *s, size_t n, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   int res = REAL(mbtowc_l)(clear_id(pwc), clear_id(s), n, loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(int, wctomb_l, char *s, wchar_t wc, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   int res = REAL(wctomb_l)(clear_id(s), wc, loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, mbstowcs_l, wchar_t *pwcs, const char *s, size_t n, locale_t loc) {
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(mbstowcs_l)(clear_id(pwcs), clear_id(s), n, loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(size_t, wcstombs_l, char *s, const wchar_t *pwcs, size_t n, locale_t loc) {
   ENSURE_PTSAN_INITED();
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   size_t res = REAL(wcstombs_l)(clear_id(s), clear_id(pwcs), n, loc);
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
@@ -3013,74 +2783,64 @@ INTERCEPTOR(size_t, wcstombs_l, char *s, const wchar_t *pwcs, size_t n, locale_t
 /* -------- tz-sensitive interceptors -------- */
 
 INTERCEPTOR(struct tm *, localtime, const time_t *timer) {
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   struct tm *res = REAL(localtime)(clear_id(timer));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(struct tm *, localtime_r, const time_t *timer, struct tm *result) {
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   struct tm *res = REAL(localtime_r)(clear_id(timer), clear_id(result));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(char *, ctime, const time_t *timer) {
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   char *res = REAL(ctime)(clear_id(timer));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(char *, ctime_r, const time_t *timer, char *buf) {
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   char *res = REAL(ctime_r)(clear_id(timer), clear_id(buf));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(time_t, mktime, struct tm *tm_ptr) {
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   time_t res = REAL(mktime)(clear_id(tm_ptr));
-  PTSAN_ENV_GUARD_END();
   return res;
 }
 
 INTERCEPTOR(void, tzset, void) {
-  PTSAN_ENV_GUARD_BEGIN();
+  PTSAN_ENV_GUARD();
   REAL(tzset)();
-  PTSAN_ENV_GUARD_END();
 }
 
 /* UTC path: no TZ/env consult, so no swap needed */
 INTERCEPTOR(struct tm *, gmtime, const time_t *timer) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   struct tm *res = REAL(gmtime)(clear_id(timer));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(struct tm *, gmtime_r, const time_t *timer, struct tm *result) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   struct tm *res = REAL(gmtime_r)(clear_id(timer), clear_id(result));
-  ptsan_in_libc--;
   return res;
 }
 
 INTERCEPTOR(char *, dlerror, void) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char * out = REAL(dlerror)();
-  ptsan_in_libc--;
   return out;
 }
 
 INTERCEPTOR(int, dladdr, const void * addr, Dl_info *info) {
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int out = REAL(dladdr)(clear_id(addr), clear_id(info));
-  ptsan_in_libc--;
   return out;
 }
 
@@ -3139,16 +2899,15 @@ INTERCEPTOR(int, _obstack_memory_used, struct obstack *h) {
 // ferror
 INTERCEPTOR(int, ferror, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(ferror)(clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 
 INTERCEPTOR(char *, setlocale, int category, const char *locale) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   // Clean environment
   size_t envc = ptsan_strv_len(environ);
@@ -3163,7 +2922,6 @@ INTERCEPTOR(char *, setlocale, int category, const char *locale) {
   // Restore the original environment pointer.
   environ = old_environ;
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3181,7 +2939,9 @@ INTERCEPTOR(SIZE_T, malloc_usable_size, void* ptr) {
 INTERCEPTOR(int, ioctl, int fd, unsigned long op, ...) {
   auto do_fn = [](int fd, unsigned long op, va_list ap) -> int {
     switch (op) {
-      case FIONBIO: {
+      case FIONBIO:
+      case FIOASYNC:
+      case FIONREAD: {
         int *argp = va_arg(ap, int *);
         argp = clear_id(argp);
         return REAL(ioctl)(fd, op, argp);
@@ -3195,44 +2955,25 @@ INTERCEPTOR(int, ioctl, int fd, unsigned long op, ...) {
   };
 
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   va_list ap;
   va_start(ap, op);
   int out = do_fn(fd, op, ap);
   va_end(ap);
 
-  ptsan_in_libc--;
   return out;
 }
 
 
 INTERCEPTOR(int, socketpair, int domain, int type, int protocol, int sv[2]) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(socketpair)(domain, type, protocol, clear_id(sv));
-  ptsan_in_libc--;
   return res;
 }
 
-// Iovec-using functions. Need to strip ids on iovec->iov_base
-
-static void ptsan_copy_clear_iovecs(struct iovec *dst,
-                                    const struct iovec *src,
-                                    size_t cnt) {
-  for (size_t i = 0; i < cnt; i++) {
-    dst[i].iov_base = clear_id(clear_id(src)[i].iov_base);
-    dst[i].iov_len = clear_id(src)[i].iov_len;
-  }
-}
-
-#define COPY_CLEAR_IOVEC(vec, n)                                               \
-  if (vec && n > 0) {                                                          \
-    struct iovec *tmp =                                                        \
-        (struct iovec *)__builtin_alloca(sizeof(struct iovec) * n);            \
-    ptsan_copy_clear_iovecs(tmp, vec, n);                                      \
-    vec = tmp;                                                                 \
-  }
+// Iovec-using functions: COPY_CLEAR_IOVEC (defined above sendmsg) shadows the array
 
 /* process_vm_readv */
 INTERCEPTOR(ssize_t, process_vm_readv,
@@ -3241,7 +2982,7 @@ INTERCEPTOR(ssize_t, process_vm_readv,
             const struct iovec *rvec, unsigned long riovcnt,
             unsigned long flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(lvec, liovcnt);
   COPY_CLEAR_IOVEC(rvec, riovcnt);
@@ -3250,7 +2991,6 @@ INTERCEPTOR(ssize_t, process_vm_readv,
                                        clear_id(lvec), liovcnt,
                                        clear_id(rvec), riovcnt,
                                        flags);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3261,7 +3001,7 @@ INTERCEPTOR(ssize_t, process_vm_writev,
             const struct iovec *rvec, unsigned long riovcnt,
             unsigned long flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(lvec, liovcnt);
   COPY_CLEAR_IOVEC(rvec, riovcnt);
@@ -3270,7 +3010,6 @@ INTERCEPTOR(ssize_t, process_vm_writev,
                                         clear_id(lvec), liovcnt,
                                         clear_id(rvec), riovcnt,
                                         flags);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3278,12 +3017,11 @@ INTERCEPTOR(ssize_t, process_vm_writev,
 INTERCEPTOR(ssize_t, readv,
             int fd, const struct iovec *iov, int iovcnt) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(iov, iovcnt);
 
   ssize_t res = REAL(readv)(fd, clear_id(iov), iovcnt);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3291,12 +3029,11 @@ INTERCEPTOR(ssize_t, readv,
 INTERCEPTOR(ssize_t, writev,
             int fd, const struct iovec *iov, int iovcnt) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(iov, iovcnt);
 
   ssize_t res = REAL(writev)(fd, clear_id(iov), iovcnt);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3304,12 +3041,11 @@ INTERCEPTOR(ssize_t, writev,
 INTERCEPTOR(ssize_t, preadv,
             int fd, const struct iovec *iov, int iovcnt, off_t offset) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(iov, iovcnt);
 
   ssize_t res = REAL(preadv)(fd, clear_id(iov), iovcnt, offset);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3317,12 +3053,11 @@ INTERCEPTOR(ssize_t, preadv,
 INTERCEPTOR(ssize_t, pwritev,
             int fd, const struct iovec *iov, int iovcnt, off_t offset) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(iov, iovcnt);
 
   ssize_t res = REAL(pwritev)(fd, clear_id(iov), iovcnt, offset);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3331,12 +3066,11 @@ INTERCEPTOR(ssize_t, preadv2,
             int fd, const struct iovec *iov, int iovcnt,
             off_t offset, int flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(iov, iovcnt);
 
   ssize_t res = REAL(preadv2)(fd, clear_id(iov), iovcnt, offset, flags);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3345,12 +3079,11 @@ INTERCEPTOR(ssize_t, pwritev2,
             int fd, const struct iovec *iov, int iovcnt,
             off_t offset, int flags) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(iov, iovcnt);
 
   ssize_t res = REAL(pwritev2)(fd, clear_id(iov), iovcnt, offset, flags);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3358,12 +3091,11 @@ INTERCEPTOR(ssize_t, pwritev2,
 INTERCEPTOR(ssize_t, preadv64,
             int fd, const struct iovec *iov, int iovcnt, off64_t offset) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(iov, iovcnt);
 
   ssize_t res = REAL(preadv64)(fd, clear_id(iov), iovcnt, offset);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3371,28 +3103,25 @@ INTERCEPTOR(ssize_t, preadv64,
 INTERCEPTOR(ssize_t, pwritev64,
             int fd, const struct iovec *iov, int iovcnt, off64_t offset) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   COPY_CLEAR_IOVEC(iov, iovcnt);
 
   ssize_t res = REAL(pwritev64)(fd, clear_id(iov), iovcnt, offset);
-  ptsan_in_libc--;
   return res;
 }
 INTERCEPTOR(void, globfree, glob_t *pglob) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   REAL(globfree)(clear_id(pglob));
-  ptsan_in_libc--;
 }
 
 // truncate(const char *path, off_t length)
 INTERCEPTOR(int, truncate, const char *path, off_t length) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(truncate)(clear_id(path), length);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -3401,9 +3130,8 @@ INTERCEPTOR(int, truncate, const char *path, off_t length) {
 INTERCEPTOR(int, ftruncate, int fd, off_t length) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(ftruncate)(fd, length);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -3411,9 +3139,8 @@ INTERCEPTOR(int, ftruncate, int fd, off_t length) {
 INTERCEPTOR(int, truncate64, const char *path, off64_t length) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(truncate64)(clear_id(path), length);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -3422,9 +3149,8 @@ INTERCEPTOR(int, truncate64, const char *path, off64_t length) {
 INTERCEPTOR(int, ftruncate64, int fd, off64_t length) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(ftruncate64)(fd, length);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -3432,36 +3158,32 @@ INTERCEPTOR(int, ftruncate64, int fd, off64_t length) {
 // int ungetc(int c, FILE *stream);
 INTERCEPTOR(int, ungetc, int c, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(ungetc)(c, clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 // wint_t ungetwc(wint_t wc, FILE *stream);
 INTERCEPTOR(wint_t, ungetwc, wint_t wc, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   wint_t res = REAL(ungetwc)(wc, clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 // int ungetc_unlocked(int c, FILE *stream);
 INTERCEPTOR(int, ungetc_unlocked, int c, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(ungetc_unlocked)(c, clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 // wint_t ungetwc_unlocked(wint_t wc, FILE *stream);
 INTERCEPTOR(wint_t, ungetwc_unlocked, wint_t wc, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   wint_t res = REAL(ungetwc_unlocked)(wc, clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
@@ -3469,67 +3191,444 @@ INTERCEPTOR(wint_t, ungetwc_unlocked, wint_t wc, FILE *stream) {
 // int fgetc_unlocked(FILE *stream);
 INTERCEPTOR(int, fgetc_unlocked, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(fgetc_unlocked)(clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 // int getc_unlocked(FILE *stream);
 INTERCEPTOR(int, getc_unlocked, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(getc_unlocked)(clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 // int getchar_unlocked(void);
 INTERCEPTOR(int, getchar_unlocked, void) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(getchar_unlocked)();
-  ptsan_in_libc--;
   return res;
 }
 
 // int feof(FILE *stream);
 INTERCEPTOR(int, feof, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(feof)(clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 // int feof_unlocked(FILE *stream);
 INTERCEPTOR(int, feof_unlocked, FILE *stream) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(feof_unlocked)(clear_id(stream));
-  ptsan_in_libc--;
   return res;
 }
 
 // int shm_open(const char *name, int oflag, mode_t mode);
 INTERCEPTOR(int, shm_open, const char *name, int oflag, mode_t mode) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(shm_open)(clear_id(name), oflag, mode);
-  ptsan_in_libc--;
   return res;
 }
 
 // int shm_unlink(const char *name);
 INTERCEPTOR(int, shm_unlink, const char *name) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(shm_unlink)(clear_id(name));
-  ptsan_in_libc--;
+  return res;
+}
+
+INTERCEPTOR(int, memfd_create, const char *name, unsigned int flags) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  return REAL(memfd_create)(clear_id(name), flags);
+}
+
+INTERCEPTOR(void *, mmap, void *addr, SIZE_T sz, int prot, int flags, int fd,
+            off_t off) {
+  if (common_flags()->detect_write_exec)
+    ReportMmapWriteExec(prot, flags);
+  if (!ptsan_initialized)
+    return (void *)internal_mmap(addr, sz, prot, flags, fd, off);
+  if (ptsan_init_is_running)
+    return REAL(mmap)(addr, sz, prot, flags, fd, off);
+  ENSURE_PTSAN_INITED();
+  void *out;
+  {
+    InLibcGuard _ig;
+    out = REAL(mmap)(clear_id(addr), sz, prot, flags, fd, off);
+  }
+  if (out == MAP_FAILED)
+    return out;
+  return tag_with_next_id(out, RoundUpTo(sz, GetPageSizeCached()), FREE_TY::MMAP);
+}
+
+INTERCEPTOR(void *, mmap64, void *addr, SIZE_T sz, int prot, int flags, int fd,
+            off64_t off) {
+  if (common_flags()->detect_write_exec)
+    ReportMmapWriteExec(prot, flags);
+  if (!ptsan_initialized)
+    return (void *)internal_mmap(addr, sz, prot, flags, fd, off);
+  if (ptsan_init_is_running)
+    return REAL(mmap64)(addr, sz, prot, flags, fd, off);
+  ENSURE_PTSAN_INITED();
+  void *out;
+  {
+    InLibcGuard _ig;
+    out = REAL(mmap64)(clear_id(addr), sz, prot, flags, fd, off);
+  }
+  if (out == MAP_FAILED)
+    return out;
+  return tag_with_next_id(out, RoundUpTo(sz, GetPageSizeCached()), FREE_TY::MMAP);
+}
+
+INTERCEPTOR(int, munmap, void *addr, SIZE_T sz) {
+  if (!ptsan_initialized)
+    return (int)internal_munmap(addr, sz);
+  if (ptsan_init_is_running)
+    return REAL(munmap)(addr, sz);
+  ENSURE_PTSAN_INITED();
+  if (ptsan_mark_ptr_freed(addr, FREE_TY::MMAP)) {
+    InLibcGuard _ig;
+    return REAL(munmap)(clear_id(addr), sz);
+  }
+  return -1;
+}
+
+INTERCEPTOR(int, mprotect, void *addr, SIZE_T sz, int prot) {
+  if (common_flags()->detect_write_exec)
+    ReportMmapWriteExec(prot, 0);
+  if (!ptsan_initialized)
+    return (int)internal_mprotect(addr, sz, prot);
+  if (ptsan_init_is_running)
+    return REAL(mprotect)(addr, sz, prot);
+  ENSURE_PTSAN_INITED();
+  MprotectMallocZones(addr, prot);
+  int result;
+  {
+    InLibcGuard _ig;
+    result = REAL(mprotect)(clear_id(addr), sz, prot);
+  }
+  if (result == 0) {
+    ptsan_check_mprotect(addr, sz, prot);
+  }
+  return result;
+}
+
+INTERCEPTOR(int, pkey_mprotect, void *address, SIZE_T size, int protection,
+            int key) {
+  if (ptsan_init_is_running) {
+    return REAL(pkey_mprotect)(clear_id(address), size, protection, key);
+  }
+  ENSURE_PTSAN_INITED();
+  int result;
+  {
+    InLibcGuard _ig;
+    result =
+        REAL(pkey_mprotect)(clear_id(address), size, protection, key);
+  }
+  if (result == 0) {
+    ptsan_check_mprotect(address, size, protection);
+  }
+  return result;
+}
+
+INTERCEPTOR(int, connect,
+            int sockfd,
+            const struct sockaddr *addr,
+            socklen_t addrlen) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+
+  const struct sockaddr *clear_addr = clear_id(addr);
+
+  int res = REAL(connect)(sockfd, clear_addr, addrlen);
+
+  return res;
+}
+
+INTERCEPTOR(ssize_t, recvmsg,
+            int sockfd,
+            struct msghdr *msg,
+            int flags) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  struct msghdr *m = clear_id(msg);
+  if (!m)
+    return REAL(recvmsg)(sockfd, m, flags);
+  // shadow msghdr/iovec with cleared pointers: the caller's tagged fields are never modified
+  struct msghdr shadow = *m;
+  shadow.msg_name = clear_id(shadow.msg_name);
+  shadow.msg_control = clear_id(shadow.msg_control);
+  struct iovec *iov = shadow.msg_iov;
+  COPY_CLEAR_IOVEC(iov, shadow.msg_iovlen);
+  shadow.msg_iov = clear_id(iov);
+  ssize_t res = REAL(recvmsg)(sockfd, &shadow, flags);
+  // copy back the fields the kernel writes
+  m->msg_namelen = shadow.msg_namelen;
+  m->msg_controllen = shadow.msg_controllen;
+  m->msg_flags = shadow.msg_flags;
+  return res;
+}
+
+INTERCEPTOR(int, recvmmsg,
+            int sockfd,
+            struct mmsghdr *msgvec,
+            unsigned int vlen,
+            int flags,
+            struct timespec *timeout) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  struct mmsghdr *mv = clear_id(msgvec);
+  if (!mv || vlen == 0)
+    return REAL(recvmmsg)(sockfd, mv, vlen, flags, clear_id(timeout));
+  // shadow mmsghdr/iovec arrays with cleared pointers: the caller's tagged fields are never modified
+  struct mmsghdr *shadow =
+      (struct mmsghdr *)__builtin_alloca(vlen * sizeof(*shadow));
+  for (unsigned int i = 0; i < vlen; i++) {
+    shadow[i] = mv[i];
+    struct msghdr *h = &shadow[i].msg_hdr;
+    h->msg_name    = clear_id(h->msg_name);
+    h->msg_control = clear_id(h->msg_control);
+    struct iovec *iov = h->msg_iov;
+    COPY_CLEAR_IOVEC(iov, h->msg_iovlen);
+    h->msg_iov = clear_id(iov);
+  }
+
+  int res = REAL(recvmmsg)(sockfd, shadow, vlen, flags, clear_id(timeout));
+
+  // copy back the fields the kernel writes for the entries it filled
+  for (int i = 0; i < res; i++) {
+    mv[i].msg_len = shadow[i].msg_len;
+    mv[i].msg_hdr.msg_namelen    = shadow[i].msg_hdr.msg_namelen;
+    mv[i].msg_hdr.msg_controllen = shadow[i].msg_hdr.msg_controllen;
+    mv[i].msg_hdr.msg_flags      = shadow[i].msg_hdr.msg_flags;
+  }
+  return res;
+}
+
+INTERCEPTOR(int, getrlimit64, int resource, struct rlimit *rlim) {
+
+  COMMON_INTERCEPTOR_ENTER(getrlimit64, resource, rlim);
+  InLibcGuard _ig;
+  int res = REAL(getrlimit64)(resource, clear_id(rlim));
+  return res;
+}
+
+INTERCEPTOR(int, setrlimit64, int resource, const struct rlimit64 *rlim) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(setrlimit64)(resource, clear_id(rlim));
+  return res;
+}
+
+INTERCEPTOR(int, prlimit64,
+            pid_t pid, int resource,
+            const struct rlimit64 *new_limit, struct rlimit64 *old_limit) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(prlimit64)(pid, resource,
+                            clear_id(new_limit), clear_id(old_limit));
+  return res;
+}
+
+INTERCEPTOR(int, chown, const char *pathname, uid_t owner, gid_t group) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(chown)(clear_id(pathname), owner, group);
+  return res;
+}
+
+INTERCEPTOR(int, lchown, const char *pathname, uid_t owner, gid_t group) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(lchown)(clear_id(pathname), owner, group);
+  return res;
+}
+
+INTERCEPTOR(int, fchown, int fd, uid_t owner, gid_t group) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(fchown)(fd, owner, group);
+  return res;
+}
+
+INTERCEPTOR(int, fchownat, int dirfd, const char *pathname,
+            uid_t owner, gid_t group, int flags) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(fchownat)(dirfd, clear_id(pathname), owner, group, flags);
+  return res;
+}
+
+INTERCEPTOR(void, explicit_bzero, void *s, SIZE_T n) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  REAL(explicit_bzero)(clear_id(s), n);
+}
+
+INTERCEPTOR(int, utimes, const char *filename, const struct timeval times[2]) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(utimes)(clear_id(filename), clear_id(times));
+  return res;
+}
+
+INTERCEPTOR(int, lutimes, const char *filename, const struct timeval times[2]) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(lutimes)(clear_id(filename), clear_id(times));
+  return res;
+}
+
+INTERCEPTOR(int, futimes, int fd, const struct timeval times[2]) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(futimes)(fd, clear_id(times));
+  return res;
+}
+
+INTERCEPTOR(int, futimesat, int dirfd, const char *pathname,
+            const struct timeval times[2]) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(futimesat)(dirfd, clear_id(pathname), clear_id(times));
+  return res;
+}
+
+INTERCEPTOR(int, utimensat, int dirfd, const char *pathname,
+            const struct timespec times[2], int flags) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(utimensat)(dirfd, clear_id(pathname), clear_id(times), flags);
+  return res;
+}
+
+INTERCEPTOR(int, futimens, int fd, const struct timespec times[2]) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(futimens)(fd, clear_id(times));
+  return res;
+}
+
+INTERCEPTOR(long, pathconf, const char *path, int name) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  long res = REAL(pathconf)(clear_id(path), name);
+  return res;
+}
+
+INTERCEPTOR(char *, secure_getenv, const char *name) {
+  return REAL(secure_getenv)(clear_id(name));
+}
+
+// clear tags for the real call, dirname returns pointer to location in path or static "."
+// "." must be untagged (it is never cleaned up)
+INTERCEPTOR(char *, dirname, char *path) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  char *clean_path = clear_id(path);
+  uptr len = clean_path ? internal_strlen(clean_path) : 0;
+  char *res = REAL(dirname)(clean_path);
+  if (res && clean_path && res >= clean_path && res <= clean_path + len)
+    res = copy_id(res, path);
+  return res;
+}
+
+INTERCEPTOR(int, epoll_pwait,
+            int epfd,
+            struct epoll_event *events,
+            int maxevents,
+            int timeout,
+            const sigset_t *sigmask) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+
+  int res = REAL(epoll_pwait)(epfd, clear_id(events), maxevents, timeout,
+                              clear_id(sigmask));
+
+  return res;
+}
+
+INTERCEPTOR(int, gethostname,
+            char *name,
+            size_t len) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+
+  char *clear_name = clear_id(name);
+
+  int res = REAL(gethostname)(clear_name, len);
+
+
+  return res;
+}
+
+INTERCEPTOR(int, sigsuspend, const sigset_t *mask) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+
+  mask = (const sigset_t *)clear_id((void *)mask);
+
+  int res = REAL(sigsuspend)(mask);
+  return res;
+}
+
+INTERCEPTOR(ssize_t, sendfile, int out_fd, int in_fd, off_t *offset,
+            SIZE_T count) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+
+  offset = (off_t *)clear_id(offset);
+
+  ssize_t res = REAL(sendfile)(out_fd, in_fd, offset, count);
+  return res;
+}
+
+INTERCEPTOR(ssize_t, sendfile64, int out_fd, int in_fd, off_t *offset,
+            SIZE_T count) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+
+  offset = (off_t *)clear_id(offset);
+
+  ssize_t res = REAL(sendfile64)(out_fd, in_fd, offset, count);
   return res;
 }
 
 void __ptsan::InitializeLibCHeaderInterceptors() {
+  INTERCEPT_FUNCTION(connect);
+  INTERCEPT_FUNCTION(recvmsg);
+  INTERCEPT_FUNCTION(recvmmsg);
+  INTERCEPT_FUNCTION(getrlimit64);
+  INTERCEPT_FUNCTION(setrlimit64);
+  INTERCEPT_FUNCTION(prlimit64);
+  INTERCEPT_FUNCTION(chown);
+  INTERCEPT_FUNCTION(lchown);
+  INTERCEPT_FUNCTION(fchown);
+  INTERCEPT_FUNCTION(fchownat);
+  INTERCEPT_FUNCTION(explicit_bzero);
+  INTERCEPT_FUNCTION(utimes);
+  INTERCEPT_FUNCTION(lutimes);
+  INTERCEPT_FUNCTION(futimes);
+  INTERCEPT_FUNCTION(futimesat);
+  INTERCEPT_FUNCTION(utimensat);
+  INTERCEPT_FUNCTION(futimens);
+  INTERCEPT_FUNCTION(pathconf);
+  INTERCEPT_FUNCTION(secure_getenv);
+  INTERCEPT_FUNCTION(dirname);
+  INTERCEPT_FUNCTION(epoll_pwait);
+  INTERCEPT_FUNCTION(gethostname);
+  INTERCEPT_FUNCTION(sigsuspend);
+  INTERCEPT_FUNCTION(sendfile);
+  INTERCEPT_FUNCTION(sendfile64);
+
   INTERCEPT_FUNCTION(pthread_key_create);
   INTERCEPT_FUNCTION(pthread_setschedparam);
   INTERCEPT_FUNCTION(pthread_attr_setschedparam);
@@ -3692,7 +3791,6 @@ void __ptsan::InitializeLibCHeaderInterceptors() {
   INTERCEPT_FUNCTION(renameat2);
   INTERCEPT_FUNCTION(remove);
 
-  INTERCEPT_FUNCTION(wmemchr);
   INTERCEPT_FUNCTION(wmemcmp);
 
   INTERCEPT_FUNCTION(chdir);
@@ -3736,16 +3834,11 @@ void __ptsan::InitializeLibCHeaderInterceptors() {
   INTERCEPT_FUNCTION(pthread_attr_setguardsize);
 
 
-  INTERCEPT_FUNCTION(wcschr);
-  INTERCEPT_FUNCTION(wcsrchr);
-  INTERCEPT_FUNCTION(wcsstr);
-  INTERCEPT_FUNCTION(wcspbrk);
   INTERCEPT_FUNCTION(wcsspn);
   INTERCEPT_FUNCTION(wcscspn);
   INTERCEPT_FUNCTION(wcsncmp);
   INTERCEPT_FUNCTION(wcscpy);
   INTERCEPT_FUNCTION(wcsncpy);
-  INTERCEPT_FUNCTION(wmemchr);
   INTERCEPT_FUNCTION(wmemcmp);
   INTERCEPT_FUNCTION(posix_spawn_file_actions_addclosefrom_np);
   INTERCEPT_FUNCTION(posix_spawn_file_actions_adddup2);
@@ -3771,8 +3864,10 @@ void __ptsan::InitializeLibCHeaderInterceptors() {
   INTERCEPT_FUNCTION(posix_spawnattr_getschedparam);
   INTERCEPT_FUNCTION(posix_spawn);
   INTERCEPT_FUNCTION(opendir);
+#if PTSAN_HAS_LIBFFI
   INTERCEPT_FUNCTION(ffi_prep_cif);
   INTERCEPT_FUNCTION(ffi_call);
+#endif
   INTERCEPT_FUNCTION(__fdopendir);
 
   INTERCEPT_FUNCTION(rewinddir);
@@ -3863,4 +3958,10 @@ void __ptsan::InitializeLibCHeaderInterceptors() {
 
   INTERCEPT_FUNCTION(shm_open);
   INTERCEPT_FUNCTION(shm_unlink);
+  INTERCEPT_FUNCTION(memfd_create);
+  INTERCEPT_FUNCTION(mmap);
+  INTERCEPT_FUNCTION(mmap64);
+  INTERCEPT_FUNCTION(munmap);
+  INTERCEPT_FUNCTION(mprotect);
+  INTERCEPT_FUNCTION(pkey_mprotect);
 }

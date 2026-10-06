@@ -24,6 +24,7 @@
 # include <stdint.h>
 # include <stdio.h>
 # include "sanitizer_common/sanitizer_common.h"
+# include "sanitizer_common/sanitizer_libc.h"
 /* Determine default alignment.  */
 union fooround
 {
@@ -288,7 +289,7 @@ void __ptsan_obstack_free (struct obstack *h, void *obj)
     }
   else if (obj != 0)
     /* obj is not in any of the chunks! */
-    __sanitizer::Abort();
+    __sanitizer::internal__exit(1);
 }
 
 
@@ -314,5 +315,5 @@ print_and_abort (void)
      like this and the translation should be reused instead of creating
      a very similar string which requires a separate translation.  */
   fprintf (stderr, "%s\n", "memory exhausted");
-  __sanitizer::Abort();
+  __sanitizer::internal__exit(1);
 }

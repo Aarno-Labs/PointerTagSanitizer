@@ -11,7 +11,7 @@
 // RUN:   -mllvm -ptsan-abort-on-error \
 // RUN:   -mllvm -ptsan-stack-temporal-safety=0 \
 // RUN:   -o %exe %s
-// RUN: not --crash ./%exe 2> err
+// RUN: not ./%exe 2> err
 // RUN: FileCheck %s < err
 //
 // CHECK: Found bad POINT access

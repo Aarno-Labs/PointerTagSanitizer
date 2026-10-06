@@ -1,8 +1,8 @@
 // Make sure IDs are right threaded. The first 12 threads (including main,
 // so 11 extra) use stack ID caches. The rest don't. The stack ID caches
-// are multiples of 0x200 (512). The non-stack-ID ids should end in 1 b/c
-// `ths` is malloc-ed, which eats one 1. The stack IDs should be reused, but
-// the malloc ones should not, since they're LIFO.
+// are multiples of 0x200 (512). Uncached stack allocations follow the permanent
+// global IDs and the ID for `ths`. Cached stack IDs should be reused; uncached
+// IDs should advance through the free list instead.
 
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -o %exe %s
@@ -56,6 +56,7 @@
 // RUN: ./%exe 12 3 2> twelve.err
 // RUN: cat twelve.err | FileCheck %s --check-prefix=TWELVE
 
+// TWELVE: Global IDs: [[#GLOBALS:]]
 // TWELVE-DAG: buf.id = 0x200
 // TWELVE-DAG: buf.id = 0x600
 // TWELVE-DAG: buf.id = 0x400
@@ -68,7 +69,7 @@
 // TWELVE-DAG: buf.id = 0x1000
 // TWELVE-DAG: buf.id = 0x1600
 // TWELVE-DAG: buf.id = 0x1800
-// TWELVE-DAG: buf.id = 0x1a01
+// TWELVE-DAG: buf.id = 0x[[#%x,0x1a01 + GLOBALS]]
 // TWELVE-DAG: buf.id = 0x400
 // TWELVE-DAG: buf.id = 0xa00
 // TWELVE-DAG: buf.id = 0xc00
@@ -79,7 +80,7 @@
 // TWELVE-DAG: buf.id = 0x1000
 // TWELVE-DAG: buf.id = 0x1600
 // TWELVE-DAG: buf.id = 0x1800
-// TWELVE-DAG: buf.id = 0x1c01
+// TWELVE-DAG: buf.id = 0x[[#%x,0x1c01 + GLOBALS]]
 // TWELVE-DAG: buf.id = 0x1400
 // TWELVE-DAG: buf.id = 0x600
 // TWELVE-DAG: buf.id = 0xa00
@@ -91,7 +92,7 @@
 // TWELVE-DAG: buf.id = 0xe00
 // TWELVE-DAG: buf.id = 0x400
 // TWELVE-DAG: buf.id = 0x1400
-// TWELVE-DAG: buf.id = 0x1e01
+// TWELVE-DAG: buf.id = 0x[[#%x,0x1e01 + GLOBALS]]
 // TWELVE-DAG: buf.id = 0x1800
 // TWELVE: Max used stack IDs at once: 512 (0x200)
 
@@ -102,6 +103,7 @@
 #include <assert.h>
 #include<unistd.h>
 
+extern volatile uint64_t __ptsan_used_global_ids;
 
 __attribute__((noinline))
 void inner(char *buf) {
@@ -131,6 +133,7 @@ void *worker(void *arg) {
 
 __attribute__((noinline))
 int main(int argc, char *argv[]) {
+  fprintf(stderr, "Global IDs: %lu\n", __ptsan_used_global_ids);
   if (argc < 3) {
     fprintf(stderr, "Usage: %s <index> <N threads> <M repeats>\n", argv[0]);
     return 1;

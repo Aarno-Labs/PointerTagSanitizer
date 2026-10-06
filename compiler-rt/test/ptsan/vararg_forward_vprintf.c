@@ -6,16 +6,10 @@
 
 // Regression test (minimized from 531.deepsjeng_r utils.cpp: myprintf).
 //
-// A variadic wrapper forwards its va_list to a *libc* variadic function
-// (vprintf). On AArch64 va_list is a struct passed by reference, so clang
-// materializes a temporary copy to pass it. PTSan discovery only recognized
-// va_list allocas fed to va_start, so it tagged that copy and handed a tagged
-// pointer to uninstrumented vfprintf -- which faults in its prologue under
-// software masking (no hardware TBI/LAM). Unlike vararg.c, the va_list is
-// forwarded to *uninstrumented* libc, which is what exposes the bug.
-//
-// Fix: PTSanDiscovery.cpp isVaList() also recognizes va_list allocas by
-// type, so the copy is left untagged.
+// A variadic wrapper forwards its tagged va_list to the uninstrumented vprintf
+// interceptor. The interceptor must strip the address of the va_list storage
+// before va_copy or va_arg accesses it. This is particularly subtle on
+// AArch64, where va_list is a struct passed indirectly through that address.
 
 // ERR: Unreclaimed IDs at exit: 0
 // CHECK: hello 42 world sum=100

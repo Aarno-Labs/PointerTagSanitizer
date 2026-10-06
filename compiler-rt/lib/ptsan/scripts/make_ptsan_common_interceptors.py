@@ -7,10 +7,8 @@
 #
 # ===------------------------------------------------------------------------===#
 
-# TODO: Big comment here
-# Note that sanitizer_common_interceptors_netbsd_compat is imported unmodified, but
-# that's a nop unless you're trying to run on netbsd, which we *definiely* do not
-# support
+# Adapt LLVM's common interceptor definitions for PTSan and print them to stdout.
+# The NetBSD compatibility include is left unchanged and is inactive on Linux.
 
 from __future__ import annotations
 from os import path

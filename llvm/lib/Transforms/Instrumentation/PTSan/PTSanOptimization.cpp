@@ -6,59 +6,25 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PTSanPhases.h"
+#include "PTSanOptimizationInternal.h"
+
+#include "llvm/Analysis/ValueTracking.h"
+
+#include <tuple>
 
 namespace llvm::ptsan {
 
-class PTSanOptimizer {
-private:
-  PTSanAnalysisState &PTA;
-  PointerTagSanitizer &DS;
-  DominatorTree &DT;
-  PostDominatorTree &PDT;
-  LoopInfo &LI;
-  ScalarEvolution &SE;
-  PTSanUtils &PTU;
-
-  // Loop -> [complete, solved bases]
-  KnownLoopBoundsTy KnownLoopBounds;
-  DenseMap<CallInst *, PreanalysisElisionKey> PreanalysisAnchors;
-
-  optional<StaticObjectBounds> getStaticBounds(Value *V);
-  HoistTarget hoistBoundsLoad(Instruction *Start, Value *BasePtr);
-  SmallPtrSet<Instruction *, 32>
-    getValidCheckIPs(HoistTarget MustDominate, Instruction *User,
-                     AccessRange &Range);
-  optional<PlaceablePtrCheck>
-  buildLoopHoistedCheck(const PlaceablePtrCheck &Check);
-  void applyLoopCheckHoisting();
-  bool analyzeLoopBoundsInfo(const Loop *L, Value *Base,
-                             SmallVector<AccessRangePtr> &Ranges);
-  void getKnownLoopBounds();
-  void hoistLoadBoundAnchors();
-  void mergeLoadBoundAnchors();
-  void foldStaticBoundAnchors();
-  BoundedPtrCheck analyzePtrAccess(AccessAnchor Access);
-  void eraseCheckAnchor(CheckAnchor Anchor);
-  bool isRemovableCheck(const BoundedPtrCheck &Op);
-  bool shouldEraseRemovableCheck(const BoundedPtrCheck &Op);
-  void eraseRemovableChecks();
-  PreanalysisElisionSet erasePreanalyzedChecks();
-  void eraseUnusedPreanalysisChecks(
-      const PreanalysisElisionSet &PreanalysisElisions);
-
-public:
-  PTSanOptimizer(PTSanAnalysisState &PTA)
-      : PTA(PTA), DS(PTA.DS), DT(PTA.DT), PDT(PTA.PDT), LI(PTA.LI),
-        SE(PTA.SE), PTU(PTA.PTU) {}
-
-  void run();
-  PlaceablePtrCheck placePtrSink(const BoundedPtrCheck &Check);
-
-  void mergeOrderableChecks();
-  void mergeSubsumingChecks();
-};
-
+PTSanOptimizer::PTSanOptimizer(PTSanAnalysisState &PTA)
+    : PTA(PTA), DS(PTA.DS), DT(PTA.DT), PDT(PTA.PDT), LI(PTA.LI), SE(PTA.SE),
+      PTU(PTA.PTU) {
+  for (BasicBlock *BB : depth_first(&PTA.F.getEntryBlock())) {
+    for (Instruction &I : *BB) {
+      if (isBlockingCall(I)) {
+        BlockingCalls.push_back(&I);
+      }
+    }
+  }
+}
 
 bool PTSanOptimizationPass::run(PTSanAnalysisState &PTA) {
   PTSanOptimizer Optimizer(PTA);
@@ -69,10 +35,6 @@ bool PTSanOptimizationPass::run(PTSanAnalysisState &PTA) {
 optional<uint64_t> getStaticGlobalSize(const GlobalVariable *GV,
                                               const DataLayout &DL) {
   if (!GV || !GV->getValueType()->isSized()) {
-    return nullopt;
-  }
-
-  if (GV->isConstant() && !ClStrictMode) {
     return nullopt;
   }
 
@@ -91,6 +53,22 @@ optional<uint64_t> getStaticGlobalSize(const GlobalVariable *GV,
 
 optional<StaticObjectBounds>
 PTSanOptimizer::getStaticBounds(Value *V) {
+  if (auto Source = DS.getAsAnchor<SourceAnchor>(V)) {
+    auto *AI = dyn_cast<AllocaInst>(Source->getSource());
+    if (!AI) {
+      return nullopt;
+    }
+
+    auto AS = AI->getAllocationSize(DS.DL);
+    if (!AS || AS->isScalable()) {
+      return nullopt;
+    }
+
+    auto *Size =
+        cast<SCEVConstant>(SE.getConstant(DS.U64Ty, AS->getFixedValue()));
+    return StaticObjectBounds{Source->Call, Size, true};
+  }
+
   if (auto *LI = dyn_cast<LoadInst>(V)) {
     Value *LoadPtr = LI->getPointerOperand();
 
@@ -99,27 +77,17 @@ PTSanOptimizer::getStaticBounds(Value *V) {
         return nullopt;
       }
 
-      optional<uint64_t> SizeBytes =
-          getStaticGlobalSize(DS.GlobalProxyTargets.at(Proxy), DS.DL);
+      auto *GV = DS.GlobalProxyTargets.at(Proxy);
+      optional<uint64_t> SizeBytes = getStaticGlobalSize(GV, DS.DL);
       if (!SizeBytes) {
         return nullopt;
       }
       auto *Size =
           cast<SCEVConstant>(SE.getConstant(DS.U64Ty, *SizeBytes));
-      return StaticObjectBounds{LI, Size};
+      return StaticObjectBounds{LI, Size, !GV->isConstant()};
     }
 
     return nullopt;
-  }
-
-  if (auto *AI = dyn_cast<AllocaInst>(V)) {
-    auto AS = AI->getAllocationSize(DS.DL);
-    if (!AS || AS->isScalable()) {
-      return nullopt;
-    }
-    auto *Size =
-        cast<SCEVConstant>(SE.getConstant(DS.U64Ty, AS->getFixedValue()));
-    return StaticObjectBounds{AI, Size};
   }
 
   auto *GV = dyn_cast<GlobalVariable>(V);
@@ -129,17 +97,56 @@ PTSanOptimizer::getStaticBounds(Value *V) {
         ConstantInt::get(DS.U64Ty, 0x10000), DS.PtrTy);
     auto *Size = cast<SCEVConstant>(
         SE.getConstant(DS.U64Ty, 0x0000ffffffffffffULL));
-    return StaticObjectBounds{Base, Size};
+    return StaticObjectBounds{Base, Size, true};
   }
 
-  if (SizeBytes && !DS.InstrVals.contains(GV)) {
+  if (SizeBytes && !DS.isInstr(GV)) {
     auto *Size = cast<SCEVConstant>(SE.getConstant(DS.U64Ty, *SizeBytes));
-    return StaticObjectBounds{GV, Size};
+    return StaticObjectBounds{GV, Size, !GV->isConstant()};
   }
 
   return nullopt;
 }
 
+bool PTSanOptimizer::isUnfreeableBase(Value *V) {
+  if (DS.getAsAnchor<SourceAnchor>(V)) {
+    return true;
+  }
+  return PTU.isUnfreeableMemory(V);
+}
+
+bool PTSanOptimizer::isBlockingCall(Instruction &I) {
+  if (DS.isInstr(&I)) {
+    return false;
+  }
+
+  CallBase *CB = dyn_cast<CallBase>(&I);
+  if (!CB) {
+    return false;
+  }
+
+  // Don't break on intrinsics
+  if (isa<IntrinsicInst>(CB)) {
+    return false;
+  }
+
+  // Don't break on functions which won't free or won't return
+  Function *Callee = CB->getCalledFunction();
+  if (Callee && (Callee->hasFnAttribute(Attribute::NoFree) ||
+                 Callee->hasFnAttribute(Attribute::NoReturn))) {
+    return false;
+  }
+
+  if (Callee && Callee->getName() == "__assert_fail") {
+    DBG(errs() << "Skipping assert which doesn't deallocate\n");
+    return false;
+  }
+
+  // Otherwise this call could deallocate our memory and we don't
+  // want to hoist above it
+  DBG(errs() << "\tFound call, cutting off hoist here: " << I << "\n");
+  return true;
+}
 
 // Hoist a bounds load. All we want to do is hoist the load to as close
 // to BasePtr as possible, while making sure the underlying pointer isn't
@@ -147,42 +154,7 @@ PTSanOptimizer::getStaticBounds(Value *V) {
 // This is surprisingly complicated:
 HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
                                                 Value *BasePtr) {
-  auto isBlockingCall = [this](Instruction &I) {
-    if(this->DS.isInstr(&I)) {
-      return false;
-    }
-
-    CallBase *CB = dyn_cast<CallBase>(&I);
-    if (!CB) {
-      return false;
-    }
-
-    // Don't break on intrinsics
-    if (isa<IntrinsicInst>(CB)) {
-      return false;
-    }
-
-    // Don't break on functions which won't free
-    // or won't return
-    Function *Callee = CB->getCalledFunction();
-    if (Callee && (
-      Callee->hasFnAttribute(Attribute::NoFree) ||
-      Callee->hasFnAttribute(Attribute::NoReturn))) {
-      return false;
-    }
-
-    if (Callee && Callee->getName() == "__assert_fail") {
-      DBG(errs() << "Skipping assert which doesn't deallocate\n");
-      return false;
-    }
-
-    // Otherwise this call could deallocate our memory and we don't
-    // want to hoist above it
-    DBG(errs() << "\tFound call, cutting off hoist here: " << I << "\n");
-    return true;
-  };
-
-  auto findLastBlockingCall = [&isBlockingCall](BasicBlock::reverse_iterator Begin,
+  auto findLastBlockingCall = [this](BasicBlock::reverse_iterator Begin,
                                         BasicBlock::reverse_iterator End) -> Instruction * {
     for (auto It = Begin; It != End; ++It) {
       if (isBlockingCall(*It)) {
@@ -225,7 +197,7 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
   // Easiest case: Constants and allocas can't be deallocated, so no
   // worries about intervening functions freeing them, so we can
   // go straight to the top
-  if (PTU.isUnfreeableMemory(BasePtr)) {
+  if (isUnfreeableBase(BasePtr)) {
     DBG(errs() << "Got non-concerning buffer " << *BasePtr << "\n");
     return getIPForValue(BasePtr, false);
   }
@@ -285,13 +257,10 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
   // First, find our poison calls -- if these are called we can't guarantee
   // our buffer isn't invalidated
   SmallPtrSet<const BasicBlock *, 16> PoisonBlocks;
-  for (BasicBlock *BB : depth_first(&PTA.F.getEntryBlock())) {
-    for (Instruction &I : *BB) {
-      if (isBlockingCall(I) &&
-          isPotentiallyReachable(&I, Start, nullptr, &DT, &LI)) {
-        PoisonBlocks.insert(I.getParent());
-        DBG(errs() << "\tGot call block " << I.getParent()->getName() << "\n");
-      }
+  for (Instruction *Call : BlockingCalls) {
+    if (isPotentiallyReachable(Call, Start, nullptr, &DT, &LI)) {
+      PoisonBlocks.insert(Call->getParent());
+      DBG(errs() << "\tGot call block " << Call->getParent()->getName() << "\n");
     }
   }
 
@@ -328,34 +297,19 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
     }
   }
 
-  // Now find each BB which a.) if we hit it, we have hit pointer source/Target
-  // (target dominates bb), and b.) if we hit BB, we will hit use/Start
-  // (bb post-dominates Start)
-  for (BasicBlock *BB : depth_first(&PTA.F.getEntryBlock())) {
-    // We special-case these. Could use strict dominance to handle this case,
-    // but I think it's clearer to do them explicitly
-    if (BB == StartBB || BB == TargetBB) {
-      continue;
-    }
-
-    // If it's a valid BB, then within the BB, we hoist to after the last call
-    // site if any
-    // It's legal if:
-    // - If we hit BB, we must have hit TargetBB
-    // - If we hit StartBB, we must have hit BB.
-    if (DT.dominates(TargetBB, BB) && DT.dominates(BB, StartBB)/*PDT.dominates(StartBB, BB)*/) {
-      DBG(errs() << "\tFound legal insert block " << BB->getName() << "\n");
-      //errs() << "\t\t" << TargetBB->getName() << " dominates BB\n";
-      //errs() << "\t\t" << "BB post-dominates " << StartBB->getName() << "\n";
-      Instruction *Call = findLastBlockingCall(BB->rbegin(), BB->rend());
-      if (Call) {
-        // If a block ends in a (potentially freeing) invoke, we can't hoist to it
-        if (!isa<InvokeInst>(Call)) {
-          InsertPoints.push_back({Call, AFTER});
-        }
-      } else {
-        InsertPoints.push_back({DS.getFirstRealInsertionPt(*BB), BEFORE});
+  // Candidate blocks dominate StartBB and are dominated by TargetBB: walk
+  // that dominator-tree chain instead of searching the entire function.
+  for (auto *Node = DT.getNode(StartBB)->getIDom();
+       Node && Node->getBlock() != TargetBB; Node = Node->getIDom()) {
+    BasicBlock *BB = Node->getBlock();
+    Instruction *Call = findLastBlockingCall(BB->rbegin(), BB->rend());
+    if (Call) {
+      // A potentially freeing invoke prevents insertion in this block.
+      if (!isa<InvokeInst>(Call)) {
+        InsertPoints.push_back({Call, AFTER});
       }
+    } else {
+      InsertPoints.push_back({DS.getFirstRealInsertionPt(*BB), BEFORE});
     }
   }
 
@@ -397,60 +351,13 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
 }
 
 
-bool isStdLibraryGlobal(const GlobalVariable &GV) {
-  auto *MD = GV.getMetadata(LLVMContext::MD_dbg);
-  if (!MD) return false;
-
-  // errs() << "Checking " << GV << "\n";
-  auto DIGE = dyn_cast<DIGlobalVariableExpression>(MD);
-  if (!DIGE) {
-    errs() << "no DIGE\n";
-    return false;
-  }
-
-  auto *DIG = dyn_cast<DIGlobalVariable>(DIGE->getVariable());
-  if (!DIG) {
-    errs() << "not a DIG\n";
-    return false;
-  }
-
-  const DIScope *Scope = DIG->getScope();
-  while (Scope) {
-    if (auto *NS = dyn_cast<DINamespace>(Scope)) {
-      if (NS->getName() == "std") {
-        return true;
-      }
-    }
-
-    Scope = Scope->getScope();                 // walk up
-  }
-  return false;                                // reached CU / file without “std”
-}
-
-static const GlobalVariable *getNonStrictSkippedGlobal(Value *V) {
-  if (ClStrictMode) {
-    return nullptr;
-  }
-
-  auto *GV = dyn_cast<GlobalVariable>(V->stripPointerCasts());
-  if (!GV) {
-    return nullptr;
-  }
-
-  if (GV->isConstant() || isStdLibraryGlobal(*GV)) {
-    return GV;
-  }
-
-  return nullptr;
-}
-
-
 SmallPtrSet<Instruction *, 32>
 PTSanOptimizer::getValidCheckIPs(HoistTarget MustDominate,
                                       Instruction *Sink, AccessRange &Range) {
   DBG(errs() << "\n----Getting checkIP-----\n");
   SCEVExpander Expander(SE, DS.DL, "valid-check-ips");
   SmallPtrSet<Instruction *, 32> CheckIPs;
+  SmallPtrSet<Instruction *, 8> Deps = Range.getDeps(&PTU);
 
   auto getFirstIPAfterMustDominateInBlock = [&](BasicBlock *BB) {
     Instruction *Start = &*BB->getFirstInsertionPt();
@@ -490,6 +397,9 @@ PTSanOptimizer::getValidCheckIPs(HoistTarget MustDominate,
 
       DBG(errs() << "Considering " << NewIP << "\n");
       // Now, is this actually a valid expansion target?
+      if (!PTU.depsDominateLoc(Deps, &NewIP)) {
+        continue;
+      }
       if (!Range.isSafeToExpandAt(Expander, &NewIP)) {
         DBG(errs() << "\tNot provably safe to expand at\n");
         continue;
@@ -506,8 +416,6 @@ PTSanOptimizer::getValidCheckIPs(HoistTarget MustDominate,
   // access is definitely live), so we don't use isSafeToExpandAt,
   // which is too conservative:
 
-  SmallPtrSet<Instruction *, 8> Deps = Range.getDeps(&PTU);
-
   BasicBlock *BB = Sink->getParent();
   auto IPs =  make_range(BB->getFirstInsertionPt(), BB->end());
   for (Instruction &IP : IPs) {
@@ -516,17 +424,7 @@ PTSanOptimizer::getValidCheckIPs(HoistTarget MustDominate,
     }
 
     DBG(errs() << "Considering " << IP << "\n");
-    bool ValidIP = true;
-
-    for (Instruction *Dep : Deps) {
-      // Deps need to properly dominate, which this does,
-      // but BoundsIP only needs to tie
-      if (!(DT.dominates(Dep, &IP))) {
-        DBG(errs() << "\tdep " << *Dep << "\n\t\tdoes not dominate IP^\n");
-        ValidIP = false;
-        break;
-      }
-    }
+    bool ValidIP = PTU.depsDominateLoc(Deps, &IP);
 
     if (!PTU.hoistTargetDominates(MustDominate, &IP)) {
       DBG(errs() << "\tBoundsIP " << *MustDominate.getIP()
@@ -553,7 +451,11 @@ PTSanOptimizer::getValidCheckIPs(HoistTarget MustDominate,
 
 optional<PlaceablePtrCheck>
 PTSanOptimizer::buildLoopHoistedCheck(const PlaceablePtrCheck &Check) {
-  Value *Ptr = Check.getUnstrippedPtr(DS);
+  if (Check.Mask) {
+    return nullopt;
+  }
+
+  const auto &PointRange = cast<SimpleAccessRange>(*Check.Range);
   Instruction *I = cast<Instruction>(Check.U->getUser());
 
   Loop *L = LI.getLoopFor(I->getParent());
@@ -579,7 +481,7 @@ PTSanOptimizer::buildLoopHoistedCheck(const PlaceablePtrCheck &Check) {
       continue;
     }
 
-    auto AccessExtent = PTU.getLoopAccessExtent(Ptr, Check.Size, L);
+    auto AccessExtent = PTU.getLoopAccessExtent(PointRange, L);
 
     if (!AccessExtent) {
       DBG(errs() << "\tFailed to find access extent\n");
@@ -646,203 +548,6 @@ void PTSanOptimizer::applyLoopCheckHoisting() {
   }
 }
 
-bool PTSanOptimizer::analyzeLoopBoundsInfo(
-    const Loop *L, Value *Base, SmallVector<AccessRangePtr> &Ranges) {
-  DBG(errs() << "\nAnalyzing Loop uses of " << *Base << " in " << *L << "\n");
-
-  PTSanIRB IRB(DS, L->getLoopPreheader()->getTerminator());
-  Value *False = ConstantInt::getFalse(IRB.getInt1Ty());
-  Instruction *FakeUse =
-      SelectInst::Create(False, Base, Base, "ptsan.fake.use", L->getLoopPreheader()->getTerminator());
-  DBG(errs() << "Target instruction is " << *FakeUse << "\n");
-  HoistTarget BoundsTarget = hoistBoundsLoad(FakeUse, Base);
-
-  assert(Base->getType()->isPointerTy());
-
-  SmallVector<CheckAnchor> CreatedPreanalysisAnchors;
-  for (auto Range: Ranges) {
-    auto CheckIPs = getValidCheckIPs(BoundsTarget, FakeUse, *Range);
-    // XXX: Support partial hoists for a given base
-    if (CheckIPs.size() == 0) {
-      for (CheckAnchor Anchor : CreatedPreanalysisAnchors) {
-        eraseCheckAnchor(Anchor);
-      }
-      return false;
-    }
-
-    Instruction *IP = nullptr;
-    for (Instruction *NewIP : CheckIPs) {
-      if (!IP || DT.dominates(NewIP, IP)) {
-        IP = NewIP;
-      }
-    }
-    assert(IP && "preanalysis check must have an insertion point");
-    Instruction *BoundsIP = BoundsTarget.getIP();
-    GetIDAnchor ID = GetIDAnchor::create(DS, BoundsIP, Base);
-    BoundAnchor BaseBound =
-        LoadBoundAnchor::createBase(DS, BoundsIP, ID);
-    BoundAnchor SpanBound =
-        LoadBoundAnchor::createSpan(DS, BoundsIP, ID);
-    auto Anchor =
-        LoopPreanalysisAnchor::create(DS, IP, ID, BaseBound, SpanBound);
-    PtrOp Op(FakeUse, 1, CHK_TY::PREANALYZED_LOOP, nullptr);
-    BoundedPtrCheck BoundedCheck(Anchor, Op, Base, Range);
-    if (shouldEraseRemovableCheck(BoundedCheck)) {
-      eraseCheckAnchor(Anchor);
-      continue;
-    }
-
-    PlaceablePtrCheck Check(BoundedCheck, CheckIPs, Range);
-    assert(!PTA.PlaceablePtrChecks.count(Anchor.Call) &&
-           "expected new preanalysis check anchor");
-    PTA.PlaceablePtrChecks.insert({Anchor.Call, Check});
-    PreanalysisAnchors.insert({Anchor.Call, {L, Base}});
-    CreatedPreanalysisAnchors.push_back(Anchor);
-  }
-
-  return true;
-}
-
-
-void PTSanOptimizer::getKnownLoopBounds() {
-  if (!ClPTSanPreanalyzeLoops || ClNoPTSanOpts) {
-    return;
-  }
-
-  SerializeBoundsInfo SBI(DS.Ctx);
-
-  for (Loop *L : LI.getLoopsInPreorder()) {
-    DBG(errs() << "Getting loop bounds for " << *L << "\n");
-    MDNode *LoopInfo = SBI.getPTSanBounds(L->getLoopID());
-    if (!LoopInfo) {
-      DBG(errs() << "\tNo loop info\n");
-      continue;
-    }
-
-    DeserializeBoundsInfo DBI(SE, LI, DT, L->getLoopPreheader()->getTerminator(),
-                              /*CanSynthesize=*/false);
-
-    auto KnownBaseRanges = DBI.deserializeSolvedRanges(LoopInfo);
-
-    auto [Complete, BoundsInfo] = KnownBaseRanges;
-    DBG(errs() << "\tComplete: " << Complete << "\n");
-
-    DenseSet<Value *> SolvedBases;
-    for (auto [Base, AccessedRanges] : BoundsInfo) {
-      DBG(
-        errs() << "\tBase: " << *Base << "\n";
-        for (auto Range : AccessedRanges) {
-          Range->dump(4);
-        });
-
-      if (analyzeLoopBoundsInfo(L, Base, AccessedRanges)) {
-        // Keep solved bases even when all generated checks were removable;
-        // their presence still lets preanalysis elide covered pointer ops.
-        SolvedBases.insert(Base);
-      } else {
-        Complete = false;
-      }
-    }
-
-    KnownLoopBounds.insert({L, {Complete, std::move(SolvedBases)}});
-  }
-}
-
-PreanalysisElisionSet PTSanOptimizer::erasePreanalyzedChecks() {
-  auto hasKnownBoundsForBase =
-  [](const KnownLoopBoundsTy &KnownLoopBounds, Value *Base, const Loop *L) {
-    if (!KnownLoopBounds.contains(L)) {
-      DBG(errs() << "Do not have loop bounds info for " << *L << "\n");
-      return false;
-    }
-
-    const auto &[Complete, SolvedBases] = KnownLoopBounds.at(L);
-
-    // If a loop is complete, we know all accesses are accounted for, and
-    // we don't have to check this, *even if* we can no longer trace the
-    // base to any solved bases.
-    if (Complete) {
-      DBG(errs() << "Loop is complete. Skipping LoopOp\n");
-      return true;
-    }
-
-    if (SolvedBases.contains(Base)) {
-      DBG(errs() << "Incomplete loop, but solved base pointer!\n");
-      return true;
-    }
-
-    DBG(errs() << "Loop does not have base info for " << *Base << "\n");
-    return false;
-  };
-
-  DBG(errs() << "----------------------Filtering preanalysis checks-----------------\n");
-  PreanalysisElisionSet Out;
-
-  if (!ClPTSanPreanalyzeLoops || ClNoPTSanOpts) {
-    DBG(errs() << "Skipping preanalysis filtering\n");
-    return Out;
-  }
-
-  uint64_t skippedLoopOps = 0;
-  uint64_t totalLoopOps = 0;
-  for (AccessAnchor Access : DS.collectAnchors<AccessAnchor>(PTA.F)) {
-    CallInst *Call = Access.Call;
-    assert(PTA.PlaceablePtrChecks.count(Call) &&
-           "expected placed access anchor to have lowering facts");
-    const PlaceablePtrCheck &Check = PTA.PlaceablePtrChecks.at(Call);
-
-    Instruction *I = cast<Instruction>(Check.U->getUser());
-
-    Loop *L = LI.getLoopFor(I->getParent());
-    if (!L) {
-      continue;
-    }
-
-    totalLoopOps++;
-    DBG(errs() << "Considering skipping loop use " << *I << "\n");
-    Value *Base = Check.BasePtr;
-
-    // If any enclosing loop for U is solved for U, we don't need to
-    // check U. Track which preanalysis checks superseded non-removable
-    // bounded ops so we only emit preanalysis checks that remove something.
-    // Prefer the outermost solved loop so nested loops do not both keep a
-    // check for the same bounded op.
-    const Loop *ElidingLoop = nullptr;
-    for (; L != nullptr; L = L->getParentLoop()) {
-      if (hasKnownBoundsForBase(KnownLoopBounds, Base, L)) {
-        ElidingLoop = L;
-      }
-    }
-
-    if (ElidingLoop) {
-      Out.insert({ElidingLoop, Base});
-
-      DBG(errs() << "Eliding loop op\n");
-      skippedLoopOps++;
-      eraseCheckAnchor(Access);
-    }
-  }
-
-  DBG(errs() << "Done with preanalysis filtering. Skipped " << skippedLoopOps << "/"
-         << totalLoopOps << " loop ops\n");
-  return Out;
-}
-
-void PTSanOptimizer::eraseUnusedPreanalysisChecks(
-    const PreanalysisElisionSet &PreanalysisElisions) {
-  for (auto LoopAnchor : DS.collectAnchors<LoopPreanalysisAnchor>(PTA.F)) {
-    auto Key = PreanalysisAnchors.at(LoopAnchor.Call);
-    if (PreanalysisElisions.contains(Key)) {
-      continue;
-    }
-
-    DBG(errs() << "Skipping unused preanalysis check for loop/base "
-               << *Key.second << "\n");
-    eraseCheckAnchor(LoopAnchor);
-  }
-}
-
-
 bool PTSanOptimizer::isRemovableCheck(const BoundedPtrCheck &Op) {
   assert(Op.U && Op.BasePtr && Op.Range);
   Value *Ptr = Op.getUnstrippedPtr(DS);
@@ -850,7 +555,7 @@ bool PTSanOptimizer::isRemovableCheck(const BoundedPtrCheck &Op) {
   // Keep this separate from the SCEV fixed-object proof below. LLVM's
   // dereferenceability/alignment facts can prove some accesses that our
   // object-range comparison cannot.
-  if (PTU.isKnownSpatiallyValid(Op.U) && PTU.isUnfreeableMemory(Op.BasePtr)) {
+  if (PTU.isKnownSpatiallyValid(Op.U) && isUnfreeableBase(Op.BasePtr)) {
     DBG(errs() << "\tSkipping check for inbounds, nonfreeable "
                << *Op.U->getUser() << "\n");
     return true;
@@ -859,14 +564,6 @@ bool PTSanOptimizer::isRemovableCheck(const BoundedPtrCheck &Op) {
   if (Op.Range->isSizeZero()) {
     DBG(errs() << "\tSkipping check for size-0 access " << *Ptr << "\n");
     return true;
-  }
-
-  if (const GlobalVariable *GV = getNonStrictSkippedGlobal(Op.BasePtr)) {
-    if (!DS.InstrVals.contains(GV)) {
-      DBG(errs() << "\tSkipping non-strict unbounded global access "
-                 << *Op.U->getUser() << "\n");
-      return true;
-    }
   }
 
   if (optional<StaticObjectBounds> Bounds = getStaticBounds(Op.BasePtr)) {
@@ -902,9 +599,9 @@ void PTSanOptimizer::eraseRemovableChecks() {
   DBG(errs() << "----------------Done Filtering bounded ptr ops-----------------\n");
 }
 
-void PTSanOptimizer::mergeSubsumingChecks() {
+bool PTSanOptimizer::mergeSubsumingChecks() {
   if (isCheckMergeDisabled()) {
-    return;
+    return false;
   }
 
   DBG(errs() << "-----------Merging same addr checks--------------\n");
@@ -919,24 +616,20 @@ void PTSanOptimizer::mergeSubsumingChecks() {
 
   // Bound anchors -> checks using those bounds.
   DenseMap<std::pair<Value *, Value *>, SmallVector<CheckAnchor, 4>> M;
-  // Pending (established) check -> Dominating instruction
-  DenseMap<CallInst *, Instruction *> DominatingInstrs;
+  bool Changed = false;
 
   for (CheckAnchor NewAnchor : Checks) {
     PlaceablePtrCheck &NewCheck = PTA.PlaceablePtrChecks.at(NewAnchor.Call);
     bool Merged = false;
 
-    assert(NewCheck.UsesCovering.size() == 1);
-
-    Use *U = *NewCheck.UsesCovering.begin();
-    Instruction *I = cast<Instruction>(U->getUser());
-
-    DBG(errs() << "\n\nConsidering Check for " << *I << "\n");
+    DBG(errs() << "\n\nConsidering check covering:\n");
+    DBG(for (Use *U : NewCheck.UsesCovering) {
+      errs() << "\t" << *U->getUser() << "\n";
+    });
 
     Value *NewBaseBound = NewCheck.Anchor.getBaseBound().Call;
     Value *NewSpanBound = NewCheck.Anchor.getSpanBound().Call;
     auto Key = std::make_pair(NewBaseBound, NewSpanBound);
-    HoistTarget MustDominate = NewCheck.Anchor.getBoundsTarget(PTU);
 
     if (M.contains(Key)) {
       auto &EstablishedChecks = M.at(Key);
@@ -946,115 +639,80 @@ void PTSanOptimizer::mergeSubsumingChecks() {
         assert(NewBaseBound == ECheck.Anchor.getBaseBound().Call);
         assert(NewSpanBound == ECheck.Anchor.getSpanBound().Call);
 
-        Instruction *DomInst = DominatingInstrs.at(EAnchor.Call);
 
-        DBG(errs() << "\tComparing for sub/super against " << *DomInst << "\n");
+        auto getCoveringIPs = [&](PlaceablePtrCheck &Superset,
+                                  PlaceablePtrCheck &Subset) {
+          SmallPtrSet<Instruction *, 32> IPs;
+          for (Instruction *IP : Superset.CheckIPs) {
+            bool CoversAllUses = llvm::all_of(Subset.UsesCovering, [&](Use *U) {
+              return DT.dominates(IP, cast<Instruction>(U->getUser()));
+            });
+            if (CoversAllUses) {
+              IPs.insert(IP);
+            }
+          }
+          return IPs;
+        };
 
+        PlaceablePtrCheck *UseThisCheck = nullptr;
+        SmallPtrSet<Instruction *, 32> CoveringIPs;
         RangeCmpResult Cmp = NewCheck.Range->cmp(&PTU, ECheck.Range.get());
-
-        bool SubsetOrEqual = false;
-        bool SupersetOrEqual = false;
-        if (Cmp == RCR_EQUAL) {
-          SubsetOrEqual = true;
-          SupersetOrEqual = true;
-          DBG(errs() << "\tGot equal accesses\n");
-        } else if (Cmp == RCR_SUBSET) {
-          SubsetOrEqual = true;
-          DBG(errs() << "\t" << *I << " is subset of \n\t" << *DomInst << "\n");
-        } else if (Cmp == RCR_SUPERSET) {
-          SupersetOrEqual = true;
-          DBG(errs() << "\t" << *I << " is superset of \n\t" << *DomInst << "\n");
+        switch (Cmp) {
+          case RCR_SUPERSET:
+            if (CoveringIPs = getCoveringIPs(NewCheck, ECheck); CoveringIPs.size()) {
+              UseThisCheck = &NewCheck;
+            }
+            break;
+          case RCR_SUBSET:
+            if (CoveringIPs = getCoveringIPs(ECheck, NewCheck); CoveringIPs.size()) {
+              UseThisCheck = &ECheck;
+            }
+            break;
+          case RCR_EQUAL:
+            if (CoveringIPs = getCoveringIPs(ECheck, NewCheck); CoveringIPs.size()) {
+              UseThisCheck = &ECheck;
+            } else if (CoveringIPs = getCoveringIPs(NewCheck, ECheck); CoveringIPs.size()) {
+              UseThisCheck = &NewCheck;
+            }
+            break;
+          default:
+            DBG(errs() << "\tNo sub/super relationship\n");
         }
 
-        if (!(SupersetOrEqual || SubsetOrEqual)) {
-          DBG(errs() << "\tNo sub/super relationship\n");
+        if (!UseThisCheck) {
+          DBG(errs() << "\tSuperset check if exists does not dominate all covered uses\n");
           continue;
         }
 
-        // Theoretically we could do a more complicated set-dominance/set-post-
-        // dominance analysis, but I don't want to right now.
-        // XXX: this ^
-
-        // At this point, SubsetOrEqual means that the new check (I) is a subset of the
-        // established check (DomInst), same with super.
-
-        // PDT.dominates(A, B) means if we hit B, we will hit A as well
-
-        // If the established check dominates this one, we can subsume the new
-        // check into the established one if appropriate:
-        if (DT.dominates(DomInst, I)) {
-          if (SubsetOrEqual || (SupersetOrEqual && PDT.dominates(I, DomInst))) {
-            auto NewRange = ECheck.Range->clone();
-            bool Changed = NewRange->mergeIn(&PTU, NewCheck.Range.get());
-            if (Changed) {
-              auto NewIPs =
-                  getValidCheckIPs(MustDominate, DomInst, *NewRange);
-              if (NewIPs.size() == 0) {
-                DBG(errs() << "\tCannot find IP for combined check\n");
-                continue;
-              }
-              ECheck.Range = NewRange;
-              ECheck.CheckIPs = NewIPs;
-            }
-
-            Merged = true;
-            ECheck.CheckTy = COMPOUND;
-            ECheck.UsesCovering.insert(NewCheck.UsesCovering.begin(), NewCheck.UsesCovering.end());
-            EAnchor.Call->moveBefore(ECheck.getCheckIP(DT));
-            eraseCheckAnchor(NewAnchor);
-            DBG(errs() << "\tOld dominates new and subset/super works\n");
-            break;
-          }
-          DBG(errs() << "\tOld dominates new but sub/super doesn't work\n");
+        assert(CoveringIPs.size());
+        Merged = true;
+        if (UseThisCheck == &NewCheck) {
+          ECheck.Range = NewCheck.Range;
+          ECheck.InstigatingUses = NewCheck.InstigatingUses;
         }
-
-        // If newCheck dominates the established check, we can subsume the established
-        // check into the new check if appropriate:
-        if (DT.dominates(I, DomInst)) {
-          if (SupersetOrEqual || (SubsetOrEqual && PDT.dominates(DomInst, I))) {
-            auto NewRange = ECheck.Range->clone();
-            bool Changed = NewRange->mergeIn(&PTU, NewCheck.Range.get());
-            if (Changed) {
-              auto NewIPs =
-                  getValidCheckIPs(MustDominate, I, *NewRange);
-              if (NewIPs.size() == 0) {
-                DBG(errs() << "\tCannot find IP for combined check\n");
-                continue;
-              }
-              ECheck.Range = NewRange;
-              ECheck.CheckIPs = NewIPs;
-            } else {
-              // If the range hasn't changed, copy over NewCheck's IPs
-              ECheck.CheckIPs = NewCheck.CheckIPs;
-            }
-
-            Merged = true;
-            ECheck.CheckTy = COMPOUND;
-            DominatingInstrs[EAnchor.Call] = I;
-            ECheck.InstigatingUses = NewCheck.InstigatingUses;
-            ECheck.UsesCovering.insert(NewCheck.UsesCovering.begin(), NewCheck.UsesCovering.end());
-            EAnchor.Call->moveBefore(ECheck.getCheckIP(DT));
-            eraseCheckAnchor(NewAnchor);
-            DBG(errs() << "\tNew dominates old and sub/super works\n");
-            break;
-          }
-          DBG(errs() << "\tNew dominates old, but sub/super doesn't work\n");
-        }
-
-        DBG(errs() << "No dominance relationship\n");
+        ECheck.CheckIPs = std::move(CoveringIPs);
+        ECheck.CheckTy = COMPOUND;
+        ECheck.UsesCovering.insert(NewCheck.UsesCovering.begin(),
+                                   NewCheck.UsesCovering.end());
+        EAnchor.Call->moveBefore(ECheck.getCheckIP(DT));
+        eraseCheckAnchor(NewAnchor);
+        Changed = true;
+        DBG(errs() << "\tMerged subset into superset check\n");
+        break;
       }
     }
 
     if (!Merged) {
       M[Key].push_back(NewAnchor);
-      DominatingInstrs[NewAnchor.Call] = I;
     }
   }
+
+  return Changed;
 }
 
-void PTSanOptimizer::mergeOrderableChecks() {
+bool PTSanOptimizer::mergeOrderableChecks() {
   if (isCheckMergeDisabled()) {
-    return;
+    return false;
   }
 
   DBG(errs() << "\n\n-----------Merging orderable addr checks--------------\n");
@@ -1070,6 +728,7 @@ void PTSanOptimizer::mergeOrderableChecks() {
 
   // Bound anchors -> checks using those bounds.
   DenseMap<std::pair<Value *, Value *>, SmallVector<CheckAnchor, 4>> M;
+  bool Changed = false;
 
   for (CheckAnchor NewAnchor : Checks) {
     PlaceablePtrCheck &NewCheck = PTA.PlaceablePtrChecks.at(NewAnchor.Call);
@@ -1168,6 +827,7 @@ void PTSanOptimizer::mergeOrderableChecks() {
 
         EAnchor.Call->moveBefore(ECheck.getCheckIP(DT));
         eraseCheckAnchor(NewAnchor);
+        Changed = true;
         break;
       }
     }
@@ -1178,6 +838,7 @@ void PTSanOptimizer::mergeOrderableChecks() {
   }
 
   DBG(errs() << "\n\n----------Check merging done-----------\n\n");
+  return Changed;
 }
 
 bool isKnownZeroAccessSize(Value *Size) {
@@ -1198,19 +859,22 @@ BoundedPtrCheck PTSanOptimizer::analyzePtrAccess(AccessAnchor Access) {
 
   Use *U = Access.getAccessedUse();
   Instruction *I = cast<Instruction>(U->getUser());
-  PtrOp Op(I, OperandIndex, CheckTy, Size);
 
   Value *Ptr = BoundedPtrCheck::getUnstrippedPtrFromUse(U, DS);
   Value *BasePtr = findPTSanBasePointer(Ptr, PTU);
 
-  const SCEV *Min = SE.getSCEV(Ptr);
-  if (!PTU.depsDominateLoc(Min, I)) {
-    Min = SE.getUnknown(Ptr);
+  if (auto Range = PTU.getScalarEnvelope(Ptr, Size, Access.getMask(), I)) {
+    PtrOp Op(I, OperandIndex, CheckTy, Size, nullptr);
+    return BoundedPtrCheck(Access, Op, BasePtr, Range);
   }
 
-  const SCEV *SCEVSize = SE.getSCEV(Size);
-  AccessRangePtr Range =
-      std::make_shared<SimpleAccessRange>(SE, Min, SCEVSize);
+  Value *Mask = Access.getMask();
+  int64_t Offset = 0;
+  Value *RangePointer = GetPointerBaseWithConstantOffset(Ptr, Offset, DS.DL);
+  int64_t LaneSize = cast<ConstantInt>(Size)->getSExtValue();
+  auto Range = std::make_shared<VectorAccessRange>(SE, RangePointer, Offset,
+                                                   Mask, LaneSize, LaneSize);
+  PtrOp Op(I, OperandIndex, CheckTy, Size, Mask);
   return BoundedPtrCheck(Access, Op, BasePtr, Range);
 }
 
@@ -1219,15 +883,27 @@ void PTSanOptimizer::eraseCheckAnchor(CheckAnchor Anchor) {
 
   Anchor.erase();
   PTA.PlaceablePtrChecks.erase(Call);
-  PreanalysisAnchors.erase(Call);
 }
 
 void PTSanOptimizer::hoistLoadBoundAnchors() {
+  // Bounds loads at the same site share a placement query. Only bounds
+  // anchors move here; real instructions and ID sources stay put.
+  DenseMap<std::pair<Instruction *, Value *>, HoistTarget> Targets;
   for (LoadBoundAnchor Bounds : DS.collectAnchors<LoadBoundAnchor>(PTA.F)) {
     // Load-bound IDs remain GetIDAnchors until late optimization.
     GetIDAnchor ID = *DS.getAsAnchor<GetIDAnchor>(Bounds.getID());
     Instruction *Start = DS.getNextRealInstruction(Bounds);
-    Instruction *IP = hoistBoundsLoad(Start, ID.getBase()).getIP();
+    auto [It, Inserted] = Targets.try_emplace({Start, ID.getBase()});
+    if (Inserted) {
+      It->second = hoistBoundsLoad(Start, ID.getBase());
+    }
+    HoistTarget Target = It->second;
+    if (Bounds.isVector()) {
+      Target = PTU.getFirstCommonInsertionPoint(
+          {Target, PTU.getFirstIPAfter(Bounds.getMask())});
+    }
+
+    Instruction *IP = Target.getIP();
     if (ID.Call->getParent() == IP->getParent() &&
         (IP == ID.Call || IP->comesBefore(ID.Call))) {
       IP = ID.Call->getNextNode();
@@ -1237,19 +913,21 @@ void PTSanOptimizer::hoistLoadBoundAnchors() {
 }
 
 void PTSanOptimizer::mergeLoadBoundAnchors() {
-  DenseMap<std::pair<Value *, Instruction *>, CallInst *> BaseSurvivors;
-  DenseMap<std::pair<Value *, Instruction *>, CallInst *> SpanSurvivors;
+  using BoundsKey = std::tuple<Value *, Value *, Instruction *>;
+  DenseMap<BoundsKey, CallInst *> BaseSurvivors;
+  DenseMap<BoundsKey, CallInst *> SpanSurvivors;
 
   for (LoadBoundAnchor Bounds : DS.collectAnchors<LoadBoundAnchor>(PTA.F)) {
-    auto Key =
-        std::make_pair(Bounds.getID(), DS.getNextRealInstruction(Bounds));
+    Value *Mask = Bounds.getMask();
+    BoundsKey Key =
+        {Bounds.getID(), Mask, DS.getNextRealInstruction(Bounds)};
     auto &Survivors = Bounds.isBase() ? BaseSurvivors : SpanSurvivors;
-    auto [It, Inserted] = Survivors.insert({Key, Bounds.Call});
-    if (Inserted) {
+    if (!Survivors.contains(Key)) {
+      Survivors[Key] = Bounds.Call;
       continue;
     }
 
-    CallInst *Survivor = It->second;
+    CallInst *Survivor = Survivors.at(Key);
     assert(DT.dominates(Survivor, Bounds.Call) &&
            "merged load-bound anchor must dominate duplicate uses");
     Bounds.Call->replaceAllUsesWith(Survivor);
@@ -1264,7 +942,7 @@ void PTSanOptimizer::foldStaticBoundAnchors() {
     Value *BasePtr = ID.getBase();
 
     optional<StaticObjectBounds> StaticBounds = getStaticBounds(BasePtr);
-    if (!StaticBounds) {
+    if (!StaticBounds || !StaticBounds->CanFoldRuntimeBounds) {
       continue;
     }
 
@@ -1285,6 +963,7 @@ void PTSanOptimizer::foldStaticBoundAnchors() {
 
 void PTSanOptimizer::run() {
   PTSanAnchorOptimizer Anchors(PTA);
+  PTSanPreanalysisElider Preanalysis(*this);
 
   // Strip anchors must be canonical before access analysis snapshots their
   // unstripped uses and SCEVs. Otherwise later strip merging can stale those
@@ -1299,7 +978,7 @@ void PTSanOptimizer::run() {
     BoundedAccessChecks.push_back(analyzePtrAccess(Access));
   }
 
-  getKnownLoopBounds();
+  Preanalysis.materializeChecks();
 
   // Normalize ID and bounds anchors after loop preanalysis has created any
   // synthetic checks and before placing discovered access checks.
@@ -1309,7 +988,14 @@ void PTSanOptimizer::run() {
   mergeLoadBoundAnchors();
   foldStaticBoundAnchors();
 
-  // Place the remaining live discovered checks.
+  // Bound-anchor normalization can move dependencies across preanalysis
+  // checks, so reposition those checks afterwards.
+  for (auto Anchor : DS.collectAnchors<LoopPreanalysisAnchor>(PTA.F)) {
+    PlaceablePtrCheck &Check = PTA.PlaceablePtrChecks.at(Anchor.Call);
+    Anchor.Call->moveBefore(Check.getCheckIP(DT));
+  }
+
+  // Build and place the remaining live discovered checks in discovery order.
   for (const BoundedPtrCheck &Bounded : BoundedAccessChecks) {
     PlaceablePtrCheck Check = placePtrSink(Bounded);
     CallInst *Call = Bounded.Anchor.Call;
@@ -1319,13 +1005,16 @@ void PTSanOptimizer::run() {
 
   eraseRemovableChecks();
 
-  auto PreanalysisElisions = erasePreanalyzedChecks();
-  eraseUnusedPreanalysisChecks(PreanalysisElisions);
+  Preanalysis.elideCoveredChecks();
+  Preanalysis.eraseUnusedChecks();
 
   applyLoopCheckHoisting();
 
-  mergeSubsumingChecks();
-  mergeOrderableChecks();
+  bool ChecksMerged;
+  do {
+    ChecksMerged = mergeSubsumingChecks();
+    ChecksMerged |= mergeOrderableChecks();
+  } while (ChecksMerged);
 
   Anchors.eraseUnusedDependencyAnchors();
 }

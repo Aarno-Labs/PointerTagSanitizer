@@ -31,8 +31,8 @@ define i1 @ptrtoint_cmp(ptr %p, ptr %q) {
 ; DISCOVERY-NOCLEAR: icmp eq i64 %pi, %qi
 ;
 ; DISCOVERY-CLEAR-LABEL: define i1 @ptrtoint_cmp(
-; DISCOVERY-CLEAR-DAG: [[PI:%.*]] = call i64 @__ptsan_strip_i64(i64 %pi)
-; DISCOVERY-CLEAR-DAG: [[QI:%.*]] = call i64 @__ptsan_strip_i64(i64 %qi)
+; DISCOVERY-CLEAR-DAG: [[PI:%.*]] = call i64 @__ptsan_strip_i64(i64 %pi), !ptsan.stripped {{![0-9]+}}
+; DISCOVERY-CLEAR-DAG: [[QI:%.*]] = call i64 @__ptsan_strip_i64(i64 %qi), !ptsan.stripped {{![0-9]+}}
 ; DISCOVERY-CLEAR: icmp eq i64 [[PI]], [[QI]]
 entry:
   %pi = ptrtoint ptr %p to i64
@@ -47,8 +47,8 @@ define i64 @ptr_sub(ptr %p, ptr %q) {
 ; DISCOVERY-NOCLEAR: sub i64 %pi, %qi
 ;
 ; DISCOVERY-CLEAR-LABEL: define i64 @ptr_sub(
-; DISCOVERY-CLEAR-DAG: [[PI:%.*]] = call i64 @__ptsan_strip_i64(i64 %pi)
-; DISCOVERY-CLEAR-DAG: [[QI:%.*]] = call i64 @__ptsan_strip_i64(i64 %qi)
+; DISCOVERY-CLEAR-DAG: [[PI:%.*]] = call i64 @__ptsan_strip_i64(i64 %pi), !ptsan.stripped {{![0-9]+}}
+; DISCOVERY-CLEAR-DAG: [[QI:%.*]] = call i64 @__ptsan_strip_i64(i64 %qi), !ptsan.stripped {{![0-9]+}}
 ; DISCOVERY-CLEAR: sub i64 [[PI]], [[QI]]
 entry:
   %pi = ptrtoint ptr %p to i64
@@ -60,9 +60,9 @@ entry:
 define i1 @late_no_clear_direct_cmp_can_hoist(ptr %base) {
 ; LATE-NOCLEAR-LABEL: define i1 @late_no_clear_direct_cmp_can_hoist(
 ; LATE-NOCLEAR: entry:
-; LATE-NOCLEAR-NEXT: [[BASE_STRIP:%.*]] = call ptr @__ptsan_strip(ptr %base), !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
-; LATE-NOCLEAR: %lhs = getelementptr i8, ptr [[BASE_STRIP]], i64 8, !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
-; LATE-NOCLEAR: %rhs = getelementptr i8, ptr [[BASE_STRIP]], i64 16, !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
+; LATE-NOCLEAR-NEXT: [[BASE_STRIP:%.*]] = call ptr @__ptsan_strip(ptr %base), !ptsan.stripped {{![0-9]+}}
+; LATE-NOCLEAR: %lhs = getelementptr i8, ptr [[BASE_STRIP]], i64 8, !ptsan.stripped {{![0-9]+}}
+; LATE-NOCLEAR: %rhs = getelementptr i8, ptr [[BASE_STRIP]], i64 16, !ptsan.stripped {{![0-9]+}}
 ; LATE-NOCLEAR: %cmp = icmp ult ptr %lhs, %rhs
 ; LATE-NOCLEAR-NOT: call ptr @__ptsan_strip(ptr %lhs)
 ; LATE-NOCLEAR-NOT: call ptr @__ptsan_strip(ptr %rhs)

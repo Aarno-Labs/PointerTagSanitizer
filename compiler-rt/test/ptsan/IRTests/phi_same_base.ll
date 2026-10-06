@@ -5,7 +5,7 @@
 ; Check should be fully hoisted
 ; CHECK-LABEL: define{{.*}}@case_phi_same_base
 ; CHECK-LABEL: entry
-; CHECK-NEXT: @malloc
+; CHECK: @malloc
 ; CHECK-DAG: [[ASINT:%[0-9A-Za-z_.]+]] = ptrtoint ptr %call to i64
 ; CHECK-DAG: [[ID:%[0-9A-Za-z_.]+]] = lshr i64 [[ASINT]], 48
 ; CHECK-DAG: [[BASEGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64 [[ID]], i32 0

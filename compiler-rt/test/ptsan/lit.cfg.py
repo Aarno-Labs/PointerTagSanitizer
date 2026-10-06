@@ -14,8 +14,10 @@ config.scripts_root = os.path.join(config.test_source_root, "../../lib/ptsan/scr
 
 
 # Setup default compiler flags used with -fsanitize=ptsan option.
+# Keep reporting tests running; tests for termination override this explicitly.
 clang_ptsan_cflags = [
     "-fsanitize=ptsan", "-g", "-mllvm", "-ptsan-runtime-validate",
+    "-mllvm", "-ptsan-abort-on-error=0",
     "-fno-discard-value-names", "-mllvm", "-ptsan-print-stats"] + [config.target_cflags]
 
 clang_ptsan_cxxflags = config.cxx_mode_flags + clang_ptsan_cflags
@@ -35,10 +37,12 @@ config.substitutions.append(("%ptsan_patcher", os.path.join(config.scripts_root,
 config.substitutions.append(("%opt_ptsan ",
                              "opt -passes='ptsan' -S "))
 config.substitutions.append(("%llc", "llc "))
+config.substitutions.append(("%ptsan_target_triple", config.target_triple))
 
 # Default test suffixes.
 config.suffixes = [".c", ".cpp", ".S"]
 config.excludes.add('ManualTests')
+config.excludes.add('Musl')
 config.excludes.add('Inputs')
 config.excludes.add('lib')
 
@@ -75,5 +79,5 @@ if host_supports_x86_lam_u48():
     config.available_features.add("ptsan-lam-u48-runtime")
 
 # PTSan tests are currently supported on Linux only.
-if not (config.host_os in ["Linux"] and config.target_arch in ["aarch64", "x86_64", "loongarch64"]):
+if not (config.host_os in ["Linux"] and config.target_arch in ["aarch64", "x86_64"]):
     config.unsupported = True

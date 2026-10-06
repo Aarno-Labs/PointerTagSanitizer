@@ -21,6 +21,8 @@ uint32_t N;
 #define M 5
 
 extern volatile uint64_t __ptsan_used_ids;
+extern volatile uint64_t __ptsan_used_global_ids;
+uint64_t baseline_used_ids;
 
 #define p(ptr) printf("%-10s id: 0x%lx\n", #ptr, get_id(ptr));
 
@@ -39,7 +41,7 @@ uint64_t __attribute__((noinline)) get_id(void *ptr) {
   __LINE__, __ptsan_used_ids, __ptsan_used_ids)
 
 #define used_ids_is(n) \
-  assert(__ptsan_used_ids == n);
+  assert(__ptsan_used_ids == baseline_used_ids + (n));
 
 int __attribute__((noinline)) do_use(int *buf) {
   return buf[5];
@@ -167,10 +169,11 @@ void __attribute__((noinline)) test_stack_ids() {
 }
 
 int main(int argc, char *argv[]) {
+  baseline_used_ids = __ptsan_used_global_ids;
   // `- 4` because ptrs eats an ID, and max_id is reserved, and we want
   // two to play with
   // - 0x1800 because those are reserved for stack ids
-  N = ptsan_num_ids() - 4 - 0x1800;
+  N = ptsan_num_ids() - 4 - 0x1800 - baseline_used_ids;
   int ** ptrs = (int **) malloc(sizeof(int *) * N);
 
   used_ids_is(1);

@@ -1,7 +1,7 @@
 ; RUN: %opt_ptsan -ptsan-nochecks -ptsan-stop-after=lowering %s | FileCheck %s
 ; RUN: %opt_ptsan -ptsan-nochecks -ptsan-reoptimize %s -o /dev/null
 
-; Source lowering tags ordinary executable uses of stack sources, but debug
+; Explicit tag anchors tag escaping uses of stack sources, but debug
 ; assignment addresses describe storage locations and must stay on the original
 ; pointer. If they are rewritten to the generated tag value, later optimization
 ; can simplify that debug address to an integer and DSE will trip over it.
@@ -24,7 +24,8 @@ entry:
 ; CHECK: %buf = alloca
 ; CHECK: #dbg_assign(i1 undef, !{{[0-9]+}}, !DIExpression(), !{{[0-9]+}}, ptr %buf, !DIExpression()
 ; CHECK-NOT: #dbg_assign{{.*}}i64
-; CHECK: call void @escape(ptr %{{[0-9]+}})
+; CHECK: [[TAGGED:%.*]] = inttoptr i64 {{.*}} to ptr
+; CHECK: invoke void @escape(ptr [[TAGGED]])
 
 !llvm.dbg.cu = !{!0}
 !llvm.module.flags = !{!2, !3}

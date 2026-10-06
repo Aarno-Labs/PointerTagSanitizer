@@ -2687,6 +2687,8 @@ PTSAN_INTERCEPTOR(int, getaddrinfo, (, node, service, hints, out), char *node, c
   // FIXME: under ASan the call below may write to freed memory and corrupt
   // its metadata. See
   // https://github.com/google/sanitizers/issues/321.
+  // getaddrinfo() reads environ internally; untag it for the REAL call (e.g. ps_status).
+  PTSAN_ENV_GUARD();
   int res = REAL(getaddrinfo)(node, service, hints, out);
   if (res == 0 && out) {
     COMMON_INTERCEPTOR_WRITE_RANGE(ctx, out, sizeof(*out));
@@ -9426,6 +9428,8 @@ PTSAN_INTERCEPTOR(__sanitizer_FILE *, popen, (, command, type), const char *comm
     COMMON_INTERCEPTOR_READ_RANGE(ctx, command, internal_strlen(command) + 1);
   if (type)
     COMMON_INTERCEPTOR_READ_RANGE(ctx, type, internal_strlen(type) + 1);
+  // popen()'s forked shell execve()s environ; a tagged environ fails EFAULT.
+  PTSAN_ENV_GUARD();
   __sanitizer_FILE *res = REAL(popen)(command, type);
   COMMON_INTERCEPTOR_FILE_OPEN(ctx, res, nullptr);
   if (res) unpoison_file(res);
