@@ -142,7 +142,6 @@
 #include "llvm/Transforms/Utils/LoopVersioning.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Utils/SizeOpts.h"
-#include "llvm/Transforms/Utils/PTSanLoopBounds.h"
 #include "llvm/Transforms/Vectorize/LoopVectorizationLegality.h"
 #include <algorithm>
 #include <cassert>
@@ -7375,13 +7374,10 @@ LoopVectorizationPlanner::executePlan(
 
   VPBasicBlock *HeaderVPBB =
       BestVPlan.getVectorLoopRegion()->getEntryBasicBlock();
-  BasicBlock *VectorHeader = State.CFG.VPBB2IRBB[HeaderVPBB];
-  Loop *L = LI->getLoopFor(VectorHeader);
-  BasicBlock *VectorPreheader = ILV.LoopVectorPreHeader;
-
-  if (VectorizedLoopID) {
+  Loop *L = LI->getLoopFor(State.CFG.VPBB2IRBB[HeaderVPBB]);
+  if (VectorizedLoopID)
     L->setLoopID(*VectorizedLoopID);
-  } else {
+  else {
     // Keep all loop hints from the original loop on the vector loop (we'll
     // replace the vectorizer-specific hints below).
     if (MDNode *LID = OrigLoop->getLoopID())
@@ -7398,7 +7394,6 @@ LoopVectorizationPlanner::executePlan(
   // 3. Fix the vectorized code: take care of header phi's, live-outs,
   //    predication, updating analyses.
   ILV.fixVectorizedLoop(State, BestVPlan);
-  ptsan::copyLoopBounds(VectorHeader, VectorPreheader, OrigLoopID);
 
   ILV.printDebugTracesAtEnd();
 
@@ -10108,7 +10103,6 @@ bool LoopVectorizePass::processLoop(Loop *L) {
     // Mark the loop as already vectorized to avoid vectorizing again.
     Hints.setAlreadyVectorized();
   }
-  ptsan::copyLoopBounds(L, OrigLoopID);
 
   assert(!verifyFunction(*L->getHeader()->getParent(), &dbgs()));
   return true;

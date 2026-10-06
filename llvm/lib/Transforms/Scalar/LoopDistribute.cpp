@@ -60,7 +60,6 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Transforms/Utils/LoopUtils.h"
 #include "llvm/Transforms/Utils/LoopVersioning.h"
-#include "llvm/Transforms/Utils/PTSanLoopBounds.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <cassert>
 #include <functional>
@@ -594,12 +593,10 @@ private:
         {LLVMLoopDistributeFollowupAll,
          Part->hasDepCycle() ? LLVMLoopDistributeFollowupSequential
                              : LLVMLoopDistributeFollowupCoincident});
-
-    Loop *NewLoop = Part->getDistributedLoop();
     if (PartitionID) {
+      Loop *NewLoop = Part->getDistributedLoop();
       NewLoop->setLoopID(*PartitionID);
     }
-    ptsan::copyLoopBounds(NewLoop, OrigLoopID);
   }
 };
 

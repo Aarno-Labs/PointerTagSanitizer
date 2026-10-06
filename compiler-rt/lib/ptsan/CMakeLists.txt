@@ -76,7 +76,23 @@ foreach(dir IN LISTS MY_INCLUDES)
   list(APPEND EXTRA_INCLUDE_FLAGS "-I${dir}")
 endforeach()
 
-set(PROJECT_CLANG ${CMAKE_CURRENT_BINARY_DIR}/../../../../bin/clang)
+# Separate runtime builds receive their compiler through CMake. In an LLVM
+# project build, the clang target can be defined after compiler-rt.
+if(COMPILER_RT_STANDALONE_BUILD)
+  set(PROJECT_CLANG "${CMAKE_C_COMPILER}")
+else()
+  set(PROJECT_CLANG "$<TARGET_FILE:clang>")
+endif()
+
+if(COMPILER_RT_STANDALONE_BUILD AND
+   NOT COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC)
+  check_c_compiler_flag("-mllvm -ptsan-strip-ids" COMPILER_RT_HAS_PTSAN_STRIP_IDS)
+  if(NOT COMPILER_RT_HAS_PTSAN_STRIP_IDS)
+    message(FATAL_ERROR
+      "${PROJECT_CLANG} does not support -mllvm -ptsan-strip-ids. "
+      "Set CMAKE_C_COMPILER to a Clang built from this PTSan tree.")
+  endif()
+endif()
 
 # Helper: build one source with PROJECT_CLANG -> per-arch/variant .o, expose as
 # IMPORTED OBJECT, and append its $<TARGET_OBJECTS:...> genex into
@@ -84,33 +100,31 @@ set(PROJECT_CLANG ${CMAKE_CURRENT_BINARY_DIR}/../../../../bin/clang)
 function(ptsan_add_interceptor_obj variant arch rel_src)
   set(options)
   set(oneValueArgs)
-  set(multiValueArgs CFLAGS EXTRA_DEPS PASS)
+  set(multiValueArgs CFLAGS PASS)
   cmake_parse_arguments(PAIO "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
   set(src "${CMAKE_CURRENT_SOURCE_DIR}/${rel_src}")
   get_filename_component(name_we "${rel_src}" NAME_WE)
   set(obj "${CMAKE_CURRENT_BINARY_DIR}/${name_we}_${variant}_${arch}.o")
 
-  set(deps
-      "${src}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/ptsan_ptr_utils.h"
-      "${CMAKE_CURRENT_SOURCE_DIR}/ptsan.h"
-      "${PROJECT_CLANG}"
-  )
-  list(APPEND deps ${PAIO_EXTRA_DEPS})
-
+  # Normalize depfile paths for this subdirectory's custom command.
+  cmake_policy(PUSH)
+  cmake_policy(SET CMP0116 NEW)
   add_custom_command(
     OUTPUT  "${obj}"
     COMMAND "${PROJECT_CLANG}"
             ${PAIO_CFLAGS}
             ${EXTRA_INCLUDE_FLAGS}
             ${PAIO_PASS}
+            -MD -MF "${obj}.d"
             -c "${src}"
             -o "${obj}"
-    DEPENDS ${deps}
+    DEPENDS "${src}" "${PROJECT_CLANG}"
+    DEPFILE "${obj}.d"
     COMMENT "Building ${rel_src} with ptsan-strip-ids for variant=${variant} arch=${arch}"
     VERBATIM
   )
+  cmake_policy(POP)
 
   # Import the .o as an OBJECT library
   set(lib "ptsan_${variant}_${name_we}_obj_${arch}")
@@ -148,7 +162,6 @@ function(ptsan_add_runtime_variant runtime_name arch)
       ${runtime_name}
       ${arch}
       interceptors/ptsan_interceptors.cpp
-      EXTRA_DEPS ${CMAKE_CURRENT_SOURCE_DIR}/interceptors/ptsan_common_interceptors.inc
       CFLAGS ${PTSAN_CFLAGS}
       PASS -mllvm -ptsan-strip-ids
     )
@@ -159,7 +172,6 @@ function(ptsan_add_runtime_variant runtime_name arch)
       ${runtime_name}
       ${arch}
       interceptors/ptsan_interceptors_format.cpp
-      EXTRA_DEPS ${CMAKE_CURRENT_SOURCE_DIR}/interceptors/ptsan_libc.inc
       CFLAGS ${PTSAN_CFLAGS}
       PASS -mllvm -ptsan-strip-ids
     )
