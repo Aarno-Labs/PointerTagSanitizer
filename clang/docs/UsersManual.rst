@@ -2042,6 +2042,8 @@ are listed below.
       ``-fsanitize=address``:
       :doc:`AddressSanitizer`, a memory error
       detector.
+   -  ``-fsanitize=ptsan``: :doc:`PointerTagSanitizer`, a memory error
+      detector using object identifiers stored in pointers.
    -  .. _opt_fsanitize_thread:
 
       ``-fsanitize=thread``: :doc:`ThreadSanitizer`, a data race detector.
