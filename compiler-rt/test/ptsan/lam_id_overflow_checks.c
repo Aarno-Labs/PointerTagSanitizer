@@ -21,13 +21,15 @@ uint32_t N;
 #define M 5
 
 extern volatile uint64_t __ptsan_used_ids;
+extern volatile uint64_t __ptsan_used_global_ids;
+uint64_t baseline_used_ids;
 
 #undef get_id
 uint64_t __attribute__((noinline)) get_id(void *ptr) {
   return ((uint64_t)ptr >> 48);
 }
 
-#define used_ids_is(n) assert(__ptsan_used_ids == (n))
+#define used_ids_is(n) assert(__ptsan_used_ids == baseline_used_ids + (n))
 
 static void assert_lam_ptr(void *ptr) {
   assert(((uint64_t)ptr >> 63) == 0);
@@ -208,11 +210,16 @@ int main(void) {
   assert(ptsan_get_base(ptsan_default_id()) == 0x7fff000000000000ULL);
   assert_lam_base(ptsan_default_id());
 
-  N = ptsan_num_ids() - 4 - 0x1800;
+  // Shared constant ranges reserve permanent IDs even with globals disabled.
+  baseline_used_ids = __ptsan_used_global_ids;
+  used_ids_is(0);
+  assert(baseline_used_ids < ptsan_num_ids() - 4 - 0x1800);
+  // Leave two non-stack IDs available after allocating ptrs and its elements.
+  N = ptsan_num_ids() - 4 - 0x1800 - baseline_used_ids;
   int **ptrs = (int **)malloc(sizeof(int *) * N);
 
   used_ids_is(1);
-  assert(get_id(ptrs) == 0x1801);
+  assert(get_id(ptrs) == 0x1801 + baseline_used_ids);
   assert_lam_ptr(ptrs);
   assert_lam_base(get_id(ptrs));
 
@@ -259,5 +266,6 @@ int main(void) {
     free(ptrs[i]);
 
   free(ptrs);
+  used_ids_is(0);
   return 0;
 }

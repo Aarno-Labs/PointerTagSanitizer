@@ -18,13 +18,15 @@ define void @invoke_result_phi_needs_legal_retag_id(ptr %other, ptr %slot,
 ; CHECK: invoke.pred:
 ; CHECK-NEXT: %p = invoke ptr @may_throw()
 ; CHECK: join:
-; CHECK-NEXT: %phi = phi ptr [ %p, %invoke.pred ], [ %other, %null.pred ], !ptsan.expected.tagged {{![0-9]+}}, !ptsan.tagged
-; CHECK-NEXT: [[PHI_TRUE:%.*]] = call ptr @llvm.ptrmask.p0.i64(ptr %phi,
+; CHECK-NEXT: %phi = phi ptr [ %p, %invoke.pred ], [ %other, %null.pred ], !ptsan.tagged {{![0-9]+}}
+; CHECK-NEXT: [[PHI_INT:%.*]] = ptrtoint ptr %phi to i64
+; CHECK-NEXT: [[PHI_BITS:%.*]] = call i64 asm "andq $2, $0", "=r,0,r,~{flags}"(i64 [[PHI_INT]], i64 281474976710655)
+; CHECK-NEXT: [[PHI_TRUE:%.*]] = inttoptr i64 [[PHI_BITS]] to ptr
 ; CHECK-NEXT: store ptr %phi, ptr {{%.*}}
 ; CHECK: loop:
-; CHECK: %g0 = getelementptr i8, ptr [[PHI_TRUE]], i64 %iv, !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
+; CHECK: %g0 = getelementptr i8, ptr [[PHI_TRUE]], i64 %iv, !ptsan.stripped {{![0-9]+}}
 ; CHECK-NEXT: load volatile i8, ptr %g0
-; CHECK: %g1 = getelementptr i8, ptr [[PHI_TRUE]], i64 1, !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
+; CHECK: %g1 = getelementptr i8, ptr [[PHI_TRUE]], i64 1, !ptsan.stripped {{![0-9]+}}
 ; CHECK-NEXT: load volatile i8, ptr %g1
 entry:
   br i1 %cond, label %invoke.pred, label %null.pred

@@ -28,19 +28,6 @@ bool PTSanPreparationPass::run(PTSanAnalysisState &PTA) {
 
   PTA.PDT.recalculate(PTA.F);
 
-  SerializeBoundsInfo SBI(PTA.DS.Ctx);
-  for (Loop *L : PTA.LI.getLoopsInPreorder()) {
-    MDNode *LoopInfo = SBI.getPTSanBounds(L->getLoopID());
-    if (!LoopInfo) {
-      continue;
-    }
-
-    Instruction *IP = L->getLoopPreheader()->getTerminator();
-    DeserializeBoundsInfo DBI(PTA.SE, PTA.LI, PTA.DT, IP,
-                              /*CanSynthesize=*/true);
-    DBI.deserializeSolvedRanges(LoopInfo);
-  }
-
   return true;
 }
 

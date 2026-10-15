@@ -42,6 +42,9 @@ out of scope.
 
 ## Performance
 
+The measurements below describe the paper's evaluated release. They have not
+been rerun for the subsequent implementation changes in this tree.
+
 Because the identifier travels inside the pointer value, ordinary
 dataflow propagates it for free, and checks remain plain LLVM IR that
 the optimizer can hoist, merge, and elide:
@@ -49,18 +52,18 @@ the optimizer can hoist, merge, and elide:
 - **SPEC CPU 2017**: 57% x86-64 and 55% ARM64 geomean runtime overhead
   in the default software-stripping configuration; 46% on x86 with
   Intel LAM hardware address masking.
-  
+
 - **LLVM test-suite MultiSource**
   - x86-64 (149 programs that execute > 10ms on baseline): 31.5%
     geomean; 27% with LAM.
   - ARM64 (148 programs that execute > 10ms on baseline): 41%
     geomean.
-  
+
 - **Memory**: 1.014x geomean peak physical memory on SPEC (worst case
   1.121x), versus 3.33x for ASan and 3.01x for RangeSanitizer. PTSan
   uses no redzones, no shadow memory, and no quarantine; its metadata
   is about 1.2 MiB of fixed tables.
-  
+
 - **Servers**: seven real-world server and cryptographic workloads
   (Redis, PostgreSQL, NGINX, OpenSSL, memcached, Apache, SQLite) with
   overheads ranging from near-native to 44% on x86-64, each within the
@@ -70,42 +73,69 @@ the optimizer can hoist, merge, and elide:
 
 - 64-bit Linux; program addresses must fit in the low 48 bits. PTSan
   is tested on Ubuntu 24.04 LTS.
+- Use GNU ld (BFD) or LLD; the gold linker is unsupported.
 - The default configuration supports 2^16 simultaneously live
   objects and runs on stock hardware and kernels. Peak live-object
   demand is cheap to measure in advance; workloads that exceed the
   budget can fail closed in strict mode.
 - **Strict mode** is the security configuration: untagged pointers,
   the default identifier, and identifier exhaustion fail closed.
-  Strict mode is currently experimental and does not support all the
-  benchmarks published in our paper. 
+  Strict mode is currently experimental and does not work well with
+  glibc. It should work with musl;
+  the [build and dependency guide](clang/docs/PointerTagSanitizer.rst)
+  describes the static instrumented musl configuration for strict mode.
   **Permissive mode** keeps such accesses running and is intended for
   bring-up and compatibility debugging, not for security deployments.
+  Objects assigned the fallback identifier after ID exhaustion continue
+  without object-specific bounds or lifetime checking.
 - **PTSan-LAM** uses Intel Linear Address Masking to elide most
   software tag stripping (15-bit identifiers, 2^15 objects). It
   requires the LAM_U48 kernel variant, which is not in mainline
   Linux; our measurements use a patched Linux 6.1 kernel.
-- **Debug builds** of your source code are strongly encouraged at this
-  time since some of PTSan's analyses use information embedded
-  in debug metadata.
 - **Optimized builds** are required for PTSan-enabled builds of your
   source code.  Please use at least `-O1`.
 
 ## Building and using PTSan
 
-Build clang and the compiler-rt runtime from this tree as you would
-stock LLVM, then compile your program with the sanitizer enabled:
+On Linux x86-64 or AArch64, build Clang, the PTSan runtime, and compatible
+libc++, libc++abi, and libunwind libraries for use with the system glibc:
 
 ```sh
 cmake -S llvm -B build -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DLLVM_ENABLE_PROJECTS="clang;compiler-rt"
-ninja -C build clang compiler-rt
+  -C clang/cmake/caches/PTSan.cmake
+ninja -C build
+```
 
-build/bin/clang -O2 -g -fsanitize=ptsan your_program.c -o your_program
+For C-only builds, use `ninja -C build clang ptsan` instead.
+
+C++ applications require these compatible libraries to handle tagged pointers;
+using the system C++ library with only `-fsanitize=ptsan` can crash at startup.
+Compile with the generated configuration, which selects the matching headers,
+libraries, and runtime library search path:
+
+```sh
+build/bin/clang++ --config=ptsan-glibc.cfg -O2 your_program.cpp -o your_program
+```
+
+For C applications:
+
+```sh
+build/bin/clang -O2 -fsanitize=ptsan your_program.c -o your_program
 ```
 
 On a detected violation, PTSan reports the check site, the pointer's
-object identifier, the access type, address, and size.
+object identifier, the access type, address, and size, then exits by default.
+Compile with `-mllvm -ptsan-abort-on-error=0` to continue after reports.
+
+Run the host-libc regression suite with:
+
+```sh
+ninja -C build check-ptsan
+```
+
+See the [build and dependency guide](clang/docs/PointerTagSanitizer.rst) for
+musl, libc++, libc++abi, and libunwind recipes, matching configuration flags,
+strict mode, the separate `check-ptsan-musl` suite, and current limitations.
 
 ## Paper
 
@@ -124,7 +154,7 @@ LLVM itself: the Apache License v2.0 with LLVM Exceptions
 (SPDX: `Apache-2.0 WITH LLVM-exception`). These files carry SPDX
 headers.
 
-Five files in the PTSan runtime are an exception. `ptsan_env.c`,
+Five files in the glibc PTSan runtime are an exception. `ptsan_env.c`,
 `ptsan_exec.c`, `ptsan_obstack.cpp`, `ptsan_qsort.c`, and
 `ptsan_tsearch.c` — all in `compiler-rt/lib/ptsan/interceptors/` — are
 derived from the GNU C Library and remain under the **GNU Lesser
@@ -132,10 +162,10 @@ General Public License v2.1 or later**, Copyright (c) Free Software
 Foundation, Inc. PTSan supplies its own versions of these libc
 functions because they invoke user-supplied callbacks, such as
 `qsort`'s comparator, which must receive pointers that still carry
-their PTSan tags. These five files are compiled into the PTSan runtime
-library, so a binary built with `-fsanitize=ptsan` contains
-LGPL-2.1-licensed code and carries the corresponding obligations on
-redistribution.  
+their PTSan tags. These five files are compiled into the glibc PTSan
+runtime library, so binaries using that runtime contain LGPL-2.1-licensed
+code and carry the corresponding obligations on redistribution. The
+instrumented-musl runtime excludes these files.
 
 We are working to create a single-license repository that does not
 include the above 5 exceptions.  Please email us if the above
@@ -151,7 +181,7 @@ See `LICENSE.TXT` for the full license texts and the file inventory.
 
 (below is the original LLVM root README.md)
 
-# The LLVM Compiler Infrastructure 
+# The LLVM Compiler Infrastructure
 
 Welcome to the LLVM project!
 

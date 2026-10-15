@@ -34,6 +34,22 @@ void PTSanAnchorOptimizer::mergeStripAnchors() {
   }
 }
 
+void PTSanAnchorOptimizer::foldRedundantStripAnchors() {
+  PTSanPolarityReader Polarities(DS, PTA.F);
+  for (StripAnchor Strip : DS.collectAnchors<StripAnchor>(PTA.F)) {
+    if (!Strip.isPointerStrip()) {
+      continue;
+    }
+
+    Value *ToStrip = Strip.getValue();
+    // Stripping an already-raw pointer leaves it unchanged.
+    if (Polarities.getPolarity(ToStrip) == Polarity::Stripped) {
+      Strip.Call->replaceAllUsesWith(ToStrip);
+      Strip.erase();
+    }
+  }
+}
+
 void PTSanAnchorOptimizer::hoistGetIDAnchors() {
   for (GetIDAnchor ID : DS.collectAnchors<GetIDAnchor>(PTA.F)) {
     Instruction *IP = PTU.getFirstIPAfter(ID.getBase()).getIP();
@@ -140,7 +156,10 @@ void PTSanAnchorOptimizer::foldGetIDOfTagAnchors() {
       continue;
     }
 
-    ID.Call->replaceAllUsesWith(Tag->getID());
+    Value *Replacement =
+        PTU.splatToMatchType(Tag->getID(), ID.Call->getType());
+
+    ID.Call->replaceAllUsesWith(Replacement);
     ID.erase();
 
     if (Tag->Call->use_empty()) {

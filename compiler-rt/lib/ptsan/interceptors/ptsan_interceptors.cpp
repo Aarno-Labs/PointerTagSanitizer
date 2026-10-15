@@ -10,8 +10,6 @@
 //
 // Interceptors for libc
 //
-// This file is a beast. I'm sorry.
-//
 // At a high level, the problem is simple: each libc wrapper will (potentially)
 // take tagged pointers. We need to remove the IDs before calling into code we
 // don't control, and (ideally) add them back (or make new ones) for returned
@@ -120,22 +118,15 @@ void ptsan_enable_libc_instr() {
   ptsan_in_libc = 0;
 }
 
-// Redefine each internal_XXX libc function to clear ids and set return values.
-// These are common enough (and there are few enough) that we can just ~do them by hand.~
-// make chatGPT do them. Put them in a seperate file because they're Quite Long
+// Internal libc helpers that handle PTSan-tagged pointers.
 #include "ptsan_libc.inc"
-
-// Welcome to c++ template hell!
 
 // Given out (the return value of a function) and args (the arguments to said function),
 // and:
 // - If out is not a pointer, don't do anything
 // - If out is a pointer, iterate the arguments. Skip
-//   non-pointer arguments. If any of the argments = out,
+//   non-pointer arguments. If any of the arguments = out,
 //   set out.id = arg.id
-//
-// Yes, setting these by hand in each would be more efficient, but that
-// would a *lot* of dev time. Maybe someday.
 template <class T>
 T addRetID(T out)
 {
@@ -194,45 +185,13 @@ template <typename F, typename... Args> auto doPTSanCall(F f, Args... args) {
 
 
 #define check_and_report_range_norec(ptr, size, action) \
-  _do_check_and_report_range_norec(__COUNTER__, ptr, size, action)
+  check_range_and_report(__COUNTER__, ptr, size, action)
 
 #define check_and_report_range(ptr, size, action) \
-  _do_check_and_report_range(__COUNTER__, ptr, size, 0, action)
+  check_range_and_report(__COUNTER__, ptr, size, action)
 
 #define check_and_report_range_str(ptr, size, action) \
-  _do_check_and_report_range(__COUNTER__, ptr, size, 1, action)
-
-template<typename T>
-inline bool _do_check_and_report_range_norec(u32 check_id, T ptr, SIZE_T size,
-                                       const char* action) {
-  if (!check_range(ptr, size)) {
-    u16 id = get_id(ptr);
-    u64 addr = get_addr(ptr);
-    // XXX: figure out how to get this from stack trace?
-    u64 function_id = 0xdeadbeef;
-    ptsan_complain(
-      check_id, function_id, id, action, addr, size);
-    return false;
-  }
-  return true;
-}
-
-template<typename T>
-inline bool _do_check_and_report_range(u32 check_id, T &ptr, SIZE_T &size,
-                                       SIZE_T extra_space_used,
-                                       const char* action) {
-  if (!check_range(ptr, size + extra_space_used)) {
-    u16 id = get_id(ptr);
-    u64 addr = get_addr(ptr);
-    // XXX: figure out how to get this from stack trace?
-    u64 function_id = 0xdeadbeef;
-    ptsan_complain(
-      check_id, function_id, id, action, addr, size);
-    return false;
-  }
-
-  return true;
-}
+  check_range_and_report(__COUNTER__, ptr, size, action, 1)
 
 ////////////////////////////////
 // PTSAN-SPECIFIC INTERCEPTORS
@@ -266,11 +225,20 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
   return tag_with_next_id(out, size, FREE_TY::MALLOC);
 }
 
-INTERCEPTOR(void *, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
+INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
+  // Like the other allocators: skip tagging while ptsan is still initializing.
+  if (UNLIKELY(ptsan_init_is_running)) {
+    return REAL(posix_memalign)(memptr, alignment, size);
+  }
+
   ENSURE_PTSAN_INITED();
 
-  void *out = REAL(posix_memalign)(clear_id(memptr), alignment, size);
-  return tag_with_next_id(out, size, FREE_TY::MALLOC);
+  int res = REAL(posix_memalign)(clear_id(memptr), alignment, size);
+  if (res != 0) {
+    return res;
+  }
+  *memptr = tag_with_next_id(*memptr, size, FREE_TY::MALLOC);
+  return res;
 }
 
 INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
@@ -299,35 +267,6 @@ static inline bool validate_realloc(void *ptr) {
   }
 
   return true;
-}
-
-// new_ptr should be valid, while old_ptr should be unmodified/tagged
-template <typename T>
-T *tag_realloc(T *new_ptr, T* old_ptr, SIZE_T new_size) {
-  // If realloc failed, nothing changed memory-wise:
-  if (new_ptr == nullptr) {
-    return new_ptr;
-  }
-
-  // If old_ptr was null, this is just a malloc:
-  if (old_ptr == nullptr) {
-    return tag_with_next_id(new_ptr, new_size, FREE_TY::MALLOC);
-  }
-
-  // If old_ptr == new_ptr, it's still valid, so we
-  // do *not* want to change the ID, just resize it
-  if (new_ptr == clear_id(old_ptr)) {
-    resize_buffer(old_ptr, new_size);
-    return old_ptr;
-  }
-
-  // If we get here, old_ptr was freed and we need a new id:
-  if(!ptsan_mark_ptr_freed((void*)old_ptr, FREE_TY::MALLOC)) {
-    Printf("PTSan found bad realloc. Deal with this\n");
-    Abort();
-  }
-
-  return tag_with_next_id(new_ptr, new_size, FREE_TY::MALLOC);
 }
 
 INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
@@ -367,7 +306,7 @@ void *__ptsan_memset(void *s, int c, SIZE_T n) {
 
   check_and_report_range(s, n, "write");
   void *res = REAL(memset)(clear_id(s), c, n);
-  CHECK(res = clear_id(s));
+  CHECK(res == clear_id(s));
 
   return s;
 }
@@ -390,22 +329,55 @@ INTERCEPTOR(void *, mempcpy, void *dest, const void *src, SIZE_T n) {
   return (char*)dest + n;
 }
 
+// Keep these C ABI wrappers out of the file that includes <wchar.h>: glibc
+// exposes conflicting const-preserving C++ overloads when compiled with GCC.
+INTERCEPTOR(wchar_t *, wmemchr, const wchar_t *s, wchar_t c, SIZE_T n) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  wchar_t *res = REAL(wmemchr)(clear_id(s), c, n);
+  return copy_id(res, s);
+}
+
+INTERCEPTOR(wchar_t *, wcschr, const wchar_t *s, wchar_t c) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  wchar_t *res = REAL(wcschr)(clear_id(s), c);
+  return copy_id(res, s);
+}
+
+INTERCEPTOR(wchar_t *, wcsrchr, const wchar_t *s, wchar_t c) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  wchar_t *res = REAL(wcsrchr)(clear_id(s), c);
+  return copy_id(res, s);
+}
+
+INTERCEPTOR(wchar_t *, wcsstr, const wchar_t *haystack, const wchar_t *needle) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  wchar_t *res = REAL(wcsstr)(clear_id(haystack), clear_id(needle));
+  return copy_id(res, haystack);
+}
+
+INTERCEPTOR(wchar_t *, wcspbrk, const wchar_t *s, const wchar_t *accept) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  wchar_t *res = REAL(wcspbrk)(clear_id(s), clear_id(accept));
+  return copy_id(res, s);
+}
+
 #define GET_STORE_STACK_TRACE // Pass -- someday we'll probably want this
 
 
 INTERCEPTOR(char *, strncpy, char *dest, const char *src, SIZE_T n) {
   ENSURE_PTSAN_INITED();
   GET_STORE_STACK_TRACE;
-  SIZE_T copy_size = internal_strnlen(src, n);
-  if (copy_size < n)
-    copy_size++;  // null terminator
+  find_bounded_character(src, '\0', n);
+  // strncpy pads the destination through n, even after an early NUL.
+  check_and_report_range(dest, n, "write");
 
-  check_and_report_range(src, copy_size, "read");
-  check_and_report_range(dest, copy_size, "write");
-
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(strncpy)(clear_id(dest), clear_id(src), n);
-  ptsan_in_libc--;
 
   CHECK(res == clear_id(dest));
   return dest;
@@ -414,22 +386,19 @@ INTERCEPTOR(char *, strncpy, char *dest, const char *src, SIZE_T n) {
 INTERCEPTOR(char *, strcpy, char *dest, const char *src) {
   ENSURE_PTSAN_INITED();
   GET_STORE_STACK_TRACE;
-  SIZE_T n = internal_strlen(src);
+  SIZE_T n = find_cstring_character(src, '\0');
 
   // the _str version adds +1 for the null terminator
-  if (!check_and_report_range_str(src, n, "read") ||
-      !check_and_report_range_str(dest, n, "write")) {
-    ptsan_in_libc++;
+  if (!check_and_report_range_str(dest, n, "write")) {
+    InLibcGuard _ig;
     char *res = REAL(strncpy(clear_id(dest), clear_id(src), n));
     res[n] = '\0';
-    ptsan_in_libc--;
     CHECK(res == clear_id(dest));
     return dest;
   }
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(strcpy)(clear_id(dest), clear_id(src));
-  ptsan_in_libc--;
 
   CHECK(res == clear_id(dest));
   return dest;
@@ -438,13 +407,11 @@ INTERCEPTOR(char *, strcpy, char *dest, const char *src) {
 INTERCEPTOR(char *, stpncpy, char *dest, const char *src, SIZE_T n) {
   ENSURE_PTSAN_INITED();
   GET_STORE_STACK_TRACE;
-  SIZE_T copy_size = Min(n, internal_strnlen(src, n) + 1);
-  check_and_report_range(src, copy_size, "read");
-  check_and_report_range(dest, copy_size, "write");
+  find_bounded_character(src, '\0', n);
+  check_and_report_range(dest, n, "write");
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(stpncpy)(clear_id(dest), clear_id(src), n);
-  ptsan_in_libc--;
 
   return copy_id(res, dest);
 }
@@ -452,21 +419,18 @@ INTERCEPTOR(char *, stpncpy, char *dest, const char *src, SIZE_T n) {
 INTERCEPTOR(char *, stpcpy, char *dest, const char *src) {
   ENSURE_PTSAN_INITED();
   GET_STORE_STACK_TRACE;
-  SIZE_T n = internal_strlen(src);
+  SIZE_T n = find_cstring_character(src, '\0');
   // the _str version adds +1 for the null terminator
-  if (!check_and_report_range_str(src, n, "read") ||
-      !check_and_report_range_str(dest, n, "write")) {
-    ptsan_in_libc++;
+  if (!check_and_report_range_str(dest, n, "write")) {
+    InLibcGuard _ig;
     char *res = REAL(stpncpy(clear_id(dest), clear_id(src), n));
     res[n] = '\0';
-    ptsan_in_libc--;
     CHECK(res == clear_id(dest));
     return dest;
   }
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(stpcpy)(clear_id(dest), clear_id(src));
-  ptsan_in_libc--;
 
   return copy_id(res, dest);
 }
@@ -475,12 +439,14 @@ INTERCEPTOR(char *, stpcpy, char *dest, const char *src) {
 INTERCEPTOR(char *, strdup, char *src) {
   ENSURE_PTSAN_INITED();
   GET_STORE_STACK_TRACE;
-  SIZE_T n = internal_strlen(src);
-  check_and_report_range_norec(src, n + 1, "read");
+  SIZE_T n = find_cstring_character(src, '\0');
 
-  ptsan_in_libc++;
-  char *res = REAL(strdup)(clear_id(src));
-  ptsan_in_libc--;
+  // guard only the libc call: tag_with_next_id is a NOP while ptsan_in_libc > 0
+  char *res;
+  {
+    InLibcGuard _ig;
+    res = REAL(strdup)(clear_id(src));
+  }
 
   // n+1 for null terminator
   res = tag_with_next_id(res, n + 1, FREE_TY::MALLOC);
@@ -490,12 +456,13 @@ INTERCEPTOR(char *, strdup, char *src) {
 INTERCEPTOR(char *, __strdup, char *src) {
   ENSURE_PTSAN_INITED();
   GET_STORE_STACK_TRACE;
-  SIZE_T n = internal_strlen(src);
-  check_and_report_range_norec(src, n + 1, "read");
+  SIZE_T n = find_cstring_character(src, '\0');
 
-  ptsan_in_libc++;
-  char *res = REAL(__strdup)(clear_id(src));
-  ptsan_in_libc--;
+  char *res;
+  {
+    InLibcGuard _ig;
+    res = REAL(__strdup)(clear_id(src));
+  }
 
   // n+1 for null terminator
   res = tag_with_next_id(res, n + 1, FREE_TY::MALLOC);
@@ -506,9 +473,11 @@ INTERCEPTOR(char *, gcvt, double number, SIZE_T ndigit, char *buf) {
   ENSURE_PTSAN_INITED();
 
   // XXX: Really should put the check above the call, but that's hard
-  ptsan_in_libc++;
-  char *res = REAL(gcvt)(number, ndigit, clear_id(buf));
-  ptsan_in_libc--;
+  char *res;
+  {
+    InLibcGuard _ig;
+    res = REAL(gcvt)(number, ndigit, clear_id(buf));
+  }
 
   SIZE_T n = internal_strlen(buf);
   check_and_report_range_norec(buf, n + 1, "write");
@@ -518,14 +487,12 @@ INTERCEPTOR(char *, gcvt, double number, SIZE_T ndigit, char *buf) {
 INTERCEPTOR(char *, strcat, char *dest, const char *src) {
   ENSURE_PTSAN_INITED();
   GET_STORE_STACK_TRACE;
-  SIZE_T src_size = internal_strlen(src);
-  SIZE_T dest_size = internal_strlen(dest);
-  check_and_report_range_norec(src, src_size + 1, "read");
+  SIZE_T src_size = find_cstring_character(src, '\0');
+  SIZE_T dest_size = find_cstring_character(dest, '\0');
   check_and_report_range_norec(dest, src_size + dest_size + 1, "write");
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(strcat)(clear_id(dest), clear_id(src));
-  ptsan_in_libc--;
 
   CHECK(res == clear_id(dest));
   return dest;
@@ -534,17 +501,14 @@ INTERCEPTOR(char *, strcat, char *dest, const char *src) {
 INTERCEPTOR(char *, strncat, char *dest, const char *src, SIZE_T n) {
   ENSURE_PTSAN_INITED();
   GET_STORE_STACK_TRACE;
-  SIZE_T dest_size = internal_strlen(dest);
-  SIZE_T copy_size = internal_strnlen(src, n);
-  // XXX: is this right? off-by-1?
-  check_and_report_range_norec(src, copy_size, "read");
+  SIZE_T dest_size = find_cstring_character(dest, '\0');
+  SIZE_T copy_size = find_bounded_character(src, '\0', n);
   // I *think* this is right, because I think the null terminator
   // doesn't end up counting in either of these
   check_and_report_range_norec(dest, dest_size + copy_size + 1, "write");
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(strncat)(clear_id(dest), clear_id(src), n);
-  ptsan_in_libc--;
 
   CHECK(res == clear_id(dest));
   return dest;
@@ -706,9 +670,8 @@ INTERCEPTOR(wchar_t *, wmemcpy, wchar_t *dest, const wchar_t *src, SIZE_T n) {
   check_and_report_range(src, sz, "read");
   n = sz / sizeof(wchar_t);
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   wchar_t *res = REAL(wmemcpy)(clear_id(dest), clear_id(src), n);
-  ptsan_in_libc--;
 
   CHECK(res == clear_id(dest));
   return dest;
@@ -723,9 +686,8 @@ INTERCEPTOR(wchar_t *, wmempcpy, wchar_t *dest, const wchar_t *src, SIZE_T n) {
   check_and_report_range(src, sz, "read");
   n = sz / sizeof(wchar_t);
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   wchar_t *res = REAL(wmempcpy)(clear_id(dest), clear_id(src), n);
-  ptsan_in_libc--;
 
   return copy_id(res, dest);
 }
@@ -737,9 +699,8 @@ INTERCEPTOR(wchar_t *, wmemset, wchar_t *s, wchar_t c, SIZE_T n) {
   check_and_report_range(s, sz, "write");
   n = sz / sizeof(wchar_t);
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   wchar_t *res = REAL(wmemset)(clear_id(s), c, n);
-  ptsan_in_libc--;
 
   CHECK(res = clear_id(s));
   return s;
@@ -754,9 +715,8 @@ INTERCEPTOR(wchar_t *, wmemmove, wchar_t *dest, const wchar_t *src, SIZE_T n) {
   check_and_report_range(src, sz, "read");
   n = sz / sizeof(wchar_t);
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   wchar_t *res = REAL(wmemmove)(clear_id(dest), clear_id(src), n);
-  ptsan_in_libc--;
 
   CHECK(res == clear_id(dest));
   return dest;
@@ -767,9 +727,8 @@ INTERCEPTOR(int, wcscmp, const wchar_t *s1, const wchar_t *s2) {
 
   // XXX: check size of access here?
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(wcscmp)(clear_id(s1), clear_id(s2));
-  ptsan_in_libc--;
 
   return res;
 }
@@ -781,9 +740,8 @@ INTERCEPTOR(int, gettimeofday, void *tv, void *tz) {
 
 INTERCEPTOR(char *, fcvt, double x, int a, int *b, int *c) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   char *res = REAL(fcvt)(x, a, clear_id(b), clear_id(c));
-  ptsan_in_libc--;
 
   // Res is a shared buffer(?) so we don't mess with ID for now
   // XXX: Figure out how to put an ID on this -- probably
@@ -838,34 +796,30 @@ INTERCEPTOR(void, __assert_fail,
             unsigned int line, const char *func) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   REAL(__assert_fail)(clear_id(expr), clear_id(file), line, clear_id(func));
-  ptsan_in_libc--;
 }
 
 INTERCEPTOR(void, perror, const char *s) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   REAL(perror)( clear_id(s) );
-  ptsan_in_libc--;
 }
 
 INTERCEPTOR(void, __GI_perror, const char *s) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   REAL(__GI_perror)( clear_id(s) );
-  ptsan_in_libc--;
 }
 
 // XXX: do we need to recurse into addr for weird cases?
 INTERCEPTOR(int, bind, int sockfd, const struct sockaddr *addr, SIZE_T addrlen) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(bind)(sockfd, clear_id(addr), addrlen);
-  ptsan_in_libc--;
 
   return res;
 }
@@ -873,18 +827,16 @@ INTERCEPTOR(int, bind, int sockfd, const struct sockaddr *addr, SIZE_T addrlen) 
 INTERCEPTOR(int, wcswidth, const wchar_t *s, SIZE_T n) {
   ENSURE_PTSAN_INITED();
 
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(wcswidth)(clear_id(s), n);
-  ptsan_in_libc--;
 
   return res;
 }
 
 INTERCEPTOR(int, wcsnwidth, const wchar_t *s, SIZE_T n) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
   int res = REAL(wcsnwidth)(clear_id(s), n);
-  ptsan_in_libc--;
   return res;
 }
 
@@ -921,14 +873,18 @@ extern "C" int pthread_attr_destroy(void *attr);
 static void *PTSanThreadStartFunc(void *arg) {
   // This runs at the start of the new thread, so ptsan_in_libc isn't inherited
   // from pthread_create
-  ptsan_in_libc++;
-  PTSanThread *t = clear_id((PTSanThread *)arg);
-  t->Init();
-  SetCurrentThread(t);
-  SetSigProcMask(&t->starting_sigset_, nullptr);
-  if (ClLAM)
-    ptsan_enable_lam_u48();
-  ptsan_in_libc--;
+  PTSanThread *t;
+  {
+    // guard must end before ThreadStart(): that's user code and must see ptsan_in_libc == 0
+    InLibcGuard _ig;
+    t = clear_id((PTSanThread *)arg);
+    t->Init();
+    SetCurrentThread(t);
+    t->InitTLS();
+    SetSigProcMask(&t->starting_sigset_, nullptr);
+    if (ClLAM)
+      ptsan_enable_lam_u48();
+  }
 
   void * out = t->ThreadStart();
   return out;
@@ -937,7 +893,7 @@ static void *PTSanThreadStartFunc(void *arg) {
 INTERCEPTOR(int, pthread_create, void *th, void *attr, void *(*callback)(void*),
             void * param) {
   ENSURE_PTSAN_INITED(); // for GetTlsSize()
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   __sanitizer_pthread_attr_t myattr;
   if (!attr) {
@@ -951,11 +907,12 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr, void *(*callback)(void*),
   ScopedBlockSignals block(&t->starting_sigset_);
 
   int res = REAL(pthread_create)(clear_id(th), clear_id(attr), PTSanThreadStartFunc, t);
+  if (res != 0)
+    t->Release();
 
   if (attr == &myattr) {
     pthread_attr_destroy(&myattr);
   }
-  ptsan_in_libc--;
 
   return res;
 }
@@ -966,13 +923,12 @@ INTERCEPTOR(int, epoll_wait,
             int maxevents,
             int timeout) {
   ENSURE_PTSAN_INITED();
-  ptsan_in_libc++;
+  InLibcGuard _ig;
 
   struct epoll_event *clear_events = clear_id(events);
 
   int res = REAL(epoll_wait)(epfd, clear_events, maxevents, timeout);
 
-  ptsan_in_libc--;
   return res;
 }
 
@@ -1098,28 +1054,6 @@ int OnExit() {
     out;                                                                      \
   })
 
-// MAP_FAILED =  ((void *)-1)
-#define COMMON_INTERCEPTOR_MMAP_IMPL(ctx, mmap, addr, sz, prot, flags, fd,     \
-                                     off)                                      \
-  {                                                                            \
-    (void)(ctx);                                                               \
-    void *out = REAL(mmap)(addr, sz, prot, flags, fd, off);                    \
-    if (out == ((void *)-1)) {                                                 \
-      return out;                                                              \
-    }                                                                          \
-    out = tag_with_next_id(out, sz, FREE_TY::MMAP);                      \
-    return out;                                                                \
-  }
-
-
-#define COMMON_INTERCEPTOR_MUNMAP_IMPL(ctx, addr, sz)                          \
-  {                                                                            \
-    if (ptsan_mark_ptr_freed((void *)addr, FREE_TY::MMAP)) {             \
-      return REAL(munmap)(addr, sz);                                           \
-    }                                                                          \
-    return -1;                                                                 \
-  }
-
 // Include these here, before we get to the really crazy redefinitions
 #include "sanitizer_common/sanitizer_common_interceptors_memintrinsics.inc"
 
@@ -1151,6 +1085,240 @@ int OnExit() {
 #undef REAL
 #define PTR_TO_PTSAN_REAL(x) __ptsan_real_##x
 #define REAL(x) __interception::PTR_TO_PTSAN_REAL(x)
+
+// These scanners validate logical reads before accessing memory. Keep their
+// PTSan-specific implementations here and disable the generated versions below.
+static inline int CharCmpX(unsigned char c1, unsigned char c2) {
+  return (c1 == c2) ? 0 : (c1 < c2) ? -1 : 1;
+}
+
+PTSAN_INTERCEPTOR(SIZE_T, strlen, (, s), const char *s) {
+  // Sometimes strlen is called prior to InitializeCommonInterceptors,
+  // in which case the REAL(strlen) typically used in
+  // COMMON_INTERCEPTOR_ENTER will fail.  We use internal_strlen here
+  // to handle that.
+  if (COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED) {
+    return internal_strlen(s);
+  }
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, strlen, s);
+  if (common_flags()->intercept_strlen) {
+    return find_cstring_character(s, '\0');
+  }
+  return REAL(strlen)(s);
+}
+
+PTSAN_INTERCEPTOR(SIZE_T, strnlen, (, s, maxlen), const char *s, SIZE_T maxlen) {
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, strnlen, s, maxlen);
+  if (common_flags()->intercept_strlen) {
+    return find_bounded_character(s, '\0', maxlen);
+  }
+  return REAL(strnlen)(s, maxlen);
+}
+
+#if SANITIZER_INTERCEPTOR_HOOKS
+SANITIZER_INTERFACE_WEAK_DEF(void, __sanitizer_weak_hook_strcmp, uptr called_pc,
+                            const char *s1, const char *s2, int result) {}
+#endif
+PTSAN_INTERCEPTOR(int, strcmp, (, s1, s2), const char *s1, const char *s2) {
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, strcmp, s1, s2);
+  const uptr left_bytes = bytes_remaining(s1);
+  const uptr right_bytes = bytes_remaining(s2);
+  unsigned char c1, c2;
+  uptr i;
+  for (i = 0;; i++) {
+    if (common_flags()->intercept_strcmp) {
+      if (i == left_bytes) {
+        report_scan_read(s1, i);
+      }
+      if (i == right_bytes) {
+        report_scan_read(s2, i);
+      }
+    }
+    c1 = (unsigned char)s1[i];
+    c2 = (unsigned char)s2[i];
+    if (c1 != c2 || c1 == '\0') {
+      break;
+    }
+  }
+  if (common_flags()->intercept_strcmp) {
+    if (common_flags()->strict_string_checks) {
+      find_cstring_character(s1, '\0');
+      find_cstring_character(s2, '\0');
+    }
+  }
+  int result = CharCmpX(c1, c2);
+#if SANITIZER_INTERCEPTOR_HOOKS
+  __sanitizer_weak_hook_strcmp(GET_CALLER_PC(), s1, s2, result);
+#endif
+  return result;
+}
+
+#if SANITIZER_INTERCEPTOR_HOOKS
+SANITIZER_INTERFACE_WEAK_DEF(void, __sanitizer_weak_hook_strncmp, uptr called_pc,
+                            const char *s1, const char *s2, uptr n,
+                            int result) {}
+#endif
+PTSAN_INTERCEPTOR(int, strncmp, (, s1, s2, size), const char *s1,
+                  const char *s2, uptr size) {
+  if (COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED) {
+    return internal_strncmp(s1, s2, size);
+  }
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, strncmp, s1, s2, size);
+  const uptr left_bytes = bytes_remaining(s1);
+  const uptr right_bytes = bytes_remaining(s2);
+  unsigned char c1 = 0, c2 = 0;
+  uptr i;
+  for (i = 0; i < size; i++) {
+    if (i == left_bytes) {
+      report_scan_read(s1, i);
+    }
+    if (i == right_bytes) {
+      report_scan_read(s2, i);
+    }
+    c1 = (unsigned char)s1[i];
+    c2 = (unsigned char)s2[i];
+    if (c1 != c2 || c1 == '\0') {
+      break;
+    }
+  }
+  if (common_flags()->strict_string_checks) {
+    find_bounded_character(s1, '\0', size);
+    find_bounded_character(s2, '\0', size);
+  }
+  int result = CharCmpX(c1, c2);
+#if SANITIZER_INTERCEPTOR_HOOKS
+  __sanitizer_weak_hook_strncmp(GET_CALLER_PC(), s1, s2, size, result);
+#endif
+  return result;
+}
+
+
+static char *checkedStrchr(const char *s, int c) {
+  const uptr offset = find_cstring_character(s, c);
+  if (common_flags()->strict_string_checks) {
+    find_cstring_character(s, '\0');
+  }
+  const char *result = clear_id(s) + offset;
+  return (unsigned char)*result == (unsigned char)c
+             ? copy_id((char *)result, s) : nullptr;
+}
+
+PTSAN_INTERCEPTOR(char*, strchr, (, s, c), const char *s, int c) {
+  void *ctx;
+  if (COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED) {
+    return internal_strchr(s, c);
+  }
+  COMMON_INTERCEPTOR_ENTER(ctx, strchr, s, c);
+  if (common_flags()->intercept_strchr) {
+    return checkedStrchr(s, c);
+  }
+  return REAL(strchr)(s, c);
+}
+
+PTSAN_INTERCEPTOR(char*, index, (, s, c), const char *s, int c) {
+  void *ctx;
+  if (COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED) {
+    return internal_strchr(s, c);
+  }
+  COMMON_INTERCEPTOR_ENTER(ctx, index, s, c);
+  if (common_flags()->intercept_strchr) {
+    return checkedStrchr(s, c);
+  }
+  return REAL(index)(s, c);
+}
+
+
+PTSAN_INTERCEPTOR(char*, strchrnul, (, s, c), const char *s, int c) {
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, strchrnul, s, c);
+  if (common_flags()->intercept_strchr) {
+    const uptr offset = find_cstring_character(s, c);
+    if (common_flags()->strict_string_checks) {
+      find_cstring_character(s, '\0');
+    }
+    return copy_id((char *)clear_id(s) + offset, s);
+  }
+  return REAL(strchrnul)(s, c);
+}
+
+#if SANITIZER_INTERCEPTOR_HOOKS
+SANITIZER_INTERFACE_WEAK_DEF(void, __sanitizer_weak_hook_memcmp, uptr called_pc,
+                            const void *s1, const void *s2, uptr n,
+                            int result) {}
+#endif
+static int checkedMemcmp(const void *a1, const void *a2, uptr size,
+                         int (*real)(const void *, const void *, uptr)) {
+  if (common_flags()->intercept_memcmp) {
+    if (common_flags()->strict_memcmp) {
+      // Check both entire regions even if their first bytes differ.
+      check_and_report_range_norec(a1, size, "read");
+      check_and_report_range_norec(a2, size, "read");
+    } else {
+      const unsigned char *s1 = (const unsigned char *)a1;
+      const unsigned char *s2 = (const unsigned char *)a2;
+      const uptr left_bytes = bytes_remaining(a1);
+      const uptr right_bytes = bytes_remaining(a2);
+      for (uptr i = 0; i < size; ++i) {
+        if (i == left_bytes) {
+          report_scan_read(a1, i);
+        }
+        if (i == right_bytes) {
+          report_scan_read(a2, i);
+        }
+        unsigned char c1 = s1[i];
+        unsigned char c2 = s2[i];
+        if (c1 != c2) {
+          return CharCmpX(c1, c2);
+        }
+      }
+      return 0;
+    }
+  }
+  return real(a1, a2, size);
+}
+
+PTSAN_INTERCEPTOR(int, memcmp, (, a1, a2, size), const void *a1,
+                  const void *a2, uptr size) {
+  if (COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED) {
+    return internal_memcmp(a1, a2, size);
+  }
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, memcmp, a1, a2, size);
+  int result = checkedMemcmp(a1, a2, size, REAL(memcmp));
+#if SANITIZER_INTERCEPTOR_HOOKS
+  __sanitizer_weak_hook_memcmp(GET_CALLER_PC(), a1, a2, size, result);
+#endif
+  return result;
+}
+
+PTSAN_INTERCEPTOR(int, bcmp, (, a1, a2, size), const void *a1,
+                  const void *a2, uptr size) {
+  if (COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED) {
+    return internal_memcmp(a1, a2, size);
+  }
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, bcmp, a1, a2, size);
+  int result = checkedMemcmp(a1, a2, size, REAL(bcmp));
+#if SANITIZER_INTERCEPTOR_HOOKS
+  __sanitizer_weak_hook_memcmp(GET_CALLER_PC(), a1, a2, size, result);
+#endif
+  return result;
+}
+
+PTSAN_INTERCEPTOR(void*, memchr, (, s, c, n), const void *s, int c, SIZE_T n) {
+  if (COMMON_INTERCEPTOR_NOTHING_IS_INITIALIZED) {
+    return internal_memchr(s, c, n);
+  }
+  void *ctx;
+  COMMON_INTERCEPTOR_ENTER(ctx, memchr, s, c, n);
+  const uptr offset = find_bounded_character(s, c, n);
+  return offset == n ? nullptr
+                     : copy_id((char *)clear_id(s) + offset, s);
+}
 
 // Okay, all the setup is done. Any special-casing on mostly-common libc wrappers
 // goes here. The definitions should be removed from ptsan_common_interceptors.inc:
@@ -1186,9 +1354,12 @@ INTERCEPTOR(SSIZE_T, getline, char **lineptr, SIZE_T *n, void *stream) {
     old_line = *real_lineptr;
   }
 
-  ptsan_in_libc++;
-  SSIZE_T res = ORIG_REAL(getline)(&real_line, stripID(n), stripID(stream));
-  ptsan_in_libc--;
+  // guard only the libc call: tag_realloc below is a NOP while ptsan_in_libc > 0
+  SSIZE_T res;
+  {
+    InLibcGuard _ig;
+    res = ORIG_REAL(getline)(&real_line, stripID(n), stripID(stream));
+  }
 
   if (res <= 0) {
     return res;
@@ -1216,9 +1387,11 @@ INTERCEPTOR(SSIZE_T, __getdelim, char **lineptr, SIZE_T *n, int delim, void *str
     old_line = *real_lineptr;
   }
 
-  ptsan_in_libc++;
-  SSIZE_T res = ORIG_REAL(__getdelim)(&real_line, stripID(n), delim, stripID(stream));
-  ptsan_in_libc--;
+  SSIZE_T res;
+  {
+    InLibcGuard _ig;
+    res = ORIG_REAL(__getdelim)(&real_line, stripID(n), delim, stripID(stream));
+  }
 
   if (res <= 0) {
     return res;
@@ -1246,9 +1419,11 @@ INTERCEPTOR(SSIZE_T, getdelim, char **lineptr, SIZE_T *n, int delim, void *strea
     old_line = *real_lineptr;
   }
 
-  ptsan_in_libc++;
-  SSIZE_T res = ORIG_REAL(__getdelim)(&real_line, stripID(n), delim, stripID(stream));
-  ptsan_in_libc--;
+  SSIZE_T res;
+  {
+    InLibcGuard _ig;
+    res = ORIG_REAL(__getdelim)(&real_line, stripID(n), delim, stripID(stream));
+  }
 
   if (res <= 0) {
     return res;
@@ -1317,6 +1492,34 @@ INTERCEPTOR(SSIZE_T, getdelim, char **lineptr, SIZE_T *n, int delim, void *strea
 #undef SANITIZER_INTERCEPT_QSORT
 #define SANITIZER_INTERCEPT_QSORT 0
 
+#undef SANITIZER_INTERCEPT_RECVMSG
+#define SANITIZER_INTERCEPT_RECVMSG 0
+#undef SANITIZER_INTERCEPT_RECVMMSG
+#define SANITIZER_INTERCEPT_RECVMMSG 0
+
+#undef SANITIZER_INTERCEPT_MMAP
+#define SANITIZER_INTERCEPT_MMAP 0
+#undef SANITIZER_INTERCEPT_MMAP64
+#define SANITIZER_INTERCEPT_MMAP64 0
+
+// PTSan-specific bounds-aware scanners are defined above.
+#undef SANITIZER_INTERCEPT_STRLEN
+#define SANITIZER_INTERCEPT_STRLEN 0
+#undef SANITIZER_INTERCEPT_STRNLEN
+#define SANITIZER_INTERCEPT_STRNLEN 0
+#undef SANITIZER_INTERCEPT_STRCMP
+#define SANITIZER_INTERCEPT_STRCMP 0
+#undef SANITIZER_INTERCEPT_STRCHR
+#define SANITIZER_INTERCEPT_STRCHR 0
+#undef SANITIZER_INTERCEPT_STRCHRNUL
+#define SANITIZER_INTERCEPT_STRCHRNUL 0
+#undef SANITIZER_INTERCEPT_MEMCMP
+#define SANITIZER_INTERCEPT_MEMCMP 0
+#undef SANITIZER_INTERCEPT_BCMP
+#define SANITIZER_INTERCEPT_BCMP 0
+#undef SANITIZER_INTERCEPT_MEMCHR
+#define SANITIZER_INTERCEPT_MEMCHR 0
+
 // And actual libc wrappers include goes here!
 #include "ptsan_common_interceptors.inc"
 
@@ -1332,6 +1535,16 @@ void __ptsan::InitializeInterceptors() {
   INTERCEPT_FUNCTION(realloc);
   INTERCEPT_FUNCTION(pthread_create);
   INTERCEPT_FUNCTION(sem_open);
+  INTERCEPT_FUNCTION(strlen);
+  INTERCEPT_FUNCTION(strnlen);
+  INTERCEPT_FUNCTION(strcmp);
+  INTERCEPT_FUNCTION(strncmp);
+  INTERCEPT_FUNCTION(strchr);
+  INTERCEPT_FUNCTION(index);
+  INTERCEPT_FUNCTION(strchrnul);
+  INTERCEPT_FUNCTION(memcmp);
+  INTERCEPT_FUNCTION(bcmp);
+  INTERCEPT_FUNCTION(memchr);
   INTERCEPT_FUNCTION(strcpy);
   INTERCEPT_FUNCTION(strncpy);
   INTERCEPT_FUNCTION(stpcpy);
@@ -1383,6 +1596,11 @@ void __ptsan::InitializeInterceptors() {
   INTERCEPT_FUNCTION(wcsftime);
   INTERCEPT_FUNCTION(wcsftime_l);
   INTERCEPT_FUNCTION(__wcsftime_l);
+  INTERCEPT_FUNCTION(wmemchr);
+  INTERCEPT_FUNCTION(wcschr);
+  INTERCEPT_FUNCTION(wcsrchr);
+  INTERCEPT_FUNCTION(wcsstr);
+  INTERCEPT_FUNCTION(wcspbrk);
   INTERCEPT_FUNCTION(wmemcpy);
   INTERCEPT_FUNCTION(wmempcpy);
   INTERCEPT_FUNCTION(wmemset);

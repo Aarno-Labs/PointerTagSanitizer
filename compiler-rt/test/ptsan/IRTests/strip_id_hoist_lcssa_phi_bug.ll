@@ -26,9 +26,8 @@ define void @contained_lcssa_phi_feeds_mixed_phi(ptr %base.slot, ptr %slot,
 ; CHECK: %idx.2 = getelementptr i8, ptr %idx, i64 2
 ; CHECK-NOT: call ptr @__ptsan_strip(ptr %idx.2)
 ; CHECK: lcssa.block:
-; CHECK-NEXT: [[IDX_ID:%.*]] = phi i64 [ [[BASE_ID]], %loop ]
 ; CHECK-NEXT: %idx.lcssa = phi ptr [ %idx, %loop ]
-; CHECK-NEXT: [[IDX_TAG:%.*]] = call ptr @__ptsan_tag(ptr %idx.lcssa, i64 [[IDX_ID]])
+; CHECK-NEXT: [[IDX_TAG:%.*]] = call ptr @__ptsan_tag(ptr %idx.lcssa, i64 [[BASE_ID]])
 ; CHECK: store.block:
 ; CHECK-NEXT: [[STORE_TAGGED:%.*]] = call ptr @__ptsan_tagged(ptr [[IDX_TAG]])
 ; CHECK-NEXT: store ptr [[STORE_TAGGED]]

@@ -12,8 +12,6 @@
 
 namespace llvm::ptsan {
 
-bool isKnownSafeIntrinsicUse(CallBase &CB);
-void runLocalStripIDHoisting(PTSanAnalysisState &PTA);
 void runMinCutStripIDHoisting(PTSanAnalysisState &PTA);
 
 } // namespace llvm::ptsan

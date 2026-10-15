@@ -1,3 +1,4 @@
+// REQUIRES: x86_64-target-arch
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 
 // RUN: %clang_ptsan -O2 -march=native -S -emit-llvm %s -o - | FileCheck %s

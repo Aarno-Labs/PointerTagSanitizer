@@ -526,15 +526,14 @@ exit:
   ret void
 }
 
-; Loop-carried PHIs use a recurrent ID PHI when a stripped recurrence has a
-; tagged exit.
-define void @retag_loop_carried_gep_uses_recurrent_id(ptr %base, ptr %slot) {
-; CHECK-LABEL: define void @retag_loop_carried_gep_uses_recurrent_id(
+; A stripped loop-carried pointer recurrence remains derived from its original
+; base, so its tagged exit can reuse the base ID without a recurrent ID PHI.
+define void @retag_loop_carried_gep_uses_base_id(ptr %base, ptr %slot) {
+; CHECK-LABEL: define void @retag_loop_carried_gep_uses_base_id(
 ; CHECK: entry:
 ; CHECK-DAG: [[BASE_STRIP:%.*]] = call ptr @__ptsan_strip(ptr %base)
 ; CHECK-DAG: [[BASE_ID:%.*]] = call i64 @__ptsan_get_id(ptr %base)
 ; CHECK: loop:
-; CHECK: [[CURSOR_ID:%.*]] = phi i64 [ [[CURSOR_ID]], %loop ], [ [[BASE_ID]], %loop.preheader ]
 ; CHECK: %cursor = phi ptr [ %next.ptr, %loop ], [ [[BASE_STRIP]], %loop.preheader ]
 ; CHECK: %next.ptr = getelementptr i8, ptr %cursor, i64 1
 ; CHECK: %x = getelementptr i8, ptr %next.ptr, i64 8
@@ -542,9 +541,8 @@ define void @retag_loop_carried_gep_uses_recurrent_id(ptr %base, ptr %slot) {
 ; CHECK: %y = getelementptr i8, ptr %next.ptr, i64 16
 ; CHECK-NEXT: load volatile i8, ptr %y
 ; CHECK: exit:
-; CHECK: [[EXIT_ID:%.*]] = phi i64 [ [[CURSOR_ID]], %loop ]
 ; CHECK: %exit.ptr = phi ptr [ %next.ptr, %loop ]
-; CHECK-NEXT: [[EXIT_TAG:%.*]] = call ptr @__ptsan_tag(ptr %exit.ptr, i64 [[EXIT_ID]])
+; CHECK-NEXT: [[EXIT_TAG:%.*]] = call ptr @__ptsan_tag(ptr %exit.ptr, i64 [[BASE_ID]])
 ; CHECK-NEXT: [[EXIT_TAGGED:%.*]] = call ptr @__ptsan_tagged(ptr [[EXIT_TAG]])
 ; CHECK-NEXT: store ptr [[EXIT_TAGGED]], ptr {{%.*}}
 entry:

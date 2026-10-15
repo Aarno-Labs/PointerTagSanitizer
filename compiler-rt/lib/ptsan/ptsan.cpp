@@ -27,6 +27,7 @@
 
 #include "sanitizer_common/sanitizer_linux.h"
 #include "sanitizer_common/sanitizer_file.h"
+#include "sanitizer_common/sanitizer_flags.h"
 
 using namespace __ptsan;
 
@@ -35,6 +36,7 @@ bool __ptsan::ptsan_init_is_running;
 
 
 namespace __ptsan {
+#ifndef PTSAN_MUSL_INTERCEPTION
 // Thread interception
 static pthread_key_t tsd_key;
 static bool tsd_key_inited = false;
@@ -44,6 +46,7 @@ void PTSanTSDInit(void (*destructor)(void *tsd)) {
   tsd_key_inited = true;
   CHECK_EQ(0, pthread_key_create(&tsd_key, destructor));
 }
+#endif
 
 static THREADLOCAL PTSanThread* ptsan_current_thread;
 
@@ -65,11 +68,30 @@ void SetCurrentThread(PTSanThread *t) {
     ptsan_stack_id_limit = 0;
   }
 
-  // Make sure that PTSanTSDDtor gets called at the end.
+#ifndef PTSAN_MUSL_INTERCEPTION
+  // An uninstrumented libc needs no PTSan state after its TSD destructors.
   CHECK(tsd_key_inited);
   pthread_setspecific(tsd_key, (void *)t);
+#endif
 }
 
+#ifdef PTSAN_MUSL_INTERCEPTION
+void FinishMuslThread() {
+  // Instrumented musl still uses stack and TLS IDs after running TSD
+  // destructors. Retire them only at SYS_exit or __unmapself, with no return
+  // to instrumented code. Keep every signal blocked through the final exit.
+  __sanitizer_sigset_t set;
+  internal_sigfillset(&set);
+  SetSigProcMask(&set, nullptr);
+
+  PTSanThread *t = ptsan_current_thread;
+  ptsan_current_thread = nullptr;
+  atomic_signal_fence(memory_order_seq_cst);
+  // A failed pthread_create can exit before PTSanThreadStartFunc runs.
+  if (t)
+    t->Destroy();
+}
+#else
 void PTSanTSDDtor(void *tsd) {
   PTSanThread *t = (PTSanThread*)tsd;
   if (t->destructor_iterations_ > 1) {
@@ -83,6 +105,7 @@ void PTSanTSDDtor(void *tsd) {
   atomic_signal_fence(memory_order_seq_cst);
   PTSanThread::TSDDtor(tsd);
 }
+#endif
 } // namespace __ptsan
 
 
@@ -189,11 +212,10 @@ int ptsan_enable_lam_u48(void) {
 #endif
 }
 
-SANITIZER_INTERFACE_ATTRIBUTE void __ptsan_init() {
-  CHECK(!ptsan_init_is_running);
-  if (ptsan_initialized)
-    return;
+static void ptsanInitStart() {
   ptsan_init_is_running = true;
+
+  SetCommonFlagsDefaults();
 
   ValidateCls();
 
@@ -204,9 +226,19 @@ SANITIZER_INTERFACE_ATTRIBUTE void __ptsan_init() {
 
   InitializeInterceptors();
 
-  PTSanTSDInit(PTSanTSDDtor);
-
   InitializeIDs();
+
+  // An instrumented libc's global proxy constructors run before initialization
+  // finishes. Give them valid slow-path stack-ID state; the normal per-thread
+  // bucket is installed below by SetCurrentThread.
+  ptsan_next_stack_id = 1;
+  ptsan_stack_id_limit = 0;
+}
+
+static void ptsanInitFinish() {
+#ifndef PTSAN_MUSL_INTERCEPTION
+  PTSanTSDInit(PTSanTSDDtor);
+#endif
 
   PTSanThread *main_thread = PTSanThread::Create(nullptr, nullptr);
   SetCurrentThread(main_thread);
@@ -214,13 +246,45 @@ SANITIZER_INTERFACE_ATTRIBUTE void __ptsan_init() {
 
   Atexit(ptsan_atexit);
 
+  // Initialization may call instrumented libc with bootstrap ID-zero pointers.
+  // Close the permissive ranges only after the last setup call into libc.
+  if (ClStrictMode) {
+    ptsan_bounds[0].base = 0;
+    ptsan_bounds[0].span = 0;
+    ptsan_bounds[DefaultIDNo].base = 0;
+    ptsan_bounds[DefaultIDNo].span = 0;
+  }
+
   ptsan_init_is_running = false;
   ptsan_initialized = true;
+#ifndef PTSAN_INSTRUMENTED_LIBC
   // ptsan is initialized, but there are potentially libc calls between
   // here an main (in c++ at least). PointerTagSanitizer will add a
   // call to ptsan_enable_libc_instr in main, which will set this back to
   // zero
   ptsan_in_libc++;
+#endif
   //Printf("Done initializing ptsan\n");
 }
+
+SANITIZER_INTERFACE_ATTRIBUTE void __ptsan_init() {
+  CHECK(!ptsan_init_is_running);
+  if (ptsan_initialized)
+    return;
+
+  ptsanInitStart();
+#ifndef PTSAN_INSTRUMENTED_LIBC
+  ptsanInitFinish();
+#endif
+}
+
+#ifdef PTSAN_INSTRUMENTED_LIBC
+// An instrumented libc needs its PTSan-generated global proxy constructors to
+// run after the ID tables exist but before initialization calls into libc.
+SANITIZER_INTERFACE_ATTRIBUTE void __ptsan_finish_instrumented_libc_init() {
+  CHECK(ptsan_init_is_running);
+  CHECK(!ptsan_initialized);
+  ptsanInitFinish();
+}
+#endif
 }

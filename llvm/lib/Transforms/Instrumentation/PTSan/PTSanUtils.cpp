@@ -6,10 +6,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "PTSanAnchors.h"
 #include "llvm/Analysis/CFG.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include "llvm/Analysis/PostDominators.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/DomTreeUpdater.h"
@@ -29,6 +31,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/GlobalAlias.h"
 #include "llvm/IR/GlobalVariable.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/InstVisitor.h"
@@ -79,6 +82,61 @@ cl::opt<bool> ClPTSanLooseLoopOptimizations(
   cl::init(false)
 );
 
+// Prevent codegen from expanding calls into unchecked, unstripped accesses.
+bool addNoBuiltinForPointerFns(Module &M) {
+  bool Modified = false;
+  for (Function &F : M) {
+    if (F.isIntrinsic()) {
+      continue;
+    }
+
+    bool HasPtrParam = false;
+    for (Type *ParamTy : F.getFunctionType()->params()) {
+      if (ParamTy->isPointerTy()) {
+        HasPtrParam = true;
+        break;
+      }
+    }
+
+    if (HasPtrParam) {
+      F.addFnAttr(Attribute::NoBuiltin);
+      if (!F.hasFnAttribute(Attribute::OptimizeNone)) {
+        F.addFnAttr(Attribute::MinSize);
+      }
+      Modified = true;
+    }
+  }
+  return Modified;
+}
+
+// Based on lowerLoadRelative in CodeGen/PreISelIntrinsicLowering.cpp.
+// Expose the four-byte load before PTSan checks and strips memory accesses,
+// without changing how other intrinsics are lowered.
+bool lowerLoadRelativeIntrinsics(Module &M) {
+  bool Modified = false;
+  Type *Int32Ty = Type::getInt32Ty(M.getContext());
+  for (Function &F : M) {
+    if (F.getIntrinsicID() != Intrinsic::load_relative)
+      continue;
+
+    for (Use &U : make_early_inc_range(F.uses())) {
+      auto *CI = dyn_cast<CallInst>(U.getUser());
+      if (!CI || CI->getCalledOperand() != &F)
+        continue;
+
+      IRBuilder<> B(CI);
+      Value *OffsetPtr =
+          B.CreatePtrAdd(CI->getArgOperand(0), CI->getArgOperand(1));
+      Value *OffsetI32 = B.CreateAlignedLoad(Int32Ty, OffsetPtr, Align(4));
+      Value *ResultPtr = B.CreatePtrAdd(CI->getArgOperand(0), OffsetI32);
+      CI->replaceAllUsesWith(ResultPtr);
+      CI->eraseFromParent();
+      Modified = true;
+    }
+  }
+  return Modified;
+}
+
 bool materializeConstantUsersOfGlobal(Function &F, GlobalValue *G) {
   SmallVector<Constant *, 16> GlobalUsingConstants;
 
@@ -86,6 +144,12 @@ bool materializeConstantUsersOfGlobal(Function &F, GlobalValue *G) {
     Use &U = *UI++;
     Constant *C = dyn_cast<Constant>(U.getUser());
     if (!C) {
+      continue;
+    }
+
+    // A GlobalVariable user is a module-level initializer and cannot be
+    // materialized inside F.
+    if (isa<GlobalVariable>(C)) {
       continue;
     }
 
@@ -102,67 +166,122 @@ bool materializeConstantUsersOfGlobal(Function &F, GlobalValue *G) {
                                                true);
 }
 
-StringRef getPTSanPolarityName(Polarity P) {
-  switch (P) {
-  case Polarity::Tagged:
-    return "tagged";
-  case Polarity::Stripped:
-    return "stripped";
-  }
-  llvm_unreachable("unknown PTSan polarity");
-}
-
-static std::string getPTSanPolarityMDName(Polarity P, StringRef Prefix) {
-  std::string MDName = Prefix.str();
-  MDName += getPTSanPolarityName(P).str();
-  return MDName;
-}
-
-void setPTSanPolarityMetadata(Value *V, Polarity P, StringRef Prefix) {
-  auto *I = dyn_cast<Instruction>(V);
-  if (!I) {
-    return;
+GlobalVariable *getPTSanDataGlobal(Value *V) {
+  if (auto *GV = dyn_cast<GlobalVariable>(V)) {
+    return GV;
   }
 
-  Polarity OtherPolarity =
-      P == Polarity::Tagged ? Polarity::Stripped : Polarity::Tagged;
-  std::string OtherMDName = getPTSanPolarityMDName(OtherPolarity, Prefix);
-  assert(!I->getMetadata(OtherMDName) &&
-         "contradictory PTSan polarity metadata");
+  auto *GA = dyn_cast<GlobalAlias>(V);
+  if (!GA) {
+    return nullptr;
+  }
 
-  I->setMetadata(getPTSanPolarityMDName(P, Prefix),
-                 MDNode::get(I->getContext(), {}));
+  GlobalObject *Aliasee = GA->getAliaseeObject();
+  while (auto *AliasedAlias = dyn_cast<GlobalAlias>(Aliasee)) {
+    Aliasee = AliasedAlias->getAliaseeObject();
+  }
+  return dyn_cast<GlobalVariable>(Aliasee);
 }
 
-std::optional<Polarity> getPTSanPolarityMetadata(Value *V, StringRef Prefix) {
-  auto *I = dyn_cast<Instruction>(V);
-  if (!I) {
+// Fixed representations constrain the value node. Otherwise MinCut chooses
+// its polarity from the surrounding uses and conversion costs.
+std::optional<Polarity>
+getRequiredPolarity(PointerTagSanitizer &DS, Value *V) {
+  if (DS.getAsAnchor<SourceAnchor>(V) || DS.getAsAnchor<StripAnchor>(V)) {
+    return Polarity::Stripped;
+  }
+
+  // Source inputs are raw even when visited before their SourceAnchor.
+  if (llvm::any_of(V->users(), [&](User *U) {
+        auto Source = DS.getAsAnchor<SourceAnchor>(U);
+        return Source && Source->getSource() == V;
+      })) {
+    return Polarity::Stripped;
+  }
+
+  if (DS.getAsAnchor<TaggedAnchor>(V)) {
+    return Polarity::Tagged;
+  }
+
+  // A data global has both representations available without a conversion:
+  // its GlobalValue is the raw address, while its proxy (when one exists)
+  // contains the tagged address.
+  // Without a proxy, the tagged representation explicitly carries ID zero.
+  if (getPTSanDataGlobal(V)) {
     return std::nullopt;
   }
 
-  bool Tagged =
-      I->getMetadata(getPTSanPolarityMDName(Polarity::Tagged, Prefix));
-  bool Stripped =
-      I->getMetadata(getPTSanPolarityMDName(Polarity::Stripped, Prefix));
-  assert(!(Tagged && Stripped) && "contradictory PTSan polarity metadata");
-  if (Tagged) {
+  auto *I = dyn_cast<Instruction>(V);
+  if (!I) {
     return Polarity::Tagged;
   }
-  if (Stripped) {
-    return Polarity::Stripped;
+
+  if (isa<PHINode, SelectInst, ShuffleVectorInst>(I) ||
+      getPTSanRewriteablePointerUse(*I)) {
+    return std::nullopt;
   }
-  return std::nullopt;
+
+  // Other roots arrive tagged; stripped uses need an explicit conversion.
+  return Polarity::Tagged;
 }
 
-void clearPTSanPolarityMetadata(Function &F, StringRef Prefix) {
-  for (Instruction &I : instructions(F)) {
-    I.setMetadata(getPTSanPolarityMDName(Polarity::Tagged, Prefix), nullptr);
-    I.setMetadata(getPTSanPolarityMDName(Polarity::Stripped, Prefix), nullptr);
+void setPTSanPolarityMetadata(Instruction &I, Polarity P) {
+  StringRef Name =
+      P == Polarity::Tagged ? "ptsan.tagged" : "ptsan.stripped";
+  StringRef Opposite =
+      P == Polarity::Tagged ? "ptsan.stripped" : "ptsan.tagged";
+  assert(!I.getMetadata(Opposite) && "conflicting PTSan polarity metadata");
+  if (I.getMetadata(Name)) {
+    return;
   }
+
+  I.setMetadata(Name, MDNode::get(I.getContext(), {}));
+}
+
+PTSanPolarityReader::PTSanPolarityReader(PointerTagSanitizer &DS, Function &F)
+    : DS(DS) {
+  for (Instruction &I : instructions(F)) {
+    if (!I.getType()->isPtrOrPtrVectorTy()) {
+      continue;
+    }
+
+    getPolarity(&I);
+  }
+}
+
+Polarity PTSanPolarityReader::getPolarity(Value *V) {
+  // A global symbol denotes the raw address. Tagged uses are represented by
+  // proxy loads, or an explicit zero-ID tag when the global has no proxy.
+  if (getPTSanDataGlobal(V)) {
+    return Polarity::Stripped;
+  }
+
+  if (isa<Argument>(V)) {
+    // Arguments normally arrive tagged. A SourceAnchor identifies an argument
+    // whose raw storage is supplied by the caller, such as main's argv.
+    for (User *U : V->users()) {
+      if (auto Source = DS.getAsAnchor<SourceAnchor>(U)) {
+        if (Source->getSource() == V) {
+          return Polarity::Stripped;
+        }
+      }
+    }
+    return Polarity::Tagged;
+  }
+
+  auto *I = dyn_cast<Instruction>(V);
+  if (!I) {
+    return Polarity::Tagged;
+  }
+
+  bool Tagged = I->getMetadata("ptsan.tagged");
+  bool Stripped = I->getMetadata("ptsan.stripped");
+  assert((Tagged != Stripped) && "pointer instruction needs one polarity");
+  return Tagged ? Polarity::Tagged : Polarity::Stripped;
 }
 
 Use *getPTSanRewriteablePointerUse(Instruction &I) {
-  if (!I.getType()->isPointerTy()) {
+  if (!I.getType()->isPtrOrPtrVectorTy()) {
     return nullptr;
   }
 
@@ -170,23 +289,27 @@ Use *getPTSanRewriteablePointerUse(Instruction &I) {
     return &GEP->getOperandUse(0);
   }
 
+  if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
+    return &Freeze->getOperandUse(0);
+  }
+
   if (auto *Cast = dyn_cast<CastInst>(&I)) {
-    if (Cast->getOperand(0)->getType()->isPointerTy()) {
+    if (Cast->getOperand(0)->getType()->isPtrOrPtrVectorTy()) {
       return &Cast->getOperandUse(0);
     }
     return nullptr;
-  }
-
-  if (auto *Freeze = dyn_cast<FreezeInst>(&I)) {
-    return &Freeze->getOperandUse(0);
   }
 
   return nullptr;
 }
 
 Value *getPTSanPointerPeel(Value *V) {
-  if (!V->getType()->isPointerTy()) {
+  if (!V->getType()->isPtrOrPtrVectorTy()) {
     return nullptr;
+  }
+
+  if (Value *Splat = getSplatValue(V)) {
+    return Splat;
   }
 
   if (auto *I = dyn_cast<Instruction>(V)) {
@@ -202,7 +325,7 @@ Value *getPTSanPointerPeel(Value *V) {
   if (Operator::getOpcode(V) == Instruction::BitCast ||
       Operator::getOpcode(V) == Instruction::AddrSpaceCast) {
     Value *Operand = cast<Operator>(V)->getOperand(0);
-    if (Operand->getType()->isPointerTy()) {
+    if (Operand->getType()->isPtrOrPtrVectorTy()) {
       return Operand;
     }
     return nullptr;
@@ -222,6 +345,22 @@ Value *getPTSanPointerPeel(Value *V) {
   return nullptr;
 }
 
+std::pair<bool, bool>
+getPTSanUsedShuffleOperands(const ShuffleVectorInst &Shuffle) {
+  unsigned NumSrcElts = cast<VectorType>(Shuffle.getOperand(0)->getType())
+                            ->getElementCount()
+                            .getKnownMinValue();
+  bool UsesLHS = false;
+  bool UsesRHS = false;
+  for (int MaskElt : Shuffle.getShuffleMask()) {
+    if (MaskElt < 0) {
+      continue;
+    }
+    UsesLHS |= (unsigned)(MaskElt) < NumSrcElts;
+    UsesRHS |= (unsigned)(MaskElt) >= NumSrcElts;
+  }
+  return {UsesLHS, UsesRHS};
+}
 
 /////////////////////////////////
 // PTSanUtils
@@ -394,7 +533,8 @@ CmpResult PTSanUtils::compareSCEVs(const SCEV *A, const SCEV *B) {
     const SCEV *PtrA = SE.getPointerBase(A);
     const SCEV *PtrB = SE.getPointerBase(B);
     if (PtrA != PtrB) {
-      DBG(errs() << "\t\t\tDifferent pointer bases: " << *PtrA << " and " << *PtrB << "\n");
+      DBG(errs() << "\t\t\tDifferent pointer bases: " << *PtrA << " and "
+                 << *PtrB << "\n");
       return CmpResult::Unknown;
     }
 
@@ -402,7 +542,7 @@ CmpResult PTSanUtils::compareSCEVs(const SCEV *A, const SCEV *B) {
     if (A->getType()->isPointerTy()) {
       OffsetA = SE.removePointerBase(A);
       OffsetB = SE.removePointerBase(B);
-    } else{
+    } else {
       OffsetA = A;
       OffsetB = B;
     }
@@ -532,13 +672,23 @@ PTSanUtils::getSCEVInstrs(const SCEV *Expr) {
   return Out;
 }
 
-bool PTSanUtils::depsDominateLoc(const SCEV *S, Instruction *Loc) {
-  DBG(errs() << "Checking if deps for " << *S << " dominate\n\t" << *Loc << "\n");
-  for (Instruction *J : getSCEVInstrs(S)) {
-    if (!DT.dominates(J, Loc)) {
-      DBG(errs() << "Scev does not dominate instr\n");
+bool PTSanUtils::depsDominateLoc(
+    const SmallPtrSetImpl<Instruction *> &Deps, Instruction *Loc) {
+  for (Instruction *Dep : Deps) {
+    if (!DT.dominates(Dep, Loc)) {
+      DBG(errs() << "\tdep " << *Dep << "\n\t\tdoes not dominate IP^\n");
       return false;
     }
+  }
+
+  return true;
+}
+
+bool PTSanUtils::depsDominateLoc(const SCEV *S, Instruction *Loc) {
+  DBG(errs() << "Checking if deps for " << *S << " dominate\n\t" << *Loc << "\n");
+  if (!depsDominateLoc(getSCEVInstrs(S), Loc)) {
+    DBG(errs() << "Scev does not dominate instr\n");
+    return false;
   }
 
   DBG(errs() << "Scev dominates instr\n");
@@ -571,13 +721,142 @@ Instruction *PTSanUtils::findLocalSCEVRepresentative(const SCEV *S,
   return nullptr;
 }
 
-std::shared_ptr<AccessRange> PTSanUtils::getLoopAccessExtent(
-  Value *V, Value *TypeSize, Loop *L) {
-  const SCEV *S = SE.getSCEV(V);
+const SCEV *PTSanUtils::getAddRecFreeRepresentation(const SCEV *S,
+                                                    Instruction *Loc) {
+  if (!SE.containsAddRecurrence(S)) {
+    return S;
+  }
+
+  class Rewriter : public SCEVRewriteVisitor<Rewriter> {
+    PTSanUtils &PTU;
+    Instruction *Loc;
+
+  public:
+    bool Failed = false;
+
+    Rewriter(PTSanUtils &PTU, Instruction *Loc)
+        : SCEVRewriteVisitor(PTU.SE), PTU(PTU), Loc(Loc) {}
+
+    const SCEV *visit(const SCEV *S) {
+      if (SE.containsAddRecurrence(S)) {
+        if (Instruction *Rep = PTU.findLocalSCEVRepresentative(S, Loc)) {
+          DBG(errs() << "Using local IR representative for SCEV " << *S
+                     << ": " << *Rep << "\n");
+          return SE.getUnknown(Rep);
+        }
+      }
+      return SCEVRewriteVisitor<Rewriter>::visit(S);
+    }
+
+    const SCEV *visitAddRecExpr(const SCEVAddRecExpr *AR) {
+      // SCEV expressions are canonicalized, so an AddRec may differ by an
+      // invariant offset from the SSA value that represents it. Use that value
+      // only when the offset is itself recurrence-free and available at Loc.
+      for (BasicBlock &BB : PTU.F) {
+        for (Instruction &I : BB) {
+          if (I.getType() != AR->getType() ||
+              (&I != Loc && !PTU.DT.dominates(&I, Loc))) {
+            continue;
+          }
+
+          const SCEV *Offset = SE.getMinusSCEV(AR, SE.getSCEV(&I));
+          if (isa<SCEVCouldNotCompute>(Offset) ||
+              SE.containsAddRecurrence(Offset) ||
+              !PTU.depsDominateLoc(Offset, Loc)) {
+            continue;
+          }
+
+          DBG(errs() << "Representing AddRec " << *AR << " as " << I
+                     << " plus " << *Offset << "\n");
+          return SE.getAddExpr(SE.getUnknown(&I), Offset);
+        }
+      }
+
+      Failed = true;
+      return AR;
+    }
+  };
+
+  Rewriter R(*this, Loc);
+  const SCEV *Representation = R.visit(S);
+  if (R.Failed) {
+    return nullptr;
+  }
+  assert(!SE.containsAddRecurrence(Representation) &&
+         "local SCEV representation still contains an AddRec");
+  return Representation;
+}
+
+std::shared_ptr<SimpleAccessRange>
+PTSanUtils::getScalarEnvelope(Value *Ptr, Value *ElementSize, Value *Mask,
+                              Instruction *Access) {
+  if (Ptr->getType()->isVectorTy()) {
+    return nullptr;
+  }
+
+  const SCEV *PointerSCEV = SE.getSCEV(Ptr);
+  if (!depsDominateLoc(PointerSCEV, Access)) {
+    PointerSCEV = SE.getUnknown(Ptr);
+  }
+
+  if (!Mask) {
+    return std::make_shared<SimpleAccessRange>(
+        SE, PointerSCEV, SE.getSCEV(ElementSize));
+  }
+
+  auto *MaskConstant = dyn_cast<Constant>(Mask);
+  if (!MaskConstant) {
+    return nullptr;
+  }
+  auto *MaskTy = dyn_cast<FixedVectorType>(Mask->getType());
+  if (!MaskTy) {
+    return nullptr;
+  }
+  auto *ElementSizeConstant = cast<ConstantInt>(ElementSize);
+
+  std::optional<unsigned> FirstActiveLane;
+  unsigned LastActiveLane = 0;
+  for (unsigned Lane = 0; Lane < MaskTy->getNumElements(); ++Lane) {
+    auto *LaneValue =
+        dyn_cast_or_null<ConstantInt>(MaskConstant->getAggregateElement(Lane));
+    if (!LaneValue) {
+      return nullptr;
+    }
+    if (LaneValue->isZero()) {
+      continue;
+    }
+    if (!FirstActiveLane) {
+      FirstActiveLane = Lane;
+    }
+    LastActiveLane = Lane;
+  }
+
+  Type *SizeTy = ElementSize->getType();
+  if (!FirstActiveLane) {
+    return std::make_shared<SimpleAccessRange>(
+        SE, PointerSCEV, SE.getZero(SizeTy));
+  }
+
+  uint64_t ElementBytes = ElementSizeConstant->getZExtValue();
+  uint64_t ByteOffset = *FirstActiveLane * ElementBytes;
+  uint64_t ByteSize = (LastActiveLane - *FirstActiveLane + 1) * ElementBytes;
+  // SCEV represents pointer addition as a pointer base plus a pointer-width
+  // integer offset.
+  Type *OffsetIntTy = SE.getEffectiveSCEVType(Ptr->getType());
+  const SCEV *EnvelopePtr = SE.getAddExpr(
+      PointerSCEV, SE.getConstant(OffsetIntTy, ByteOffset));
+  const SCEV *EnvelopeSize = SE.getConstant(SizeTy, ByteSize);
+  return std::make_shared<SimpleAccessRange>(SE, EnvelopePtr, EnvelopeSize);
+}
+
+std::shared_ptr<AccessRange>
+PTSanUtils::getLoopAccessExtent(const SimpleAccessRange &Range, Loop *L) {
+  const SCEV *S = Range.Min;
   if (!SE.containsAddRecurrence(S)) {
     return nullptr;
   }
-  DBG(errs() << "Getting loop access extent for " << *V << " in terms of " << L->getName() << "\n");
+  DBG(errs() << "Getting loop access extent for " << *S << " in terms of "
+             << L->getName() << "\n");
   DBG(errs() << "Scev is " << *S << "\n");
 
   DBG(errs() << "Calculating start: \n");
@@ -589,8 +868,9 @@ std::shared_ptr<AccessRange> PTSanUtils::getLoopAccessExtent(
     return nullptr;
   }
 
-  assert(Start->getType()->isPointerTy());
-  assert(Last->getType()->isPointerTy());
+  if (Range.isSizeZero()) {
+    return std::make_shared<SimpleAccessRange>(SE, Start, Range.Size);
+  }
 
   Type *U64Ty = IntegerType::get(Ctx, 64);
   Type *U48Ty = IntegerType::get(Ctx, 48);
@@ -608,26 +888,19 @@ std::shared_ptr<AccessRange> PTSanUtils::getLoopAccessExtent(
     SE.getMinusSCEV(LastMasked, StartMasked, SCEV::NoWrapFlags::FlagNSW);
 
   DBG(errs() << "Delta is " << *Delta << "\n");
-  const SCEV *TS =  SE.getNoopOrAnyExtend(SE.getSCEV(TypeSize), IntegerType::get(Ctx, 64));
+  const SCEV *TS = SE.getNoopOrAnyExtend(Range.Size, U64Ty);
 
 
   BasicBlock *Preheader = L->getLoopPreheader();
   assert(Preheader && "PTSan expects preheader");
   Instruction *LocalRepLoc = Preheader->getTerminator();
 
-  auto maybeUseLocalIRRepresentative = [&](const SCEV *RangeSCEV) {
-    if (!SE.containsAddRecurrence(RangeSCEV)) {
-      return RangeSCEV;
+  auto useLocalSCEVRepresentation = [&](const SCEV *RangeSCEV) {
+    if (const SCEV *Representation =
+            getAddRecFreeRepresentation(RangeSCEV, LocalRepLoc)) {
+      return Representation;
     }
-
-    Instruction *Rep = findLocalSCEVRepresentative(RangeSCEV, LocalRepLoc);
-    if (!Rep) {
-      return RangeSCEV;
-    }
-
-    DBG(errs() << "Using local IR representative for loop range SCEV "
-               << *RangeSCEV << ": " << *Rep << "\n");
-    return SE.getUnknown(Rep);
+    return RangeSCEV;
   };
 
   // Only form a simple min+size range when ScalarEvolution can prove the
@@ -637,8 +910,8 @@ std::shared_ptr<AccessRange> PTSanUtils::getLoopAccessExtent(
     DBG(errs() << "Loop increases\n");
     const SCEV *Size = SE.getAddExpr(Delta, TS, NW::FlagNUW);
     return std::make_shared<SimpleAccessRange>(
-      SE, maybeUseLocalIRRepresentative(Start),
-      maybeUseLocalIRRepresentative(Size));
+      SE, useLocalSCEVRepresentation(Start),
+      useLocalSCEVRepresentation(Size));
   }
 
   if (SE.isKnownPredicate(ICmpInst::ICMP_UGE, StartMasked, LastMasked)) {
@@ -646,16 +919,16 @@ std::shared_ptr<AccessRange> PTSanUtils::getLoopAccessExtent(
     const SCEV *Size = SE.getAddExpr(SE.getNegativeSCEV(Delta), TS, NW::FlagNUW);
 
     return std::make_shared<SimpleAccessRange>(
-      SE, maybeUseLocalIRRepresentative(Last),
-      maybeUseLocalIRRepresentative(Size));
+      SE, useLocalSCEVRepresentation(Last),
+      useLocalSCEVRepresentation(Size));
   }
 
   DBG(errs() << "Could not solve direction. Will handle at runtime\n");
 
   return std::make_shared<LoopAccessRange>(
-    SE, maybeUseLocalIRRepresentative(Start),
-    maybeUseLocalIRRepresentative(Last), maybeUseLocalIRRepresentative(Delta),
-    maybeUseLocalIRRepresentative(TS), L);
+    SE, useLocalSCEVRepresentation(Start),
+    useLocalSCEVRepresentation(Last),
+    useLocalSCEVRepresentation(Delta), useLocalSCEVRepresentation(TS));
 }
 
 const SCEV * PTSanUtils::solveAccessExtent(
@@ -952,10 +1225,8 @@ static BasicBlock *getFirstCommonDominatee(DominatorTree &DT, BasicBlock *A, Bas
 }
 
 HoistTarget PTSanUtils::getFirstCommonInsertionPoint(
-    std::initializer_list<Value *> Points) {
-  if (Points.size() < 2) {
-    errs() << "Call this with at least 2\n";
-  };
+    std::initializer_list<HoistTarget> Targets) {
+  assert(Targets.size() >= 2 && "expected at least two hoist targets");
 
   auto rec = [&] (const HoistTarget &H1, const HoistTarget &H2) -> HoistTarget {
       if (H1.Instr == H2.Instr) {
@@ -978,32 +1249,18 @@ HoistTarget PTSanUtils::getFirstCommonInsertionPoint(
       return {&*BB->getFirstInsertionPt(), BEFORE};
   };
 
-  optional<HoistTarget> Acc = nullopt;
-
-  DBG(errs() << "FCD between:");
-  for (Value *Point : Points) {
-    Instruction *I = dyn_cast<Instruction>(Point);
-    if (!I) {
-      continue;
-    }
-
-    DBG(errs() << "\t" << *Point << "\n");
-    HoistTarget T = getFirstIPAfter(Point);
-    if (!Acc) {
-      Acc = T;
-      continue;
-    }
-
-    DBG(errs() << "\t\tT is " << *T.getIP() << "\n");
-    Acc = rec(*Acc, T);
+  auto It = Targets.begin();
+  HoistTarget Acc = *It++;
+  DBG(errs() << "FCD between:\n\t" << *Acc.getIP() << "\n");
+  for (; It != Targets.end(); ++It) {
+    HoistTarget T = *It;
+    DBG(errs() << "\t" << *T.getIP() << "\n");
+    Acc = rec(Acc, T);
   }
 
-  if (!Acc) {
-    Acc = {&*F.getEntryBlock().getFirstInsertionPt(), BEFORE};
-  }
-  DBG(errs() << "is :\n" << *Acc->getIP() << "\n");
+  DBG(errs() << "is :\n" << *Acc.getIP() << "\n");
 
-  return *Acc;
+  return Acc;
 }
 
 HoistTarget PTSanUtils::getFirstIPAfter(Value *V) {
@@ -1017,6 +1274,20 @@ HoistTarget PTSanUtils::getFirstIPAfter(Value *V) {
   } else {
     return {&*F.getEntryBlock().getFirstInsertionPt(), BEFORE};
   }
+}
+
+// If Ty is a vector and V is not, splat V to match Ty
+Value *PTSanUtils::splatToMatchType(Value *V, Type *Ty) {
+  if (V->getType() == Ty) {
+    return V;
+  }
+
+  auto *VectorTy = dyn_cast<VectorType>(Ty);
+  assert(VectorTy && VectorTy->getElementType() == V->getType() &&
+         "expected a scalar value matching the vector element type");
+  IRBuilder<> IRB(getFirstIPAfter(V).getIP());
+  return IRB.CreateVectorSplat(VectorTy->getElementCount(), V,
+                               V->getName() + ".ptsan.splat");
 }
 
 static bool isLLVMInternalAccess(Value *Ptr) {
@@ -1160,12 +1431,27 @@ void FindMemAccesses::visitAtomicCmpXchg(AtomicCmpXchgInst &I) {
 void FindMemAccesses::visitIntrinsicInst(IntrinsicInst &I) {
   switch(I.getIntrinsicID()) {
     case Intrinsic::masked_load:
-      // XXX: this wants a size field
-      PtrOps.push_back(PtrOp(&I, 0, EXOTIC, nullptr));
+    case Intrinsic::masked_gather: {
+      auto *ResultTy = cast<VectorType>(I.getType());
+      TypeSize ElementSize = DL.getTypeStoreSize(ResultTy->getElementType());
+      Value *Size =
+          ConstantInt::get(Type::getInt64Ty(I.getContext()),
+                           ElementSize.getFixedValue());
+      Value *Mask = I.getArgOperand(2);
+      PtrOps.push_back(PtrOp(&I, 0, POINT, Size, Mask));
       return;
+    }
     case Intrinsic::masked_store:
-      PtrOps.push_back(PtrOp(&I, 1, EXOTIC, nullptr));
+    case Intrinsic::masked_scatter: {
+      auto *ValueTy = cast<VectorType>(I.getArgOperand(0)->getType());
+      TypeSize ElementSize = DL.getTypeStoreSize(ValueTy->getElementType());
+      Value *Size =
+          ConstantInt::get(Type::getInt64Ty(I.getContext()),
+                           ElementSize.getFixedValue());
+      Value *Mask = I.getArgOperand(3);
+      PtrOps.push_back(PtrOp(&I, 1, POINT, Size, Mask));
       return;
+    }
     case Intrinsic::memcpy:
     case Intrinsic::memmove:
     {
@@ -1225,14 +1511,14 @@ CmpResult swapOpsCmpResult(CmpResult C) {
 //      i1 <Complete>,
 //      {
 //         !"base",
-//         <ValueAsMetadata for Base0>,
+//         <SerializedBase0>,
 //         !Range00,
 //         !Range01,
 //         ...
 //       },
 //      {
 //         !"base",
-//         <ValueAsMetadata for Base1>,
+//         <SerializedBase1>,
 //         !Range10,
 //         !Range11,
 //         ...
@@ -1267,662 +1553,67 @@ MDNode *SerializeBoundsInfo::serializeSolvedRanges(
   return MDNode::get(Ctx, RootOps);
 }
 
-std::pair<bool, DenseMap<Value *, SmallVector<AccessRangePtr>>>
-DeserializeBoundsInfo::deserializeSolvedRanges(MDNode *Root) {
-
-  // Expect: !{ !"ptsan.loop.bounds", i1 <Complete>, !Base0, !Base1, ... }
-  assert(Root && Root->getNumOperands() >= 2);
-  auto *Tag = cast<MDString>(Root->getOperand(0));
-  assert(Tag->getString() == "ptsan.loop.bounds");
-  auto *CompleteCAM = cast<ConstantAsMetadata>(Root->getOperand(1));
-
-  auto *CompleteCI = cast<ConstantInt>(CompleteCAM->getValue());
-  assert(CompleteCI->getType()->isIntegerTy(1));
-  bool Complete = CompleteCI->isOne();
-
-  DenseMap<Value *, SmallVector<AccessRangePtr>> BaseToRanges;
-  unsigned NumOps = Root->getNumOperands();
-  for (unsigned I = 2; I < NumOps; ++I) {
-    MDNode *Entry = cast<MDNode>(Root->getOperand(I));
-    auto elt = deserializeBaseRangeEntry(Entry);
-    if (!elt) {
-      Complete = false;
-      continue;
-    }
-
-    auto [Base, Ranges] = *elt;
-    BaseToRanges[Base] = Ranges;
-  }
-
-  return std::make_pair(Complete, BaseToRanges);
-}
-
-
-void SerializeBoundsInfo::addLoopTag(Loop *L, MDNode *Tag) {
-  assert(Tag != nullptr);
-
-  MDNode *OldID = L->getLoopID();
-  SmallVector<Metadata *, 8> NewOps;
-
-  if (OldID != nullptr) {
-    // Preserve existing loop metadata (unroll/vectorize hints, etc).
-    for (unsigned I = 0; I < OldID->getNumOperands(); I++) {
-      NewOps.push_back(OldID->getOperand(I));
-    }
-  } else {
-    // First operand is a self-reference placeholder; we patch it below.
-    NewOps.push_back(nullptr);
-  }
-
-  NewOps.push_back(Tag);
-
-  MDNode *NewID = MDNode::getDistinct(Ctx, NewOps);
-  // Fix the self-reference in operand 0.
-  NewID->replaceOperandWith(0, NewID);
-
-  L->setLoopID(NewID);
-}
-
-// LoopID is:
-//   distinct !{ !LoopID, !llvm.loop.unroll.disable, ..., !PtsanLoopBounds }
-//
-// and !PtsanLoopBounds is:
-//   !{ !"ptsan.loop.bounds", i1 <Complete>, !Base0, !Base1, ... }
-MDNode *SerializeBoundsInfo::getPTSanBounds(const MDNode *LoopID) {
-  if (LoopID == nullptr) {
-    return nullptr;
-  }
-
-  unsigned NumOps = LoopID->getNumOperands();
-  if (NumOps <= 1) {
-    return nullptr;
-  }
-
-  for (unsigned I = 1; I < NumOps; I++) {
-    Metadata *Op = LoopID->getOperand(I);
-
-    MDNode *Node = dyn_cast<MDNode>(Op);
-    if (Node == nullptr || Node->getNumOperands() == 0) {
-      continue;
-    }
-
-    MDString *Tag = dyn_cast<MDString>(Node->getOperand(0));
-    if (Tag == nullptr) {
-      continue;
-    }
-
-    if (Tag->getString() == "ptsan.loop.bounds") {
-      return Node;
-    }
-  }
-
-  return nullptr;
-}
-
-Metadata *SerializeBoundsInfo::serializeType(Type *Ty) {
-  // Integer: !"int", i32 <bitwidth>
-  if (Ty->isIntegerTy()) {
-    unsigned BitWidth = ((IntegerType *)Ty)->getBitWidth();
-    Constant *BW = ConstantInt::get(Type::getInt32Ty(Ctx), BitWidth);
-
-    Metadata *Ops[2] = {
-      MDString::get(Ctx, "int"),
-      ConstantAsMetadata::get(BW),
-    };
-    return MDNode::get(Ctx, Ops);
-  }
-
-  // Pointer: !"ptr", i32 <addrspace>
-  if (Ty->isPointerTy()) {
-    unsigned AS = Ty->getPointerAddressSpace();
-    Constant *ASConst = ConstantInt::get(Type::getInt32Ty(Ctx), AS);
-
-    Metadata *Ops[2] = {
-      MDString::get(Ctx, "ptr"),
-      ConstantAsMetadata::get(ASConst),
-    };
-    return MDNode::get(Ctx, Ops);
-  }
-
-  // Array: !"arr", i64 <num-elements>, <elem-type-md>
-  if (Ty->isArrayTy()) {
-    ArrayType *AT = (ArrayType *)Ty;
-    Type *ElemTy = AT->getElementType();
-    uint64_t NumElts = AT->getNumElements();
-
-    Metadata *ElemMD = serializeType(ElemTy);
-    if (!ElemMD) {
-      return nullptr;
-    }
-
-    Constant *NumEltsC =
-      ConstantInt::get(Type::getInt64Ty(Ctx), NumElts);
-
-    Metadata *Ops[3] = {
-      MDString::get(Ctx, "arr"),
-      ConstantAsMetadata::get(NumEltsC),
-      ElemMD
-    };
-    return MDNode::get(Ctx, Ops);
-  }
-
-  // Struct: !"struct", i1 <packed>, i64 <num-fields>, field0Ty, field1Ty, ...
-  if (Ty->isStructTy()) {
-    StructType *ST = cast<StructType>(Ty);
-
-    if (ST->isOpaque()) {
-      errs() << "Unsupported opaque struct type in serializeType: " << *Ty << "\n";
-      return nullptr;
-    }
-
-    SmallVector<Metadata *, 8> Ops;
-    Ops.push_back(MDString::get(Ctx, "struct"));
-
-    bool IsPacked = ST->isPacked();
-    Constant *PackedC =
-      ConstantInt::get(Type::getInt1Ty(Ctx), IsPacked ? 1 : 0);
-    Ops.push_back(ConstantAsMetadata::get(PackedC));
-
-    uint64_t NumElts = ST->getNumElements();
-    Constant *NumEltsC =
-      ConstantInt::get(Type::getInt64Ty(Ctx), NumElts);
-    Ops.push_back(ConstantAsMetadata::get(NumEltsC));
-
-    for (uint64_t I = 0; I < NumElts; I++) {
-      Type *ElemTy = ST->getElementType((unsigned)I);
-      Metadata *FieldMD = serializeType(ElemTy);
-      if (!FieldMD) {
-        return nullptr;
-      }
-      Ops.push_back(FieldMD);
-    }
-
-    return MDNode::get(Ctx, Ops);
-  }
-
-  errs() << "Unsupported type in serializeType: " << *Ty << "\n";
-  return nullptr;
-}
-
-Type *DeserializeBoundsInfo::deserializeType(Metadata *M) {
-  assert(M);
-  MDNode *Node = cast<MDNode>(M);
-  assert(Node->getNumOperands() >= 1);
-
-  MDString *Tag = cast<MDString>(Node->getOperand(0));
-  StringRef Kind = Tag->getString();
-
-  LLVMContext &Ctx = SE.getContext();
-
-  // Integer: !"int", i32 <bitwidth>
-  if (Kind == "int") {
-    assert(Node->getNumOperands() == 2);
-    ConstantAsMetadata *CAM = cast<ConstantAsMetadata>(Node->getOperand(1));
-    ConstantInt *CI = cast<ConstantInt>(CAM->getValue());
-    unsigned BitWidth = (unsigned)CI->getZExtValue();
-    return IntegerType::get(Ctx, BitWidth);
-  }
-
-  // Pointer: !"ptr", i32 <addrspace>
-  if (Kind == "ptr") {
-    assert(Node->getNumOperands() == 2);
-    ConstantAsMetadata *CAM = cast<ConstantAsMetadata>(Node->getOperand(1));
-    ConstantInt *CI = cast<ConstantInt>(CAM->getValue());
-    unsigned AS = (unsigned)CI->getZExtValue();
-    return PointerType::get(Ctx, AS);
-  }
-
-  // Array: !"arr", i64 <num-elements>, <elem-type-md>
-  if (Kind == "arr") {
-    assert(Node->getNumOperands() == 3);
-    ConstantAsMetadata *CAM = cast<ConstantAsMetadata>(Node->getOperand(1));
-    ConstantInt *CI = cast<ConstantInt>(CAM->getValue());
-    uint64_t NumElts = CI->getZExtValue();
-
-    Type *ElemTy = deserializeType(Node->getOperand(2));
-    return ArrayType::get(ElemTy, (uint64_t)NumElts);
-  }
-
-  // Struct: !"struct", i1 <packed>, i64 <num-fields>, field0Ty, ...
-  if (Kind == "struct") {
-    assert(Node->getNumOperands() >= 3);
-
-    // packed flag
-    ConstantAsMetadata *PackedCAM =
-      cast<ConstantAsMetadata>(Node->getOperand(1));
-    ConstantInt *PackedCI = cast<ConstantInt>(PackedCAM->getValue());
-    bool IsPacked = PackedCI->getZExtValue() != 0;
-
-    // field count
-    ConstantAsMetadata *CountCAM =
-      cast<ConstantAsMetadata>(Node->getOperand(2));
-    ConstantInt *CountCI = cast<ConstantInt>(CountCAM->getValue());
-    uint64_t NumElts = CountCI->getZExtValue();
-
-    assert(Node->getNumOperands() == 3 + NumElts &&
-           "struct type metadata operand count mismatch");
-
-    SmallVector<Type *, 8> FieldTys;
-    FieldTys.reserve((size_t)NumElts);
-    for (uint64_t I = 0; I < NumElts; I++) {
-      Type *FieldTy = deserializeType(Node->getOperand(3 + I));
-      FieldTys.push_back(FieldTy);
-    }
-
-    return StructType::get(Ctx, FieldTys, IsPacked);
-  }
-
-  errs() << "Unsupported type tag in deserializeType: " << Kind << "\n";
-  die();
-}
-
-
-MDNode *SerializeBoundsInfo::getOrCreateValueID(Value *V) {
-  Instruction *I = dyn_cast<Instruction>(V);
-  assert(I && "value IDs are only for instructions");
-
-  if (MDNode *Existing = I->getMetadata("ptsan.value.id")) {
-    DBG(errs() << "Reusing existing value id for " << *I << "\n");
-    return Existing;
-  }
-
-  // Otherwise, create a fresh distinct ID node.
-  SmallVector<Metadata *, 1> Ops;
-  Ops.push_back(MDString::get(Ctx, "ptsan.value.id"));
-
-  MDNode *ID = MDNode::getDistinct(Ctx, Ops);
-
-  // Attach to the instruction so future SerializeBoundsInfo instances
-  // (or later calls in this one) see and reuse the same ID.
-  I->setMetadata("ptsan.value.id", ID);
-
-  DBG(errs() << "Set new value id for " << *I << "\n");
-  return ID;
-}
-
-
 Metadata *SerializeBoundsInfo::serializeValue(Value *V) {
   if (isa<GlobalValue>(V) || isa<Constant>(V)) {
     return ValueAsMetadata::get(V);
   }
 
-  if (Argument *Arg = dyn_cast<Argument>(V)) {
-    Constant *ArgNo =
-      ConstantInt::get(Type::getInt32Ty(Ctx), Arg->getArgNo());
-
-    Metadata *Ops[2] = {
-      MDString::get(Ctx, "arg"),
-      ConstantAsMetadata::get(ArgNo)
-    };
-
-    return MDNode::get(Ctx, Ops);
+  assert((isa<Argument>(V) || isa<Instruction>(V)) &&
+         "unsupported value in PTSan loop summary");
+  if (!CaptureIndices.contains(V)) {
+    CaptureIndices[V] = Captures.size();
+    Captures.push_back(V);
   }
-
-  MDNode *ID = getOrCreateValueID(V);
-
-  if (isa<CallInst>(V) || isa<AllocaInst>(V) || isa<PHINode>(V) ||
-      isa<LoadInst>(V)) {
-    Metadata *Ops[2] = {
-      MDString::get(Ctx, "lookup"),
-      ID
-    };
-
-    return MDNode::get(Ctx, Ops);
-  }
-
-  if (GetElementPtrInst *GEP = dyn_cast<GetElementPtrInst>(V)) {
-    // Encode: !"gep", <instr> ElemTyMD, BaseMD, Idx0MD, Idx1MD, ...
-    Metadata *ElemTyMD = serializeType(GEP->getSourceElementType());
-    Metadata *BaseMD   = serializeValue(GEP->getPointerOperand());
-    if (!ElemTyMD || !BaseMD) {
-      return nullptr;
-    }
-
-    SmallVector<Metadata *, 8> Ops;
-    Ops.push_back(MDString::get(Ctx, "gep"));
-    Ops.push_back(ID);
-    Ops.push_back(ElemTyMD);
-    Ops.push_back(BaseMD);
-
-    for (Value *Idx : GEP->indices()) {
-      Metadata *IdxMD = serializeValue(Idx);
-      if (!IdxMD) {
-        return nullptr;
-      }
-      Ops.push_back(IdxMD);
-    }
-
-    return MDNode::get(Ctx, Ops);
-  }
-
-  if (BinaryOperator *BO = dyn_cast<BinaryOperator>(V)) {
-    // Encode: !"binop", <instr>, i32 <opcode>, LHSMD, RHSMD
-    Metadata *LHSMD = serializeValue(BO->getOperand(0));
-    Metadata *RHSMD = serializeValue(BO->getOperand(1));
-    if (!LHSMD || !RHSMD) {
-      return nullptr;
-    }
-
-    Constant *OpcC =
-      ConstantInt::get(Type::getInt32Ty(Ctx), (unsigned)BO->getOpcode());
-
-    Metadata *Ops[5] = {
-      MDString::get(Ctx, "binop"),
-      ID,
-      ConstantAsMetadata::get(OpcC),
-      LHSMD,
-      RHSMD
-    };
-
-    return MDNode::get(Ctx, Ops);
-  }
-
-  if (SelectInst *Sel = dyn_cast<SelectInst>(V)) {
-    // Encode: !"select", <instr>, CondMD, TrueMD, FalseMD
-    Metadata *CondMD  = serializeValue(Sel->getCondition());
-    Metadata *TrueMD  = serializeValue(Sel->getTrueValue());
-    Metadata *FalseMD = serializeValue(Sel->getFalseValue());
-    if (!CondMD || !TrueMD || !FalseMD) {
-      return nullptr;
-    }
-
-    Metadata *Ops[5] = {
-      MDString::get(Ctx, "select"),
-      ID,
-      CondMD,
-      TrueMD,
-      FalseMD
-    };
-
-    return MDNode::get(Ctx, Ops);
-  }
-
-  if (UnaryOperator *UO = dyn_cast<UnaryOperator>(V)) {
-    // Encode: !"unop", <instr>, i32 <opcode>, OpMD
-    Metadata *OpMD = serializeValue(UO->getOperand(0));
-    if (!OpMD) {
-      return nullptr;
-    }
-
-    Constant *OpcC =
-      ConstantInt::get(Type::getInt32Ty(Ctx), (unsigned)UO->getOpcode());
-
-    Metadata *Ops[4] = {
-      MDString::get(Ctx, "unop"),
-      ID,
-      ConstantAsMetadata::get(OpcC),
-      OpMD
-    };
-
-    return MDNode::get(Ctx, Ops);
-  }
-
-  if (CastInst *CI = dyn_cast<CastInst>(V)) {
-    // Encode: !"cast", <instr> i32 <opcode>, SrcValMD, DstTypeMD
-
-    Metadata *SrcMD = serializeValue(CI->getOperand(0));
-    Metadata *DstTyMD = serializeType(CI->getType());
-
-    if (!SrcMD || !DstTyMD) {
-      return nullptr;
-    }
-
-    Constant *OpcC =
-        ConstantInt::get(Type::getInt32Ty(Ctx), (unsigned)CI->getOpcode());
-
-    Metadata *Ops[5] = {
-      MDString::get(Ctx, "cast"),
-      ID,
-      ConstantAsMetadata::get(OpcC),
-      SrcMD,
-      DstTyMD
-    };
-
-    return MDNode::get(Ctx, Ops);
-  }
-
-  // Catch plain constants (e.g. GEP indices like i64 32, or other scalars).
-  // These are stable across passes within a module, so we can just wrap them.
-  if (Constant *C = dyn_cast<Constant>(V)) {
-    return ValueAsMetadata::get(C);
-  }
-
-
-  return nullptr;
+  Metadata *Ops[2] = {
+      MDString::get(Ctx, "capture"),
+      ConstantAsMetadata::get(
+          ConstantInt::get(Type::getInt32Ty(Ctx), CaptureIndices.at(V))),
+  };
+  return MDNode::get(Ctx, Ops);
 }
-
-bool DeserializeBoundsInfo::isValidToInsert(Value *V) {
-  if (V == nullptr) {
-    return false;
-  }
-
-  if(Instruction *I = dyn_cast<Instruction>(V)) {
-    return DT.dominates(I, IP);
-  }
-
-  return true;
-}
-
-void DeserializeBoundsInfo::rememberDeserializedValue(MDNode *Node, Value *V) {
-  Instruction *I = dyn_cast<Instruction>(V);
-  if (I == nullptr) {
-    return;
-  }
-
-  MDNode *ID = cast<MDNode>(Node->getOperand(1));
-  for (BasicBlock &BB : *I->getFunction()) {
-    for (Instruction &Other : BB) {
-      if (&Other != I && Other.getMetadata("ptsan.value.id") == ID) {
-        Other.setMetadata("ptsan.value.id", nullptr);
-      }
-    }
-  }
-
-  I->setMetadata("ptsan.value.id", ID);
-  IDToValue[ID] = I;
-  AmbiguousValueIDs.erase(ID);
-}
-
-bool allValidToInsert(DeserializeBoundsInfo *DBI, std::initializer_list<Value *> vals) {
-  for (Value *v : vals) {
-    if (!DBI->isValidToInsert(v)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-#define CHECK_VALS(...)                                                        \
-  if (!allValidToInsert(this, {__VA_ARGS__})) {                                \
-    return nullptr;                                                            \
-  }
 
 Value *DeserializeBoundsInfo::deserializeValue(Metadata *M) {
-  assert(M);
-
-  // All of these should always be valid
-  if (auto *VAM = dyn_cast<ValueAsMetadata>(M)) {
-    Value *V = VAM->getValue();
-    assert(isValidToInsert(V));
-    return V;
+  if (auto *ValueMD = dyn_cast<ValueAsMetadata>(M)) {
+    return ValueMD->getValue();
   }
 
-  // Non-global:
-  MDNode *Node = cast<MDNode>(M);
-  assert(Node->getNumOperands() >= 2);
-
-  MDString *Tag = cast<MDString>(Node->getOperand(0));
-  IRBuilder<> IRB(IP);
-
-  if (Tag->getString() == "arg") {
-    assert(Node->getNumOperands() == 2);
-    ConstantAsMetadata *CAM = cast<ConstantAsMetadata>(Node->getOperand(1));
-    ConstantInt *CI = cast<ConstantInt>(CAM->getValue());
-
-    unsigned ArgNo = (unsigned)CI->getZExtValue();
-    Function *F = IP->getFunction();
-    assert(ArgNo < F->arg_size());
-
-    return F->getArg(ArgNo);
-  }
-
-  // Instruction:
-  MDNode *ID = cast<MDNode>(Node->getOperand(1));
-  if (ID && !AmbiguousValueIDs.contains(ID)) {
-    if (IDToValue.contains(ID)) {
-      Value *V = IDToValue.at(ID);
-
-      if (isValidToInsert(V)) {
-        return V;
-      }
-
-      if (!CanSynthesize) {
-        return nullptr;
-      }
-    }
-  }
-
-  if (Tag->getString() == "lookup") {
-    // !"gep", <instr>, ElemTyMD, BaseMD, Idx0MD, Idx1MD, ...
-    assert(Node->getNumOperands() == 2);
-    // If we get here, we already tried to look it up and it didn't work
-    return nullptr;
-  }
-
-
-  if (Tag->getString() == "gep") {
-    // !"gep", <instr>, ElemTyMD, BaseMD, Idx0MD, Idx1MD, ...
-    assert(Node->getNumOperands() >= 4);
-    if (!CanSynthesize) {
-      return nullptr;
-    }
-
-    Type *ElemTy = deserializeType(Node->getOperand(2));
-    Value *Base  = deserializeValue(Node->getOperand(3));
-    CHECK_VALS(Base);
-
-    SmallVector<Value *, 4> Indices;
-    for (unsigned I = 4, E = Node->getNumOperands(); I < E; I++) {
-      Value *Idx = deserializeValue(Node->getOperand(I));
-      CHECK_VALS(Idx);
-      Indices.push_back(Idx);
-    }
-
-
-    Value *GEP = IRB.CreateGEP(ElemTy, Base, Indices, "deserialized.gep");
-    rememberDeserializedValue(Node, GEP);
-    return cast<Instruction>(GEP);
-  }
-
-  if (Tag->getString() == "binop") {
-    // !"binop", <instr>, i32 <opcode>, LHSMD, RHSMD
-    assert(Node->getNumOperands() == 5);
-    if (!CanSynthesize) {
-      return nullptr;
-    }
-
-    ConstantAsMetadata *CAM = cast<ConstantAsMetadata>(Node->getOperand(2));
-    ConstantInt *CI = cast<ConstantInt>(CAM->getValue());
-    unsigned OpcVal = (unsigned)CI->getZExtValue();
-
-    Value *LHS = deserializeValue(Node->getOperand(3));
-    Value *RHS = deserializeValue(Node->getOperand(4));
-    CHECK_VALS(LHS, RHS);
-
-    Instruction::BinaryOps Opcode =
-      (Instruction::BinaryOps)OpcVal;
-
-    Value *BinOp = IRB.CreateBinOp(Opcode, LHS, RHS, "deserialized.binop");
-    rememberDeserializedValue(Node, BinOp);
-    return BinOp;
-  }
-
-  if (Tag->getString() == "select") {
-    // !"select", <instr>, CondMD, TrueMD, FalseMD
-    assert(Node->getNumOperands() == 5);
-    if (!CanSynthesize) {
-      return nullptr;
-    }
-
-    Value *Cond  = deserializeValue(Node->getOperand(2));
-    Value *TrueV = deserializeValue(Node->getOperand(3));
-    Value *FalseV = deserializeValue(Node->getOperand(4));
-    CHECK_VALS(Cond, TrueV, FalseV);
-
-    Value *Select = IRB.CreateSelect(Cond, TrueV, FalseV,
-                                     "deserialized.select");
-    rememberDeserializedValue(Node, Select);
-    return Select;
-  }
-
-  if (Tag->getString() == "unop") {
-    // !"unop", <instr>, i32 <opcode>, OpMD
-    assert(Node->getNumOperands() == 4);
-    if (!CanSynthesize) {
-      return nullptr;
-    }
-
-    ConstantAsMetadata *CAM = cast<ConstantAsMetadata>(Node->getOperand(2));
-    ConstantInt *CI = cast<ConstantInt>(CAM->getValue());
-    unsigned OpcVal = (unsigned)CI->getZExtValue();
-
-    Value *Op = deserializeValue(Node->getOperand(3));
-
-    CHECK_VALS(Op);
-
-    Instruction::UnaryOps Opcode =
-      (Instruction::UnaryOps)OpcVal;
-
-    Value *UnOp = IRB.CreateUnOp(Opcode, Op, "deserialized.unop");
-    rememberDeserializedValue(Node, UnOp);
-    return UnOp;
-  }
-
-  if (Tag->getString() == "cast") {
-    // !"cast", <instr> i32 <opcode>, SrcValMD, DstTypeMD
-    assert(Node->getNumOperands() == 5);
-    if (!CanSynthesize) {
-      return nullptr;
-    }
-
-    ConstantAsMetadata *CAM =
-        cast<ConstantAsMetadata>(Node->getOperand(2));
-    ConstantInt *CI = cast<ConstantInt>(CAM->getValue());
-    unsigned OpcVal = (unsigned)CI->getZExtValue();
-
-    Instruction::CastOps Opcode =
-        (Instruction::CastOps)OpcVal;
-
-    Value *Src = deserializeValue(Node->getOperand(3));
-    Type *DstTy = deserializeType(Node->getOperand(4));
-
-    CHECK_VALS(Src);
-
-    Value *Cast = IRB.CreateCast(Opcode, Src, DstTy, "deserialized.cast");
-    rememberDeserializedValue(Node, Cast);
-    return Cast;
-  }
-
-  errs() << "Unhandled tag type " << Tag->getString() << "\n";
-  die();
+  auto *Node = cast<MDNode>(M);
+  assert(Node->getNumOperands() == 2 && "invalid serialized PTSan value");
+  StringRef Kind = cast<MDString>(Node->getOperand(0))->getString();
+  auto *IndexMD = cast<ConstantAsMetadata>(Node->getOperand(1));
+  unsigned Index = cast<ConstantInt>(IndexMD->getValue())->getZExtValue();
+  assert(Kind == "capture" && "invalid serialized PTSan value kind");
+  assert(Index < Captures.size() &&
+         "capture index is missing from the loop preheader marker");
+  return Captures[Index];
 }
 
-#undef CHECK_VALS
+std::pair<bool, DenseMap<Value *, SmallVector<AccessRangePtr>>>
+DeserializeBoundsInfo::deserializeSolvedRanges(MDNode *Root) {
+  assert(Root && Root->getNumOperands() >= 2);
+  auto *CompleteMD = cast<ConstantAsMetadata>(Root->getOperand(1));
+  auto *Complete = cast<ConstantInt>(CompleteMD->getValue());
+  assert(Complete->getType()->isIntegerTy(1));
 
-// ["base", <ValueAsMetadata for base>, !Range0, !Range1, ... !RangeN]
+  DenseMap<Value *, SmallVector<AccessRangePtr>> BaseToRanges;
+  for (unsigned I = 2; I < Root->getNumOperands(); ++I) {
+    auto [Base, Ranges] =
+        deserializeBaseRangeEntry(cast<MDNode>(Root->getOperand(I)));
+    BaseToRanges[Base].append(Ranges);
+  }
+
+  return {Complete->isOne(), std::move(BaseToRanges)};
+}
+
+// ["base", <SerializedBase>, !Range0, !Range1, ... !RangeN]
 MDNode *SerializeBoundsInfo::serializeBaseRangeEntry(Value *Base, SmallVector<AccessRangePtr> &Ranges) {
   assert(Ranges.size() > 0);
   SmallVector<Metadata *, 8> BaseOps;
   BaseOps.push_back(MDString::get(Ctx, "base"));
-  Metadata *BaseMD = serializeValue(Base);
-  if (!BaseMD) {
-    return nullptr;
-  }
-  BaseOps.push_back(BaseMD);
+  BaseOps.push_back(serializeValue(Base));
 
   for (auto &RangePtr : Ranges) {
-    // Assume AccessRange has: MDNode *serializeToMD(LLVMContext &Ctx) const;
-    MDNode *RangeMD = RangePtr->toMD(Ctx);
+    MDNode *RangeMD = RangePtr->toMD(*this);
     // If any of these fail to serialize, we don't have complete info
     // on this base, so give up on it entirely
     if (!RangeMD) {
@@ -1935,37 +1626,20 @@ MDNode *SerializeBoundsInfo::serializeBaseRangeEntry(Value *Base, SmallVector<Ac
   return MDNode::get(Ctx, BaseOps);
 }
 
-optional<std::pair<Value *, SmallVector<AccessRangePtr>>>
+std::pair<Value *, SmallVector<AccessRangePtr>>
 DeserializeBoundsInfo::deserializeBaseRangeEntry(MDNode *Entry) {
   assert(Entry && Entry->getNumOperands() > 2);
   auto Tag = cast<MDString>(Entry->getOperand(0));
   assert(Tag->getString() == "base");
 
   Value *Base = deserializeValue(Entry->getOperand(1));
-  if (!Base && !CanSynthesize) {
-    return nullopt;
-  }
-
   SmallVector<AccessRangePtr> Ranges;
-  bool Complete = Base != nullptr;
-  for (unsigned I = 2; I < Entry->getNumOperands(); I++) {
+  for (unsigned I = 2; I < Entry->getNumOperands(); ++I) {
     MDNode *RangeNode = cast<MDNode>(Entry->getOperand(I));
-    auto Range = AccessRange::fromMD(*this, RangeNode);
-    if (!Range) {
-      if (!CanSynthesize) {
-        return nullopt;
-      }
-      Complete = false;
-      continue;
-    }
-    Ranges.push_back(Range);
+    Ranges.push_back(AccessRange::fromMD(*this, RangeNode));
   }
 
-  if (!Complete) {
-    return nullopt;
-  }
-
-  return std::make_pair(Base, Ranges);
+  return {Base, std::move(Ranges)};
 }
 
 // ["scev", i16<scev-type>, fields...]
@@ -1984,13 +1658,7 @@ MDNode *SerializeBoundsInfo::serializeSCEV(const SCEV *S) {
 
   case scUnknown: {
     const SCEVUnknown *SU = cast<SCEVUnknown>(S);
-    Value *V = SU->getValue();
-    Metadata *ValMD = serializeValue(V);
-    if (!ValMD) {
-      DBG(errs() << "Scev relies on unstable value " << *V << "\n");
-      return nullptr;
-    }
-    Ops.push_back(ValMD);
+    Ops.push_back(serializeValue(SU->getValue()));
     break;
   }
 
@@ -2035,11 +1703,7 @@ MDNode *SerializeBoundsInfo::serializeSCEV(const SCEV *S) {
     break;
   }
 
-  case scVScale: {
-    errs() << "Handle vscale\n";
-    die();
-  }
-
+  case scVScale:
   case scCouldNotCompute:
   case scAddRecExpr: {
     return nullptr;
@@ -2082,10 +1746,7 @@ const SCEV *DeserializeBoundsInfo::deserializeSCEV(Metadata *M) {
   case scUnknown: {
     // ["scev", kind, ValueMD]
     assert(Node->getNumOperands() == 3 && "Unknown SCEV must have 1 payload");
-    Metadata *ValMD = Node->getOperand(2);
-    Value *V = deserializeValue(ValMD);
-    if (!V) {return nullptr;}
-    return SE.getSCEV(V);
+    return SE.getSCEV(deserializeValue(Node->getOperand(2)));
   }
 
   case scSMaxExpr:
@@ -2100,11 +1761,8 @@ const SCEV *DeserializeBoundsInfo::deserializeSCEV(Metadata *M) {
     assert(NumOps >= 4 && "NAry SCEV must have at least 2 operands");
 
     SmallVector<const SCEV *, 4> Ops;
-    for (unsigned I = 2; I < NumOps; I++) {
-      const SCEV *Op = deserializeSCEV(Node->getOperand(I));
-      if (!Op) {return nullptr;}
-      assert(Op && "Failed to deserialize SCEV operand");
-      Ops.push_back(Op);
+    for (unsigned I = 2; I < NumOps; ++I) {
+      Ops.push_back(deserializeSCEV(Node->getOperand(I)));
     }
 
     switch (Kind) {
@@ -2134,9 +1792,6 @@ const SCEV *DeserializeBoundsInfo::deserializeSCEV(Metadata *M) {
 
     const SCEV *LHS = deserializeSCEV(Node->getOperand(2));
     const SCEV *RHS = deserializeSCEV(Node->getOperand(3));
-    if (!LHS || !RHS) {return nullptr;}
-
-    assert(LHS && RHS && "Failed to deserialize operands of SCEVUDivExpr");
     return SE.getUDivExpr(LHS, RHS);
   }
 
@@ -2153,9 +1808,6 @@ const SCEV *DeserializeBoundsInfo::deserializeSCEV(Metadata *M) {
     unsigned BitWidth = (unsigned)BWCI->getZExtValue();
 
     const SCEV *Op = deserializeSCEV(OpNode);
-    if (!Op) {return nullptr;}
-    assert(Op && "Failed to deserialize operand of SCEVCastExpr");
-
     Type *Ty = IntegerType::get(SE.getContext(), BitWidth);
 
     switch (Kind) {
@@ -2194,6 +1846,18 @@ AccessRange::getDeps(PTSanUtils *PTU) const {
   for (const SCEV *E : getAllSCEVs()) {
     auto Sub = PTU->getSCEVInstrs(E);
     Deps.insert(Sub.begin(), Sub.end());
+  }
+  return Deps;
+}
+
+SmallPtrSet<Instruction *, 8>
+VectorAccessRange::getDeps(PTSanUtils *PTU) const {
+  SmallPtrSet<Instruction *, 8> Deps = AccessRange::getDeps(PTU);
+  if (auto *PointerI = dyn_cast<Instruction>(Pointer)) {
+    Deps.insert(PointerI);
+  }
+  if (auto *MaskI = dyn_cast<Instruction>(Mask)) {
+    Deps.insert(MaskI);
   }
   return Deps;
 }
@@ -2249,14 +1913,60 @@ RangeCmpResult SimpleAccessRange::cmp(PTSanUtils *PTU, const AccessRange *OtherR
   die();
 }
 
-RangeCmpResult LoopAccessRange::cmp(PTSanUtils *PTU, const AccessRange *OtherRaw) const {
-  auto *Other = dyn_cast<LoopAccessRange>(OtherRaw);
-  if (!Other) {
+RangeCmpResult VectorAccessRange::cmp(PTSanUtils *,
+                                      const AccessRange *OtherRaw) const {
+  auto *Other = dyn_cast<VectorAccessRange>(OtherRaw);
+  if (!Other || Pointer != Other->Pointer || Mask != Other->Mask) {
     return RCR_UNKNOWN;
   }
 
-  if(this->L != Other->L) {
-    DBG(errs() << "Skipping cmp against non-same-loop access range\n");
+  if (!hasExplicitLanePointers() &&
+      Stride != Other->Stride) {
+    return RCR_UNKNOWN;
+  }
+
+  int64_t ThisEnd = Offset + LaneSize;
+  int64_t OtherEnd = Other->Offset + Other->LaneSize;
+  if (Offset == Other->Offset && ThisEnd == OtherEnd) {
+    return RCR_EQUAL;
+  }
+  if (Offset >= Other->Offset && ThisEnd <= OtherEnd) {
+    return RCR_SUBSET;
+  }
+  if (Offset <= Other->Offset && ThisEnd >= OtherEnd) {
+    return RCR_SUPERSET;
+  }
+  if (Offset <= Other->Offset && ThisEnd <= OtherEnd) {
+    return RCR_LTE;
+  }
+  return RCR_GTE;
+}
+
+// Copied from ScalarEvolution::getUsedLoops(), which is private.
+static SmallPtrSet<const Loop *, 4>
+getUsedLoops(const LoopAccessRange *Range) {
+  struct LoopCollector {
+    SmallPtrSet<const Loop *, 4> Loops;
+
+    bool follow(const SCEV *S) {
+      if (auto *AR = dyn_cast<SCEVAddRecExpr>(S)) {
+        Loops.insert(AR->getLoop());
+      }
+      return true;
+    }
+
+    bool isDone() const { return false; }
+  } Collector;
+
+  for (const SCEV *S : Range->getAllSCEVs()) {
+    SCEVTraversal<LoopCollector>(Collector).visitAll(S);
+  }
+  return std::move(Collector.Loops);
+}
+
+RangeCmpResult LoopAccessRange::cmp(PTSanUtils *PTU, const AccessRange *OtherRaw) const {
+  auto *Other = dyn_cast<LoopAccessRange>(OtherRaw);
+  if (!Other) {
     return RCR_UNKNOWN;
   }
 
@@ -2265,6 +1975,17 @@ RangeCmpResult LoopAccessRange::cmp(PTSanUtils *PTU, const AccessRange *OtherRaw
   };
 
   if (CouldNotCompute(this->Delta) || CouldNotCompute(Other->Delta)) {
+    return RCR_UNKNOWN;
+  }
+
+  // Combining ranges described by different AddRec loops can violate
+  // ScalarEvolution's invariants. This is not totally foolproof, but it
+  // works well enough for now
+  auto ThisLoops = getUsedLoops(this);
+  auto OtherLoops = getUsedLoops(Other);
+  if (ThisLoops.size() != OtherLoops.size() ||
+      !llvm::all_of(ThisLoops,
+                    [&](const Loop *L) { return OtherLoops.contains(L); })) {
     return RCR_UNKNOWN;
   }
 
@@ -2371,6 +2092,24 @@ bool SimpleAccessRange::mergeIn(PTSanUtils *PTU, const AccessRange *OtherRaw) {
   }
 }
 
+bool VectorAccessRange::mergeIn(PTSanUtils *,
+                                const AccessRange *OtherRaw) {
+  auto *Other = dyn_cast<VectorAccessRange>(OtherRaw);
+  if (!Other) {
+    errs() << "Should not be merging different typed ranges\n";
+    die();
+  }
+
+  int64_t NewOffset = std::min(Offset, Other->Offset);
+  int64_t NewEnd =
+      std::max(Offset + LaneSize, Other->Offset + Other->LaneSize);
+  int64_t NewLaneSize = NewEnd - NewOffset;
+  bool Changed = NewOffset != Offset || NewLaneSize != LaneSize;
+  Offset = NewOffset;
+  LaneSize = NewLaneSize;
+  return Changed;
+}
+
 bool LoopAccessRange::mergeIn(PTSanUtils *PTU, const AccessRange *OtherRaw) {
   auto *Other = dyn_cast<LoopAccessRange>(OtherRaw);
   if (!Other) {
@@ -2415,6 +2154,11 @@ bool SimpleAccessRange::isSizeZero() const {
   return SE.isKnownPredicate(ICmpInst::ICMP_EQ, Size, SE.getZero(Size->getType()));
 }
 
+bool VectorAccessRange::isSizeZero() const {
+  auto *MaskConstant = dyn_cast<Constant>(Mask);
+  return (MaskConstant && MaskConstant->isNullValue()) || LaneSize == 0;
+}
+
 bool LoopAccessRange::isSizeZero() const {
   assert(!SE.isKnownPredicate(ICmpInst::ICMP_EQ, TypeSize, SE.getZero(TypeSize->getType()))
          && "You can have zero-size types??");
@@ -2425,8 +2169,13 @@ std::shared_ptr<AccessRange> SimpleAccessRange::clone() const {
   return std::make_shared<SimpleAccessRange>(SE, Min, Size);
 }
 
+std::shared_ptr<AccessRange> VectorAccessRange::clone() const {
+  return std::make_shared<VectorAccessRange>(SE, Pointer, Offset, Mask,
+                                             LaneSize, Stride);
+}
+
 std::shared_ptr<AccessRange> LoopAccessRange::clone() const {
-  return std::make_shared<LoopAccessRange>(SE, First, Last, Delta, TypeSize, L);
+  return std::make_shared<LoopAccessRange>(SE, First, Last, Delta, TypeSize);
 }
 
 std::pair<Value *, Value *>
@@ -2445,6 +2194,35 @@ SimpleAccessRange::materializeMinSize(PTSanUtils *PTU, SCEVExpander &Expander,
   Value *MinVal = Expander.expandCodeFor(Min, PtrTy, IP);
   Value *SizeVal = Expander.expandCodeFor(Size, U64Ty, IP);
   return std::make_pair(MinVal, SizeVal);
+}
+
+std::pair<Value *, Value *> VectorAccessRange::materializeMinSize(
+    PTSanUtils *PTU, SCEVExpander &, Instruction *IP) const {
+  auto *MaskTy = cast<VectorType>(Mask->getType());
+  Type *U64Ty = Type::getInt64Ty(IP->getContext());
+  IRBuilder<> IRB(IP);
+  Type *LaneVectorTy = Mask->getType()->getWithNewType(U64Ty);
+  Value *LaneSizeVector =
+      PTU->splatToMatchType(IRB.getInt64(LaneSize), LaneVectorTy);
+  Value *RangeMin = Pointer;
+
+  if (Offset != 0) {
+    RangeMin = IRB.CreateGEP(IRB.getInt8Ty(), Pointer, IRB.getInt64(Offset),
+                             "ptsan.range.offset");
+  }
+  if (!hasExplicitLanePointers()) {
+    Type *OffsetTy = VectorType::get(U64Ty, MaskTy->getElementCount());
+    Value *LaneNumbers =
+        IRB.CreateStepVector(OffsetTy, "ptsan.range.lane.numbers");
+    Value *StrideVector =
+        PTU->splatToMatchType(IRB.getInt64(Stride), LaneVectorTy);
+    Value *ByteOffsets =
+        IRB.CreateMul(LaneNumbers, StrideVector, "ptsan.range.lane.offsets");
+    RangeMin = IRB.CreateGEP(IRB.getInt8Ty(), RangeMin, ByteOffsets,
+                             "ptsan.range.pointers");
+  }
+
+  return {RangeMin, LaneSizeVector};
 }
 
 static bool containsPointerTypedUnknown(PTSanUtils *PTU, const SCEV *S) {
@@ -2510,25 +2288,23 @@ void SimpleAccessRange::dump(int spaces) const {
   errs().indent(spaces) << "Size: " << *Size << "\n";
 }
 
+void VectorAccessRange::dump(int spaces) const {
+  errs().indent(spaces)
+      << (hasExplicitLanePointers() ? "Pointers: " : "Contiguous pointer: ")
+      << *Pointer << "\n";
+  errs().indent(spaces) << "Offset: " << Offset << "\n";
+  errs().indent(spaces) << "Mask: " << *Mask << "\n";
+  errs().indent(spaces) << "Lane size: " << LaneSize << "\n";
+  if (!hasExplicitLanePointers()) {
+    errs().indent(spaces) << "Stride: " << Stride << "\n";
+  }
+}
+
 void LoopAccessRange::dump(int spaces) const {
   errs().indent(spaces) << "First: " << *First << "\n";
   errs().indent(spaces) << "Last: " << *Last << "\n";
   errs().indent(spaces) << "Delta: " << *Delta << "\n";
   errs().indent(spaces) << "Type Size: " << *TypeSize << "\n";
-}
-
-static Loop *getLoopFromPreheaderInst(Instruction *IP, LoopInfo &LI) {
-  BasicBlock *Preheader = IP->getParent();
-
-  // In LoopSimplify, a preheader has a single successor: the header.
-  auto *Br = cast<BranchInst>(Preheader->getTerminator());
-  assert(Br->getNumSuccessors() == 1 &&
-         "Expected canonical preheader with one successor");
-  BasicBlock *Header = Br->getSuccessor(0);
-
-  Loop *L = LI.getLoopFor(Header);
-  assert(L && L->getHeader() == Header && "Preheader didn't lead to a loop header?");
-  return L;
 }
 
 AccessRangePtr AccessRange::fromMD(DeserializeBoundsInfo &DBI, MDNode *MD) {
@@ -2543,10 +2319,6 @@ AccessRangePtr AccessRange::fromMD(DeserializeBoundsInfo &DBI, MDNode *MD) {
 
     const SCEV *Min = DBI.deserializeSCEV(MD->getOperand(1));
     const SCEV *Size = DBI.deserializeSCEV(MD->getOperand(2));
-    if (!Min || !Size) {
-      return nullptr;
-    }
-
     return std::make_shared<SimpleAccessRange>(DBI.SE, Min, Size);
   }
 
@@ -2558,14 +2330,8 @@ AccessRangePtr AccessRange::fromMD(DeserializeBoundsInfo &DBI, MDNode *MD) {
     const SCEV *Last     = DBI.deserializeSCEV(MD->getOperand(2));
     const SCEV *Delta    = DBI.deserializeSCEV(MD->getOperand(3));
     const SCEV *TypeSize = DBI.deserializeSCEV(MD->getOperand(4));
-    if (!First || !Last || !Delta || !TypeSize ) {
-      return nullptr;
-    }
-
-    // We should only ever be deserializing loop access ranges in the loop preaheader
-    Loop *L = getLoopFromPreheaderInst(DBI.IP, DBI.LI);
-
-    return std::make_shared<LoopAccessRange>(DBI.SE, First, Last, Delta, TypeSize, L);
+    return std::make_shared<LoopAccessRange>(DBI.SE, First, Last, Delta,
+                                             TypeSize);
   }
 
   // If we ever get here, the metadata is malformed or from a future kind.
@@ -2573,8 +2339,8 @@ AccessRangePtr AccessRange::fromMD(DeserializeBoundsInfo &DBI, MDNode *MD) {
   die();
 }
 
-MDNode *SimpleAccessRange::toMD(LLVMContext &Ctx) const {
-  SerializeBoundsInfo SBI(Ctx);
+MDNode *SimpleAccessRange::toMD(SerializeBoundsInfo &SBI) const {
+  LLVMContext &Ctx = SBI.Ctx;
   MDNode *MinMD = SBI.serializeSCEV(Min);
   MDNode *SizeMD = SBI.serializeSCEV(Size);
   if (!MinMD || !SizeMD) {
@@ -2589,8 +2355,12 @@ MDNode *SimpleAccessRange::toMD(LLVMContext &Ctx) const {
   return MDNode::get(Ctx, BaseOps);
 }
 
-MDNode *LoopAccessRange::toMD(LLVMContext &Ctx) const {
-  SerializeBoundsInfo SBI(Ctx);
+MDNode *VectorAccessRange::toMD(SerializeBoundsInfo &SBI) const {
+  return nullptr;
+}
+
+MDNode *LoopAccessRange::toMD(SerializeBoundsInfo &SBI) const {
+  LLVMContext &Ctx = SBI.Ctx;
   MDNode *MinMD = SBI.serializeSCEV(First);
   MDNode *LastMD = SBI.serializeSCEV(Last);
   MDNode *DeltaMD = SBI.serializeSCEV(Delta);

@@ -25,6 +25,7 @@ void use_extern_global_pointer(int i) {
 int main(void) {
   use_extern_global(3);
   use_incomplete_extern_global(3);
+  use_extern_global_pointer(3);
   return 0;
 }
 
@@ -48,7 +49,7 @@ int main(void) {
 // CHECK: ret void
 
 // CHECK-LABEL: define {{.*}}@use_extern_global_pointer(
-// CHECK: [[GLOBALPTR_TRUE:%[A-Za-z0-9_.]+]] = {{.*}}@llvm.ptrmask{{.*}}@GlobalPtr
-// CHECK: load ptr, ptr [[GLOBALPTR_TRUE]]
+// CHECK-NOT: @llvm.ptrmask
+// CHECK: load ptr, ptr @GlobalPtr
 // CHECK: @ptsan_bounds
 // CHECK: ret void

@@ -6,6 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "PTSanUtils.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/ADT/DepthFirstIterator.h"
@@ -245,6 +246,8 @@ void PTSanIDStripVisitor::visitCallBase(CallBase &CB) {
     // XXX: maybe these should point back to the original object?
     case Intrinsic::lifetime_start:
     case Intrinsic::lifetime_end:
+    case Intrinsic::invariant_start:
+    case Intrinsic::invariant_end:
     // These two are paired, so as long as save doesn't tag, restore
     // doesn't have to untag
     case Intrinsic::stacksave:
@@ -306,9 +309,12 @@ void PTSanIDStripVisitor::visitMemIntrinsic(MemIntrinsic &I) {
 PreservedAnalyses PTSanIDStripPass::run(Module &M,
                                           ModuleAnalysisManager &AM) {
   using namespace llvm::ptsan;
-  errs() << "Running ptsan strip!\n";
 
-  bool Modified = false;
+  // Expose relative loads before visiting ordinary loads and stores.
+  bool Modified = lowerLoadRelativeIntrinsics(M);
+  if (Modified)
+    AM.invalidate(M, PreservedAnalyses::none());
+  Modified |= addNoBuiltinForPointerFns(M);
   auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
   for (Function &F : M) {
     if (F.empty())

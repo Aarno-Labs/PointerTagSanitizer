@@ -1,6 +1,7 @@
 // RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | FileCheck %s --check-prefix=SUMMARY
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -o %exe %s
+// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-abort-on-error=0 -o %exe %s
 // RUN: ./%exe 4 2> good.err && FileCheck %s --check-prefixes=GOOD,STATS < good.err
 // RUN: ./%exe 5 2> bad.err && FileCheck %s --check-prefixes=BAD,STATS < bad.err
 // RUN: ./%exe 8 2> bad_large.err && FileCheck %s --check-prefixes=BAD,STATS < bad_large.err
@@ -19,8 +20,19 @@
 // CHECK: for.cond1.preheader:
 // CHECK-NOT: call void @ptsan_complain
 // CHECK: for.body4.preheader:
-// CHECK-DAG: !{!"ptsan.loop.bounds", i1 true
-// CHECK-DAG: !{!"ptsan.loop.bounds", i1 true
+//
+// Both loop summaries survive, but only the shallower summary is responsible
+// for the access and therefore receives a materialized precheck.
+// SUMMARY-LABEL: define {{.*}}@nested_outer_elision(
+// SUMMARY-NOT: call void (...) @__ptsan_loop_preanalysis(
+// SUMMARY: call void @llvm.sideeffect()
+// SUMMARY: call void (...) @__ptsan_loop_preanalysis(
+// SUMMARY-NOT: call void (...) @__ptsan_loop_preanalysis(
+// SUMMARY: call void @llvm.sideeffect()
+// SUMMARY-NOT: call void (...) @__ptsan_loop_preanalysis(
+// SUMMARY: ret void
+// SUMMARY-COUNT-2: !{!"ptsan.loop.bounds", i1 true, !
+// SUMMARY-NOT: !{!"ptsan.loop.bounds", i1 true, !
 //
 // GOOD-NOT: Found bad
 // BAD: Found bad PREANALYZED_LOOP access

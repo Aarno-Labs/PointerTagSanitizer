@@ -1558,6 +1558,52 @@ bool tools::addSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
                              RequiredSymbols);
   }
 
+  // Pointer-containing constants are initialized by PTSan constructors, then
+  // protected read-only. Both GNU ld and LLD accept this layout fragment.
+  if (SanArgs.needsPTSanRt() && TC.getTriple().isOSBinFormatELF()) {
+    if (TC.getTriple().isOSGlibc() && !TC.getTriple().isMusl() &&
+        Args.hasArg(options::OPT_static, options::OPT_static_pie)) {
+      TC.getDriver().Diag(diag::err_drv_ptsan_unsupported_static_glibc);
+      return false;
+    }
+    const std::string LinkerPath = TC.GetLinkerPath();
+    StringRef Linker = llvm::sys::path::filename(LinkerPath);
+    // Gold does not support the script's INSERT directive.
+    if (Linker == "gold" || Linker.ends_with("ld.gold")) {
+      TC.getDriver().Diag(diag::err_drv_ptsan_unsupported_gold);
+      return false;
+    }
+    SmallString<128> Script(TC.getCompilerRT(Args, getPTSanRuntimeName(TC, Args)));
+    llvm::sys::path::remove_filename(Script);
+    llvm::sys::path::append(Script, "ptsan-init-ro.ld");
+    CmdArgs.push_back("-T");
+    CmdArgs.push_back(Args.MakeArgString(Script));
+  }
+
+  // The static instrumented-musl runtime keeps only metadata and assembly
+  // boundaries.  Use the linker's wrapping mechanism rather than the dynamic
+  // interception machinery required by an uninstrumented libc.
+  if (SanArgs.needsPTSanRt() &&
+      (TC.getTriple().getArch() == llvm::Triple::x86_64 ||
+       TC.getTriple().getArch() == llvm::Triple::aarch64) &&
+      TC.getTriple().isMusl() &&
+      Args.hasArg(options::OPT_static)) {
+    for (StringRef Function : {
+             "malloc", "calloc", "__libc_malloc", "__libc_calloc",
+             "aligned_alloc", "posix_memalign", "realloc", "__libc_realloc",
+             "free", "__libc_free", "malloc_usable_size", "pthread_create",
+             "__pthread_create",
+             "dl_iterate_phdr",
+             "memcmp", "memchr", "memccpy",
+             "strlen", "strcmp", "strncmp", "stpcpy", "__stpcpy",
+             "strchrnul", "__strchrnul", "strlcpy", "stpncpy", "__stpncpy",
+             "munmap", "longjmp", "_longjmp", "siglongjmp", "__sigsetjmp_tail",
+             "__clone", "__copy_tls", "__unmapself", "vfork", "__libc_start_main",
+             "__syscall_cp_asm"}) {
+      CmdArgs.push_back(Args.MakeArgString("--wrap=" + Function));
+    }
+  }
+
   // -u options must be added before the runtime libs that resolve them.
   for (auto S : RequiredSymbols) {
     CmdArgs.push_back("-u");

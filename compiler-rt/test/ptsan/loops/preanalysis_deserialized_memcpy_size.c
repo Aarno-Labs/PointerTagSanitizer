@@ -1,7 +1,7 @@
 // Regression test for the automotive-susan failure mode. Loop preanalysis
-// deserializes SCEVs for a memcpy-heavy border-copy loop that depends on loads
-// from tagged size pointers. Those loads must be recovered by lookup or left to
-// normal checks rather than rebuilt unsafely in generated preanalysis code.
+// carries SCEVs for a memcpy-heavy border-copy loop that depend on loads from
+// tagged size pointers. Those loads must not be rebuilt unsafely in generated
+// preanalysis code; exact capture and safe fallback are both valid.
 //
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names \

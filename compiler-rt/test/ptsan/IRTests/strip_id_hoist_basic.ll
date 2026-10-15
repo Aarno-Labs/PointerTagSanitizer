@@ -11,9 +11,9 @@ declare ptr @__ptsan_strip(ptr)
 define void @basic_loop_gep(ptr %b) {
 ; CHECK-LABEL: define void @basic_loop_gep(
 ; CHECK: entry:
-; CHECK-NEXT: [[BASE_STRIP:%.*]] = call ptr @__ptsan_strip(ptr %b), !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
+; CHECK-NEXT: [[BASE_STRIP:%.*]] = call ptr @__ptsan_strip(ptr %b), !ptsan.stripped {{![0-9]+}}
 ; CHECK: loop:
-; CHECK: %g = getelementptr i8, ptr [[BASE_STRIP]], i64 %iv, !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
+; CHECK: %g = getelementptr i8, ptr [[BASE_STRIP]], i64 %iv, !ptsan.stripped {{![0-9]+}}
 ; CHECK-NOT: call ptr @__ptsan_strip
 ; CHECK: load volatile i8, ptr %g
 entry:
@@ -41,12 +41,32 @@ define void @duplicate_select_use_not_profitable(ptr %b, i1 %c) {
 ; CHECK-NOT: call ptr @__ptsan_strip(ptr %b)
 ; CHECK: %g = getelementptr i8, ptr %b, i64 8
 ; CHECK: %sel = select i1 %c, ptr %g, ptr %g
-; CHECK: %s = call ptr @__ptsan_strip(ptr %sel), !ptsan.expected.stripped {{![0-9]+}}, !ptsan.stripped
+; CHECK: %s = call ptr @__ptsan_strip(ptr %sel), !ptsan.stripped {{![0-9]+}}
 ; CHECK: load volatile i8, ptr %s
 entry:
   %g = getelementptr i8, ptr %b, i64 8 ; duplicate neutral input
   %sel = select i1 %c, ptr %g, ptr %g ; both arms reach the same strip
   %s = call ptr @__ptsan_strip(ptr %sel) ; one actual strip saving
   %v = load volatile i8, ptr %s, align 1 ; consumes the already-stripped reference
+  ret void
+}
+
+; Freeze preserves the concrete bits of its operand, so it should participate
+; in ordinary pointer dataflow rather than forcing its operand to stay tagged.
+; The two stripped consumers can therefore share one conversion across it.
+define void @freeze_is_transparent(ptr %b) {
+; CHECK-LABEL: define void @freeze_is_transparent(
+; CHECK: %g = getelementptr i8, ptr %b, i64 8, !ptsan.tagged
+; CHECK-NEXT: %before = call ptr @__ptsan_strip(ptr %g), !ptsan.stripped
+; CHECK: %f = freeze ptr %before, !ptsan.stripped
+; CHECK-NOT: call ptr @__ptsan_strip
+; CHECK: call void asm sideeffect "", "r"(ptr %f)
+entry:
+  %g = getelementptr i8, ptr %b, i64 8
+  %before = call ptr @__ptsan_strip(ptr %g)
+  call void asm sideeffect "", "r"(ptr %before)
+  %f = freeze ptr %g
+  %after = call ptr @__ptsan_strip(ptr %f)
+  call void asm sideeffect "", "r"(ptr %after)
   ret void
 }

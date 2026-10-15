@@ -23,11 +23,12 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include "PTSanUtils.h"
+#include "PTSanAnchors.h"
 #include "llvm/Transforms/Utils/ScalarEvolutionExpander.h"
 #include "llvm/Transforms/Instrumentation/PTSanLoopInfoGather.h"
 
-#define DEBUG_TYPE "ptsan-lig-dbg"
-#define DBG(X) DEBUG_WITH_TYPE(DEBUG_TYPE, X)
+#undef DBG
+#define DBG(X) DEBUG_WITH_TYPE("ptsan-lig-dbg", X)
 
 using namespace llvm;
 using std::optional;
@@ -59,6 +60,7 @@ struct PTSanLoopInfoGather {
   TargetLibraryInfo TLI;
   ScalarEvolution SE;
   PTSanUtils PTU;
+  uint64_t NextLoopID = 0;
 
   PTSanLoopInfoGather(Function &F, TargetLibraryInfo &TLI):
     Ctx(F.getContext()), DL(F.getDataLayout()), F(F), DT(F), PDT(F), LI(DT), AC(F), TLI(TLI), SE(F, TLI, AC, DT, LI),
@@ -87,6 +89,12 @@ void PTSanLoopInfoGather::analyzePtrOp(DenseMap<Loop *, SmallVector<CheckInfo>> 
   Value *BasePtr = PTU.findBasePointer(Ptr);
   DBG(errs() << "Got base pointer " << *BasePtr << "\n");
 
+  auto PointRange = PTU.getScalarEnvelope(Ptr, Op.Size, Op.Mask, I);
+  if (!PointRange) {
+    DBG(errs() << "\tAccess does not have a scalar range\n");
+    return;
+  }
+
   for (; L != nullptr; L = L->getParentLoop()) {
     DBG(errs() << "Check for Loop op in terms of\n\t" << *L << "\n");
 
@@ -103,7 +111,7 @@ void PTSanLoopInfoGather::analyzePtrOp(DenseMap<Loop *, SmallVector<CheckInfo>> 
       continue;
     }
 
-    auto AccessExtent = PTU.getLoopAccessExtent(Ptr, Op.Size, L);
+    auto AccessExtent = PTU.getLoopAccessExtent(*PointRange, L);
 
     if (!AccessExtent) {
       DBG(errs() << "\tFailed to find access extent\n");
@@ -133,6 +141,8 @@ void PTSanLoopInfoGather::analyzeFunction() {
   FindMemAccesses FMA(F.getDataLayout(), PtrOps);
   for (BasicBlock *BB : depth_first(&F.getEntryBlock())) {
     for (Instruction &I : *BB) {
+      assert(!LoopPreheaderAnchor::isMarker(I) &&
+             "PTSan preanalysis does not support existing llvm.sideeffect");
       FMA.visit(I);
     }
   }
@@ -148,7 +158,9 @@ void PTSanLoopInfoGather::analyzeFunction() {
   for (PtrOp &Op : PtrOps) {
     Instruction *I = cast<Instruction>(Op.U->getUser());
     Loop *L = LI.getLoopFor(I->getParent());
-    if (!L) { continue; }
+    if (!L) {
+      continue;
+    }
 
     for (; L != nullptr; L = L->getParentLoop()) {
       Value *Base = PTU.findBasePointer(Op.U->get());
@@ -213,6 +225,10 @@ void PTSanLoopInfoGather::analyzeLoop(
     DBG(errs() << "Failed to solved all bases :(\n");
   }
 
+  if (SolvedBases.empty()) {
+    return;
+  }
+
   // Next pass: We need Bases -> List of ranges the loop accesses
   DenseMap<Value *, SmallVector<AccessRangePtr>> AccessedRanges;
   for (Value *Base : SolvedBases) {
@@ -220,7 +236,6 @@ void PTSanLoopInfoGather::analyzeLoop(
       if (Check.BasePtr != Base) {
         continue;
       }
-
       bool Merged = false;
       for (auto Range : AccessedRanges[Base]) {
         if (Range->cmp(&PTU, Check.Range.get()) != RCR_UNKNOWN) {
@@ -237,9 +252,16 @@ void PTSanLoopInfoGather::analyzeLoop(
 
   // Now! We know which bases have been solved. We know the ranges for each base.
   // This is the information we need to pass on to our next pass.
+  uint64_t ID = NextLoopID++;
+  for (BasicBlock *BB : L->blocks()) {
+    for (Instruction &I : *BB) {
+      addPTSanLoopID(I, ID);
+    }
+  }
+
   SerializeBoundsInfo SBI(Ctx);
-  MDNode *Node = SBI.serializeSolvedRanges(Complete, AccessedRanges);
-  SBI.addLoopTag(L, Node);
+  MDNode *Bounds = SBI.serializeSolvedRanges(Complete, AccessedRanges);
+  LoopPreheaderAnchor::create(*L, ID, *Bounds, SBI.getCaptures());
   //errs() << "\n\n################################################\n";
   //errs() << *F.getParent() << "\n";
   //errs() << "################################################\n";
@@ -265,6 +287,5 @@ PreservedAnalyses PTSanLoopInfoGatherPass::run(Function &F, FunctionAnalysisMana
   LIG.analyzeFunction();
   DBG(errs() << "#############################################\n");
 
-  // We only mutated metadata
-  return PreservedAnalyses::all();
-  }
+  return PreservedAnalyses::none();
+}

@@ -15,6 +15,33 @@ Options specified on the command line will override options in the cache files.
 
 The following cache files exist.
 
+PTSan
+-----
+
+PTSan.cmake enables the X86 and AArch64 backends and PTSan dependency builds
+for native Linux builds. The default build includes C++ libraries with pointer
+stripping for glibc. They can also be built with ptsan-glibc-cxx.
+Set PTSAN_MUSL_SOURCE_DIR to an existing musl source tree to also build both
+strict and non-strict instrumented musl and C++ libraries. Musl is optional;
+without its source tree the build provides only the glibc configuration.
+Outputs are placed under <build>/ptsan. Strict and non-strict dependencies have
+separate trees and share the uninstrumented musl PTSan runtime.
+ptsan-musl builds C support for both modes; ptsan-musl-cxx also builds their
+C++ libraries. check-ptsan-musl runs the strict suite and the separate non-strict
+regressions, each with matching application flags and dependencies.
+
+Clang configuration files are generated in <build>/bin: ptsan-glibc.cfg and
+ptsan-musl-{strict,nonstrict}.cfg select the corresponding C++ dependencies.
+The musl builds also provide ptsan-musl-{strict,nonstrict}-c.cfg for C applications.
+Use clang++ --config=<name>.cfg to select a configuration.
+
+PTSan-glibc-cxx.cmake, PTSan-musl-runtime.cmake and PTSan-musl-cxx.cmake configure
+the dependency builds. The musl caches require
+-DPTSAN_MUSL_TARGET=x86_64-unknown-linux-musl or
+-DPTSAN_MUSL_TARGET=aarch64-unknown-linux-musl before the -C option;
+the integrated dependency targets supply this automatically.
+See clang/docs/PointerTagSanitizer.rst for usage.
+
 Apple-stage1
 ------------
 

@@ -4,6 +4,10 @@
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 // RUN: cat out.txt | FileCheck %s --check-prefix=OUT
 
+// After ioctl runs, in_libc must be back to 0; a leak there makes
+// tag_with_next_id stop tagging.
+
+// ERR: in_libc after ioctl: 0
 // ERR: Unreclaimed IDs at exit: 0
 
 // OUT: uv__nonblock_ioctl tests passed
@@ -18,6 +22,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <threads.h>
+
+extern thread_local int ptsan_in_libc;
 
 #define UV__ERR(x) (-(x))
 
@@ -106,6 +113,10 @@ __attribute__((noinline))
 int main(void) {
   test_uv_nonblock_ioctl_success();
   test_uv_nonblock_ioctl_bad_fd();
+
+  // in_libc must be balanced back to 0 here.
+  fprintf(stderr, "in_libc after ioctl: %d\n", ptsan_in_libc);
+
   puts("uv__nonblock_ioctl tests passed");
   return 0;
 }

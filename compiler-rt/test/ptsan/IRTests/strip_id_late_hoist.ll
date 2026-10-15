@@ -220,7 +220,7 @@ right:
 join:
   ; Important: this PHI has a direct global arm and a constant-expression GEP
   ; arm. The GEP arm should be materialized so the PHI can stay in the stripped
-  ; closure with one stripped global base.
+  ; closure rooted directly at the raw global.
   %sink = phi ptr [ @global_buf, %left ],
                   [ getelementptr inbounds (i8, ptr @global_buf, i64 4),
                     %right ]
@@ -242,8 +242,8 @@ exit:
 
 ; LATE: [[RIGHT:%.*]] = getelementptr inbounds i8, ptr @global_buf, i64 4
 ; LATE: %sink = phi ptr [ @global_buf, %left ], [ [[RIGHT]], %right ]
-; LATE-NEXT: [[SINK_STRIP:%.*]] = call ptr @__ptsan_strip(ptr %sink)
-; LATE: %q = getelementptr i8, ptr [[SINK_STRIP]], i64 %i
+; LATE-NOT: call ptr @__ptsan_strip
+; LATE: %q = getelementptr i8, ptr %sink, i64 %i
 ; LATE-NEXT: load volatile i8, ptr %q
 
 ; A tagged SSA value remains available when we create a stripped representative

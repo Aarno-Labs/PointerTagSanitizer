@@ -20,8 +20,8 @@
 //FIXED: a - b in elements      = 15
 //FIXED: a - b in bytes         = 60
 //FIXED: === test_stack_ptr_diff_ub ===
-//FIXED: p2 - p1 in elements (UB) = 6
-//FIXED: p2 - p1 in bytes    (UB) = 24
+//FIXED: element difference matches untagged addresses: 1
+//FIXED: byte difference matches untagged addresses: 1
 
 
 
@@ -106,13 +106,25 @@ void test_stack_ptr_diff_ub(int n, int m) {
   printf("p1 (&stack_buf1[%d]) = 0x%lx\n", n, (uint64_t)p1);
   printf("p2 (&stack_buf2[%d]) = 0x%lx\n", m, (uint64_t)p2);
 
-  // This is formally UB (pointers to different objects), but the codebase
-  // you’re dealing with does it anyway, so we exercise it here.
+  // Subtracting pointers to different objects is formally UB, but PTSan's
+  // arithmetic option is intended to clear their IDs for this operation.
   ptrdiff_t diff_elems = do_p_p_sub_int(p2, p1);
   ptrdiff_t diff_bytes = do_p_p_sub_char((char *)p2, (char *)p1);
 
+  // Compute the reference with integer arithmetic on the low 48 address bits.
+  // Signed subtraction handles either stack ordering without depending on the
+  // distance between these objects or repeating the pointer subtraction above.
+  intptr_t address1 = (intptr_t)((uintptr_t)p1 & UINT64_C(0x0000ffffffffffff));
+  intptr_t address2 = (intptr_t)((uintptr_t)p2 & UINT64_C(0x0000ffffffffffff));
+  ptrdiff_t expected_bytes = address2 - address1;
+  ptrdiff_t expected_elems = expected_bytes / (ptrdiff_t)sizeof(*p1);
+
   printf("p2 - p1 in elements (UB) = %td\n", diff_elems);
   printf("p2 - p1 in bytes    (UB) = %td\n", diff_bytes);
+  printf("element difference matches untagged addresses: %d\n",
+         diff_elems == expected_elems);
+  printf("byte difference matches untagged addresses: %d\n",
+         diff_bytes == expected_bytes);
   printf("\n");
 }
 

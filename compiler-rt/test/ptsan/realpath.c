@@ -3,23 +3,25 @@
 // RUN: ./%exe | FileCheck %s
 
 // CHECK: ---------RELPATH DOES ALLOC-----------
-// CHECK: P id: 0x1801
-// CHECK: Res id: 0x1802
+// CHECK: P id: 0x[[#%x,FIRST:]]
+// CHECK: Res id: 0x[[#FIRST + 1]]
 // CHECK: -----------EXTERNAL ALLOC-------------
-// CHECK: P id: 0x1803
-// CHECK: Res id: 0x1804
-// CHECK: Out id: 0x1804
+// CHECK: P id: 0x[[#FIRST + 2]]
+// CHECK: Res id: 0x[[#FIRST + 3]]
+// CHECK: Out id: 0x[[#FIRST + 3]]
 
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <assert.h>
 
 void relpath_does_alloc() {
   char *p = malloc(2);
   p[0] = '.';
   p[1] = 0;
   char *res = realpath(p, NULL);
+  assert(((uint64_t)p >> 48) != 0);
   printf("P id: 0x%lx\n", (uint64_t)p >> 48);
   printf("Res id: 0x%lx\n", (uint64_t)res >> 48);
   //printf("Got path %s\n", res);

@@ -28,6 +28,7 @@
 extern u16 ptsan_next_stack_id;
 extern u16 ptsan_stack_id_limit;
 extern u64 __ptsan_used_ids;
+extern u64 __ptsan_used_global_ids;
 
 extern uint64_t ptsan_get_bound(uint16_t id);
 extern uint64_t ptsan_get_base(uint16_t id);
@@ -57,7 +58,7 @@ void doAlloc1() {
   init(b1);
   printf("b1 = %s\n", b1);
 
-  assert(__ptsan_used_ids == 1);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 1);
   assert(b1 == ptsan_get_base(get_id(b1)));
   assert(23 == ptsan_get_size(get_id(b1)));
 }
@@ -74,7 +75,7 @@ void doAlloc2() {
   printf("b1 = %s\n", b1);
   printf("b2 = %s\n", b2);
 
-  assert(__ptsan_used_ids == 2);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 2);
   assert(b1 == ptsan_get_base(get_id(b1)));
   assert(23 == ptsan_get_size(get_id(b1)));
   assert(b2 == ptsan_get_base(get_id(b2)));
@@ -96,7 +97,7 @@ void doAlloc3() {
   printf("b2 = %s\n", b2);
   printf("b3 = %s\n", b3);
 
-  assert(__ptsan_used_ids == 3);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 3);
   assert(b1 == ptsan_get_base(get_id(b1)));
   assert(23 == ptsan_get_size(get_id(b1)));
   assert(b2 == ptsan_get_base(get_id(b2)));
@@ -123,7 +124,7 @@ void doAlloc4() {
   printf("b3 = %s\n", b3);
   printf("b4 = %s\n", b4);
 
-  assert(__ptsan_used_ids == 4);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 4);
   assert(b1 == ptsan_get_base(get_id(b1)));
   assert(23 == ptsan_get_size(get_id(b1)));
   assert(b2 == ptsan_get_base(get_id(b2)));
@@ -155,7 +156,7 @@ void doAlloc5() {
   printf("b4 = %s\n", b4);
   printf("b5 = %s\n", b5);
 
-  assert(__ptsan_used_ids == 5);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 5);
   assert(b1 == ptsan_get_base(get_id(b1)));
   assert(23 == ptsan_get_size(get_id(b1)));
   assert(b2 == ptsan_get_base(get_id(b2)));
@@ -172,12 +173,12 @@ int main() {
   ptsan_next_stack_id = ptsan_stack_id_limit;
 
   doAlloc1();
-  assert(__ptsan_used_ids == 0);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids);
   doAlloc2();
-  assert(__ptsan_used_ids == 0);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids);
   doAlloc3();
-  assert(__ptsan_used_ids == 0);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids);
   doAlloc4();
-  assert(__ptsan_used_ids == 0);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids);
   doAlloc5();
 }

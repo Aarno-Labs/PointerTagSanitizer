@@ -1,5 +1,5 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %opt_ptsan -ptsan-reoptimize=0 %S/do_cmp.ll -o do_cmp.ptsan.ll
+// RUN: %opt_ptsan -mtriple=%ptsan_target_triple -ptsan-reoptimize=0 %S/do_cmp.ll -o do_cmp.ptsan.ll
 // RUN: %llc -filetype=obj do_cmp.ptsan.ll -o do_cmp.ptsan.o
 // RUN: %clang_ptsan -g -O2 -o %exe %s do_cmp.ptsan.o
 // RUN: ./%exe > out.txt

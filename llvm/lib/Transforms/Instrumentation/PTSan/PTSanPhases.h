@@ -9,6 +9,7 @@
 #pragma once
 
 #include "PTSanAnchors.h"
+#include "llvm/IR/CycleInfo.h"
 
 namespace llvm::ptsan {
 
@@ -23,12 +24,15 @@ public:
       : F(F), DS(DS), DT(F), PDT(F),
         DTU(DT, PDT, DomTreeUpdater::UpdateStrategy::Eager), LI(DT), AC(F),
         TLI(TLI), SE(F, TLI, AC, DT, LI),
-        PTU(F, DS.Ctx, DT, PDT, LI, SE) {};
+        PTU(F, DS.Ctx, DT, PDT, LI, SE) {
+    CI.compute(F);
+  }
 
   DominatorTree DT;
   PostDominatorTree PDT;
   DomTreeUpdater DTU;
   LoopInfo LI;
+  CycleInfo CI;
   AssumptionCache AC;
   TargetLibraryInfo TLI;
   ScalarEvolution SE;
@@ -49,6 +53,7 @@ public:
 
   void hoistStripAnchors();
   void mergeStripAnchors();
+  void foldRedundantStripAnchors();
   void hoistGetIDAnchors();
   void mergeGetIDAnchors();
   void foldStripOfTagAnchors();
@@ -60,12 +65,6 @@ public:
 bool willFoldStripOfTagAnchor(PointerTagSanitizer &DS, StripAnchor Strip);
 bool willFoldTagOfStripAnchor(PointerTagSanitizer &DS, TagAnchor Tag);
 bool willFoldGetIDOfTagAnchor(PointerTagSanitizer &DS, TaggedAnchor Tagged);
-
-typedef DenseMap<const Loop *, std::pair<bool, DenseSet<Value *>>>
-    KnownLoopBoundsTy;
-
-using PreanalysisElisionKey = std::pair<const Loop *, Value *>;
-using PreanalysisElisionSet = DenseSet<PreanalysisElisionKey>;
 
 class PTSanPreparationPass {
 public:
@@ -94,7 +93,7 @@ public:
 
 class PTSanLoweringPass {
 public:
-  bool run(PTSanAnalysisState &PTA);
+  bool run(PTSanAnalysisState &PTA, FunctionAnalysisManager &FAM);
 };
 
 } // namespace llvm::ptsan

@@ -17,7 +17,7 @@
 // RUN: %clang_ptsan -O3 \
 // RUN:   -mllvm -ptsan-preanalyze-loops=0 \
 // RUN:   -mllvm -ptsan-reoptimize=0 \
-// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefix=FALLBACK
+// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefix=VECTORIZED
 
 // Extracted from the 525.x264_r common/mc.c motion-compensation shape.  The
 // loop-hoist path currently materializes a runtime-direction whole-loop range
@@ -57,16 +57,23 @@
 // NOHOIST-NOT: call i64 @llvm.smax.i64
 // NOHOIST: ret void
 //
-// This vectorized x264 shape leaves a pointer-typed SCEV dependency in the
-// derived byte delta. It must keep the low-address-bit fallback rather than
-// materializing full-width ptrtoint arithmetic.
-// FALLBACK: c"LOOP\00"
-// FALLBACK-LABEL: define {{.*}}@mc_weight_w20_like(
-// FALLBACK: ptsan.first.low
-// FALLBACK: ptsan.last.low
-// FALLBACK: ptsan.loop.size
-// FALLBACK: call void @ptsan_complain
-// FALLBACK: ret void
+// In this vectorized x264 shape, the inner loop's endpoints initially contain
+// external pointer AddRecs. Representing them as the current outer-loop pointer
+// plus integer offsets exposes a pointer-independent whole-loop byte delta.
+// Check that the size is calculated directly instead of using the low-address-
+// bit fallback.
+// VECTORIZED: c"LOOP\00"
+// VECTORIZED-LABEL: define {{.*}}@mc_weight_w20_like(
+// VECTORIZED-NOT: ptsan.first.low
+// VECTORIZED: [[SRC_STRIDE:%.*]] = sext i32 %src_stride to i64
+// VECTORIZED: [[LAST_ROW:%.*]] = zext i32 {{%.*}} to i64
+// VECTORIZED: [[SRC_DELTA:%.*]] = mul i64 [[SRC_STRIDE]], [[LAST_ROW]]
+// VECTORIZED: [[NEG_SRC_DELTA:%.*]] = sub i64 0, [[SRC_DELTA]]
+// VECTORIZED: [[SRC_SPAN:%.*]] = call i64 @llvm.smax.i64(i64 [[NEG_SRC_DELTA]], i64 [[SRC_DELTA]])
+// VECTORIZED-NEXT: [[SRC_SIZE:%.*]] = add nsw i64 [[SRC_SPAN]], 20
+// VECTORIZED: call void @ptsan_complain({{.*}}i64 [[SRC_SIZE]])
+// VECTORIZED-NOT: ptsan.first.low
+// VECTORIZED: ret void
 
 #include <stdint.h>
 #include <stdlib.h>

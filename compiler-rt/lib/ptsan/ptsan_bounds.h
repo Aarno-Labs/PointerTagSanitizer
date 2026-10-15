@@ -48,6 +48,22 @@ struct StackIDBucket {
   u16 end;
 };
 
+using RepeatableAllocaIDs = InternalMmapVectorNoCtor<u16>;
+
+// Slow-path resources only. Generated IR saves/restores the fast-stack state.
+struct StackIDCheckpoint {
+  uptr slow_ids;
+  uptr repeatable_allocas;
+};
+
+namespace __ptsan {
+class PTSanThread;
+
+// Thread teardown has already cleared GetCurrentThread().
+void RestoreStackIDCheckpoint(PTSanThread &thread,
+                              const StackIDCheckpoint &checkpoint);
+} // namespace __ptsan
+
 extern "C" {
 
 extern SANITIZER_INTERFACE_ATTRIBUTE
@@ -78,11 +94,34 @@ StackIDBucket StackIDBuckets[MAX_STACK_ID_BUCKETS];
 extern SANITIZER_INTERFACE_ATTRIBUTE
 u16 ptsan_get_next_global_id(void *base,  u64 sz);
 
+// Give a constant global the permanent ID for its containing non-writable ELF
+// mapping. If the object is not wholly contained in a recognized range,
+// allocate an ordinary exact-bounds global ID instead.
+extern SANITIZER_INTERFACE_ATTRIBUTE u16
+ptsan_get_constant_global_id(void *base, u64 sz);
+
+// Successful permission changes which make a shared constant range writable
+// are unsupported: existing pointers cannot be retagged to narrower IDs.
+extern SANITIZER_INTERFACE_ATTRIBUTE void
+ptsan_check_mprotect(const void *address, u64 size, int protection);
+
 extern SANITIZER_INTERFACE_ATTRIBUTE
 void ptsan_get_stack_ids(u16 *idsBuf, u64 n);
 
 extern SANITIZER_INTERFACE_ATTRIBUTE
 u16 ptsan_get_next_nonstack_id(void *base, u64 sz, FREE_TY type);
+
+extern SANITIZER_INTERFACE_ATTRIBUTE
+RepeatableAllocaIDs *ptsan_get_repeatable_alloca_ids_container();
+extern SANITIZER_INTERFACE_ATTRIBUTE
+u16 ptsan_get_repeatable_alloca_id(RepeatableAllocaIDs *ids, void *base, u64 size);
+extern SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_free_repeatable_alloca_ids(RepeatableAllocaIDs *ids);
+
+extern SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_save_stack_id_checkpoint(StackIDCheckpoint *checkpoint);
+extern SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_restore_stack_id_checkpoint(const StackIDCheckpoint *checkpoint);
 
 extern SANITIZER_INTERFACE_ATTRIBUTE
 NewRange ptsan_range_recovery(const void *ptr, u64 sz);
@@ -95,8 +134,23 @@ void ptsan_free_stack_ids(u16 *ids, u64 n);
 extern SANITIZER_INTERFACE_ATTRIBUTE
 bool ptsan_mark_ptr_freed(void *ptr, FREE_TY freeType);
 
+// Validate a tracked allocation's base and type without retiring its ID.
+extern SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_validate_allocation(const void *ptr, FREE_TY expectedType);
+
+extern SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_validate_munmap(const void *address, u64 size);
+
+// Retire a live MMAP allocation only when address and page-rounded size
+// describe it exactly. Unknown and unsupported ranges are ignored.
+extern SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_retire_mmap_if_exact(void *address, u64 size);
+
 extern SANITIZER_INTERFACE_ATTRIBUTE
 void ptsan_complain(u32 check_id, u64 function_id, u64 ptr_id, const char *type, u64 min, u64 max);
+
+extern SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_complain_vector(u32 check_id, u64 function_id);
 
 } // Extern C
 

@@ -1,12 +1,9 @@
 /* Check to make sure the ids are working right:
- * - `ptrs` uses the first malloc `0x1801` id
- * - the FuncA()/FuncB() calls use 0x2 and 0x3, but put them back. However,
- *   they are put back onto the back of the list
- * - prebuf uses 0x4, and then frees it, so 0x4 ends up on the back
- *   of the list as well
- * - the mallocs then eat through all available ids. They start at
- *   0x5 then get 0x6, all the way up to 0xffff. Then the last three
- *   use the old 0x2, 0x3, and 0x4
+ * - `ptrs` uses the first malloc ID after the permanent global IDs.
+ * - FuncA()/FuncB() use and return cached stack IDs independently.
+ * - prebuf uses the next malloc ID, then returns it to the back of the list.
+ * - Subsequent mallocs consume consecutive IDs through the maximum ID.
+ *   The final malloc then reuses prebuf's ID.
 */
 
 // RUN: rm -rf %t && mkdir -p %t && cd %t
@@ -15,16 +12,16 @@
 // RUN: cat out.txt | FileCheck %s
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 
-// CHECK: ptrs id: 0x1801
+// CHECK: ptrs id: 0x[[#%x,FIRST:]]
 // CHECK: max id: [[MAXID:[0-9a-f]+]]
-// CHECK: ptrs[0] malloc id:  0x1803
-// CHECK: ptrs[1] malloc id:  0x1804
+// CHECK: ptrs[0] malloc id:  0x[[#FIRST + 2]]
+// CHECK: ptrs[1] malloc id:  0x[[#FIRST + 3]]
 // CHECK: ptrs[-4] malloc id: 0xfffc
 // CHECK: ptrs[-3] malloc id: 0xfffd
 // CHECK: ptrs[-2] malloc id: 0x[[MAXID]]
-// CHECK: ptrs[-1] malloc id: 0x1802
+// CHECK: ptrs[-1] malloc id: 0x[[#FIRST + 1]]
 // CHECK: Func id: 0x10002
-// CHECK: prebuf id: 0x1802
+// CHECK: prebuf id: 0x[[#FIRST + 1]]
 // ERR: Unreclaimed IDs at exit: 0
 
 #include <stdio.h>
@@ -35,6 +32,7 @@
 #include "Inputs/ptsan_test_interface.h"
 
 extern volatile uint64_t __ptsan_used_ids;
+extern volatile uint64_t __ptsan_used_global_ids;
 #define p_n_ids() \
   printf("%d: used ids: %lu (0x%lx)\n", \
   __LINE__, __ptsan_used_ids, __ptsan_used_ids)
@@ -60,16 +58,18 @@ void run() {
   printf("checking basic id functionality for %d ptr bits\n", ptsan_id_bits());
   // `- 2` because ptrs eats an ID, and max/default id is reserved
   // `- 0x1800` because those are reserved for stack IDs
-  uint32_t N = ptsan_num_ids() - 2 - 0x1800;
+  uint32_t N =
+      ptsan_num_ids() - 2 - 0x1800 - __ptsan_used_global_ids;
   int **ptrs = (int **)malloc(N * sizeof(int*));
 
-  assert(__ptsan_used_ids == 1);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 1);
 
   printf("ptrs id: 0x%lx\n", (uint64_t)ptrs >> 48);
+  assert(get_id(ptrs) == 0x1801 + __ptsan_used_global_ids);
 
   uint64_t funcID = funcA();
 
-  assert(__ptsan_used_ids == 1);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 1);
 
   int *prebuf = (int *)malloc(20 * sizeof(int));
 
@@ -77,11 +77,11 @@ void run() {
   use(prebuf);
   uint64_t prebufID = (uint64_t)prebuf >> 48;
 
-  assert(__ptsan_used_ids == 2);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 2);
 
   free(prebuf);
 
-  assert(__ptsan_used_ids == 1);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids + 1);
 
   for (int i = 0; i < N; i++) {
     int *buf = (int *)malloc(20 * sizeof(int));
@@ -114,7 +114,7 @@ void run() {
   }
 
   free(ptrs);
-  assert(__ptsan_used_ids == 0);
+  assert(__ptsan_used_ids == __ptsan_used_global_ids);
 }
 
 int main() {

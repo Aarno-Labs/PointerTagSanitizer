@@ -16,7 +16,7 @@
 ; CHECK: access:
 ; CHECK: load i8, ptr
 
-define void @noreturn_invoke_phi(ptr %ptr, i1 %cond) personality ptr null {
+define void @noreturn_invoke_phi(ptr %ptr, ptr %other, i1 %cond) personality ptr null {
 entry:
   br i1 %cond, label %left, label %right
 
@@ -27,7 +27,7 @@ right:
   br label %merge
 
 merge:
-  %base = phi ptr [ %ptr, %left ], [ undef, %right ]
+  %base = phi ptr [ %ptr, %left ], [ %other, %right ]
   invoke void @noreturn_call()
           to label %unreachable unwind label %lpad
 

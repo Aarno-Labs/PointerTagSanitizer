@@ -19,15 +19,101 @@
 #include "ptsan_ptr_utils.h"
 
 #include "sanitizer_common/sanitizer_mutex.h"
+#include "sanitizer_common/sanitizer_allocator_internal.h"
+#include "sanitizer_common/sanitizer_posix.h"
 #include "sanitizer_common/sanitizer_stacktrace.h"
 
 #include "interception/interception.h"
 
 #include <assert.h>
+#include <link.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 
 using namespace __ptsan;
 using __sanitizer::StaticSpinMutex;
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_protect_global_initializers(void *start, void *end) {
+  int result = __sanitizer::internal_mprotect(start, (uptr)end - (uptr)start,
+                                             PROT_READ);
+  CHECK_EQ(result, 0);
+}
+
+// Appended by value to instrumented variadic calls. An earlier
+// collision deliberately gives smaller bounds, never access past this marker.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE const u64 __ptsan_va_sentinel[2] = {
+    0x8e7681bc94a7a1d3ULL, 0xb3e451a062dc7f19ULL};
+
+static uptr vaStackSize(void *stack) {
+  uptr start = get_addr(stack);
+  uptr last = get_addr(GetCurrentThread()->stack_top()) -
+              sizeof(__ptsan_va_sentinel);
+  // Both the ABI stack slots and our byval marker are eight-byte aligned.
+  // Stop at the last position where the complete marker fits on the stack.
+  uptr cursor = start;
+  for (; cursor <= last; cursor += sizeof(u64)) {
+    const auto *words = (const u64 *)cursor;
+    if (words[0] == __ptsan_va_sentinel[0] &&
+        words[1] == __ptsan_va_sentinel[1]) {
+      break;
+    }
+  }
+  CHECK_LE(cursor, last);
+  return cursor - start;
+}
+
+static void *tagVAStorage(void *base, uptr size, u16 id) {
+  void *tagged = set_id(base, id);
+  if (id != DefaultIDNo) {
+    ptsan_bounds[id] = {(uptr)tagged, size};
+  }
+  return tagged;
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_init_va_list_x86_64(void *storage, u64 register_id, u64 overflow_id,
+                              uptr register_size) {
+  struct VAList {
+    unsigned gp_offset;
+    unsigned fp_offset;
+    void *overflow_arg_area;
+    void *reg_save_area;
+  };
+  VAList *list = (VAList *)clear_id(storage);
+  list->reg_save_area =
+      tagVAStorage(list->reg_save_area, register_size, register_id);
+  list->overflow_arg_area =
+      tagVAStorage(list->overflow_arg_area, vaStackSize(list->overflow_arg_area),
+                   overflow_id);
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_init_va_list_aarch64(void *storage, u64 gp_id, u64 fp_id,
+                               u64 stack_id) {
+  struct VAList {
+    void *stack;
+    void *gr_top;
+    void *vr_top;
+    int gr_offs;
+    int vr_offs;
+  };
+  VAList *list = (VAList *)clear_id(storage);
+  // The top pointers are one-past the saved registers. Bounds describe the
+  // region below each top, while va_arg adds a negative offset to the tagged
+  // top. When a region is empty, the backend may leave its top uninitialized.
+  if (list->gr_offs < 0) {
+    void *base = (char *)list->gr_top + list->gr_offs;
+    tagVAStorage(base, -(sptr)list->gr_offs, gp_id);
+    list->gr_top = set_id(list->gr_top, gp_id);
+  }
+  if (list->vr_offs < 0) {
+    void *base = (char *)list->vr_top + list->vr_offs;
+    tagVAStorage(base, -(sptr)list->vr_offs, fp_id);
+    list->vr_top = set_id(list->vr_top, fp_id);
+  }
+  list->stack = tagVAStorage(list->stack, vaStackSize(list->stack), stack_id);
+}
 
 #ifdef PTSAN_VALIDATE
 volatile u64 __ptsan_max_used_ids = 0;
@@ -63,6 +149,19 @@ volatile u64 __ptsan_max_used_stack_ids = 0;
 // and locking each ID would be expensive, so I'm leaving
 // that alone for now.
 static StaticSpinMutex AllocationIDsLock;
+
+struct SharedConstantRange {
+  uptr begin;
+  uptr end;
+  u16 id;
+};
+
+// Ordinary ELF executables have only a handful of load segments. Keep this
+// bootstrap state allocation-free and deliberately bounded: constants in any
+// excess non-writable segments simply take the exact per-global ID path.
+static constexpr uptr MaxSharedConstantRanges = 16;
+static SharedConstantRange SharedConstantRanges[MaxSharedConstantRanges];
+static uptr SharedConstantRangeCount;
 
 static u16 AllocationIDs[IDsBufSz];
 
@@ -105,7 +204,48 @@ static void report_invalid_stack_id_config(const char *Reason) {
   Printf("  max thread buckets: %u\n", MAX_STACK_ID_BUCKETS);
   Printf("  max fast-path stack ID limit: 0x%x\n", MAX_FAST_STACK_ID_LIMIT);
   Printf("  last valid runtime ID: 0x%x\n", LastIDNo);
-  Abort();
+  internal__exit(1);
+}
+
+// Callback to dl_iterate_phdr
+static int record_shared_constant_ranges(struct dl_phdr_info *info, size_t,
+                                         void *) {
+  // Instrumented musl passes a tagged stack object to this runtime callback.
+  // Its program-header pointer is a separate pointer and must also be raw.
+  info = clear_id(info);
+  const auto *phdrs = clear_id(info->dlpi_phdr);
+
+  for (uptr index = 0; index < info->dlpi_phnum; ++index) {
+    const ElfW(Phdr) &phdr = phdrs[index];
+    if (phdr.p_type != PT_LOAD || (phdr.p_flags & PF_W) || !phdr.p_memsz) {
+      continue;
+    }
+    const uptr begin = info->dlpi_addr + phdr.p_vaddr;
+    const uptr end = begin + phdr.p_memsz;
+
+    if (SharedConstantRangeCount == MaxSharedConstantRanges) {
+      break;
+    }
+
+    SharedConstantRange &range =
+        SharedConstantRanges[SharedConstantRangeCount++];
+    range.begin = begin;
+    range.end = end;
+    range.id = ptsan_get_next_global_id((void *)begin, end - begin);
+  }
+
+  // Both supported libcs visit the main executable first. Stop here: sharing
+  // for DSOs and their unload lifetime is not part of this implementation.
+  return 1;
+}
+
+static void initialize_shared_constant_ranges() {
+  CHECK(SharedConstantRangeCount == 0);
+
+  // Called before global proxy constructors. Proxies initially contain raw
+  // addresses, and strict bounds are deferred until initialization finishes.
+  // Any future dl_iterate_phdr interceptor must preserve this bootstrap call.
+  dl_iterate_phdr(record_shared_constant_ranges, nullptr);
 }
 
 void InitializeIDs() {
@@ -165,21 +305,18 @@ void InitializeIDs() {
 
   unlock_alloc_ids(locked);
 
-  if (ClStrictMode) {
-    ptsan_bounds[0].base = 0;
-    ptsan_bounds[0].span = 0;
-    ptsan_bounds[DefaultIDNo].base = 0;
-    ptsan_bounds[DefaultIDNo].span = 0;
-  } else {
-    // ID 0 and DefaultIDNo addresses are always valid, so
-    // set accordingly. However, we want to capture
-    // *obviously* garbage pointers, so we do have a
-    // non-zero bound
-    ptsan_bounds[0].base = 0x10000;
-    ptsan_bounds[0].span = 0x0000ffffffffffff;
-    ptsan_bounds[DefaultIDNo].base = (u64)DefaultIDNo << 48;
-    ptsan_bounds[DefaultIDNo].span = 0x0000ffffffffffff;
-  }
+  // Bootstrap uses ordinary bounds even in strict mode: instrumented libc
+  // runs before its global proxies have IDs. ptsanInitFinish closes these
+  // ranges after runtime setup and, for musl, the proxy constructors.
+  ptsan_bounds[0].base = 0x10000;
+  ptsan_bounds[0].span = 0x0000ffffffffffff;
+  ptsan_bounds[DefaultIDNo].base = (u64)DefaultIDNo << 48;
+  ptsan_bounds[DefaultIDNo].span = 0x0000ffffffffffff;
+
+  // Discover shared constant ranges and allocate their permanent IDs before
+  // any instrumented-libc global proxy constructors run. The complete table is
+  // immutable after startup, so lookups require no synchronization.
+  initialize_shared_constant_ranges();
 }
 
 DECLARE_REAL(void *, malloc, SIZE_T size)
@@ -197,6 +334,50 @@ u16 ptsan_get_next_global_id(void *base,  u64 sz) {
   assert(id != DefaultIDNo);
   return id;
 #endif
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE u16
+ptsan_get_constant_global_id(void *base, u64 sz) {
+#ifdef PTSAN_NO_IDS
+  return 0;
+#else
+  CHECK(base != nullptr);
+  CHECK(sz != 0);
+
+  for (uptr index = 0; index < SharedConstantRangeCount; ++index) {
+    const SharedConstantRange &range = SharedConstantRanges[index];
+    // Stored bounds include the ID, so test with this candidate range's ID.
+    if (addr_in_range(set_id(base, range.id), range.id, sz)) {
+      return range.id;
+    }
+  }
+
+  return ptsan_get_next_global_id(base, sz);
+#endif
+}
+
+// We should not be making non-writable-according-to-elf memory
+// writable or else our global 'just overflow reads' scheme doesn't work
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void
+ptsan_check_mprotect(const void *address, u64 size, int protection) {
+  if (!(protection & PROT_WRITE) || !size) {
+    return;
+  }
+
+  const uptr begin = get_addr(address);
+  const uptr end = begin + size;
+
+  for (uptr index = 0; index < SharedConstantRangeCount; ++index) {
+    const SharedConstantRange &range = SharedConstantRanges[index];
+    if (begin >= range.end || range.begin >= end) {
+      continue;
+    }
+
+    REPORT_ERROR("PTSan does not support making shared constant memory "
+                 "writable: [0x%zx, 0x%zx) overlaps [0x%zx, 0x%zx)\n",
+                 begin, end, range.begin, range.end);
+    internal__exit(1);
+  }
 }
 
 #ifdef PTSAN_VALIDATE
@@ -236,22 +417,11 @@ static inline void validate_stack_id_pre_write(u16 *ids, u64 n) {
 
     if (ptsan_bounds[id].base != 0 || ptsan_bounds[id].span != 0) {
       Printf("%llu: Stack-allocated id is 0x%x. It should be clear\n", pid, id);
-      Abort();
+      internal__exit(1);
     }
   }
 }
 
-static inline void validate_stack_id_post_write(u16 *ids, u64 n) {
-  u64 pid = internal_getpid();
-  for (u64 i = 0; i < n; i++) {
-    u16 id = ids[i];
-
-    if (ptsan_bounds[id].base == 0 || ptsan_bounds[id].span == 0) {
-      Printf("%llu: Stack-allocated id is 0x%x. It should now be dirty\n", pid, id);
-      Abort();
-    }
-  }
-}
 #endif
 
 static inline u32 get_avail_ids() {
@@ -283,6 +453,39 @@ static inline uptr tagged_base(void *base, u16 id) {
   return ((uptr)id << 48) | (uptr)base;
 }
 
+static u16 get_fallback_id() {
+  if (ClStrictMode) {
+    Printf("PTSan: ID space exhausted in strict mode\n");
+    internal__exit(1);
+  }
+  return DefaultIDNo;
+}
+
+static void track_stack_ids(const u16 *ids, uptr n) {
+  if (auto *thread = GetCurrentThread()) {
+    for (uptr i = 0; i < n; ++i) {
+      thread->slow_stack_ids.push_back(ids[i]);
+    }
+  }
+}
+
+static void track_stack_ids(u64 packed, unsigned n) {
+  if (auto *thread = GetCurrentThread()) {
+    for (unsigned i = 0; i < n; ++i) {
+      thread->slow_stack_ids.push_back((u16)(packed >> (16 * i)));
+    }
+  }
+}
+
+static void untrack_stack_ids(uptr n) {
+  if (auto *thread = GetCurrentThread()) {
+    auto &ids = thread->slow_stack_ids;
+    CHECK_LE(n, ids.size());
+    // Remove freed IDs from the log; this keeps the allocated capacity.
+    ids.resize(ids.size() - n);
+  }
+}
+
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
 u16 ptsan_get_stack_ids_1(void * base, u64 span) {
 #ifdef PTSAN_NO_IDS
@@ -298,7 +501,7 @@ u16 ptsan_get_stack_ids_1(void * base, u64 span) {
 
   if (UNLIKELY(1 > avail)) {
     unlock_alloc_ids(locked);
-    return DefaultIDNo;
+    return get_fallback_id();
   }
 
   u16 id = AllocationIDs[NextID];
@@ -313,10 +516,7 @@ u16 ptsan_get_stack_ids_1(void * base, u64 span) {
   ptsan_bounds[id].base = tagged_base(base, id);
   ptsan_bounds[id].span = span;
 
-  #ifdef PTSAN_VALIDATE
-  validate_stack_id_post_write(&id, 1);
-  #endif
-
+  track_stack_ids(id, 1);
   return id;
 }
 
@@ -339,7 +539,8 @@ u32 ptsan_get_stack_ids_2(void *base0, void *base1, u64 spans01) {
   if (UNLIKELY(2 > avail)) {
     unlock_alloc_ids(locked);
 
-    return pack2(DefaultIDNo, DefaultIDNo);
+    u16 id = get_fallback_id();
+    return pack2(id, id);
   }
 
   u16 id0 = AllocationIDs[NextID];
@@ -359,11 +560,9 @@ u32 ptsan_get_stack_ids_2(void *base0, void *base1, u64 spans01) {
   ptsan_bounds[id1].base = tagged_base(base1, id1);
   ptsan_bounds[id1].span = span1;
 
-  #ifdef PTSAN_VALIDATE
-  validate_stack_id_post_write(tmp, 2);
-  #endif
-
-  return pack2(id0, id1);
+  u32 ids = pack2(id0, id1);
+  track_stack_ids(ids, 2);
+  return ids;
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
@@ -385,7 +584,8 @@ u64 ptsan_get_stack_ids_3(void *base0, void *base1, void *base2, u64 spans01, u3
 
   if (UNLIKELY(3 > avail)) {
     unlock_alloc_ids(locked);
-    return pack3(DefaultIDNo, DefaultIDNo, DefaultIDNo);
+    u16 id = get_fallback_id();
+    return pack3(id, id, id);
   }
 
   u16 id0= AllocationIDs[NextID];
@@ -409,11 +609,9 @@ u64 ptsan_get_stack_ids_3(void *base0, void *base1, void *base2, u64 spans01, u3
   ptsan_bounds[id2].base = tagged_base(base2, id2);
   ptsan_bounds[id2].span = span2;
 
-  #ifdef PTSAN_VALIDATE
-  validate_stack_id_post_write(tmp, 3);
-  #endif
-
-  return pack3(id0, id1, id2);
+  u64 ids = pack3(id0, id1, id2);
+  track_stack_ids(ids, 3);
+  return ids;
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
@@ -437,7 +635,8 @@ u64 ptsan_get_stack_ids_4(void *base0, void *base1, void *base2, void *base3,
   if (UNLIKELY(4 > avail)) {
     unlock_alloc_ids(locked);
 
-    return pack4(DefaultIDNo, DefaultIDNo, DefaultIDNo, DefaultIDNo);
+    u16 id = get_fallback_id();
+    return pack4(id, id, id, id);
   }
 
   u16 id0= AllocationIDs[NextID];
@@ -466,11 +665,9 @@ u64 ptsan_get_stack_ids_4(void *base0, void *base1, void *base2, void *base3,
   ptsan_bounds[id3].span = span3;
 
 
-  #ifdef PTSAN_VALIDATE
-  validate_stack_id_post_write(tmp, 4);
-  #endif
-
-  return pack4(id0, id1, id2, id3);
+  u64 ids = pack4(id0, id1, id2, id3);
+  track_stack_ids(ids, 4);
+  return ids;
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
@@ -490,8 +687,9 @@ void ptsan_get_stack_ids_n(u16 *ids, u64 n) {
 
   if (UNLIKELY(n > avail)) {
     unlock_alloc_ids(locked);
+    u16 id = get_fallback_id();
     for (u64 i = 0; i < n; i++) {
-      ids[i] = DefaultIDNo;
+      ids[i] = id;
     }
     return;
   }
@@ -523,6 +721,7 @@ void ptsan_get_stack_ids_n(u16 *ids, u64 n) {
   #endif
 
   unlock_alloc_ids(locked);
+  track_stack_ids(ids, n);
 }
 
 #ifdef PTSAN_VALIDATE
@@ -542,11 +741,9 @@ static void validate_stack_id_free(u16 id0, u64 n) {
 }
 #endif
 
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE
-void ptsan_free_stack_ids_1(u16 id) {
-#ifdef PTSAN_NO_IDS
-  return;
-#endif
+// Recycling is shared with repeatable allocas and longjmp cleanup. Only the
+// public fixed-stack helpers remove IDs from the fixed-stack tracking vector.
+static void free_stack_id(u16 id) {
 #ifdef PTSAN_VALIDATE
   validate_stack_id_free(id, 1);
 #endif
@@ -561,6 +758,17 @@ void ptsan_free_stack_ids_1(u16 id) {
   AllocationIDs[IDTail] = id;
   IDTail = (IDTail + 1) & IDsBufMask;
   unlock_alloc_ids(locked);
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_free_stack_ids_1(u16 id) {
+#ifdef PTSAN_NO_IDS
+  return;
+#endif
+  if (id != DefaultIDNo) {
+    untrack_stack_ids(1);
+  }
+  free_stack_id(id);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
@@ -579,6 +787,7 @@ void ptsan_free_stack_ids_2(u32 packed) {
   if (id0 == DefaultIDNo) {
     return;
   }
+  untrack_stack_ids(2);
 
   ptsan_bounds[id0].base = 0;
   ptsan_bounds[id0].span = 0;
@@ -610,6 +819,7 @@ void ptsan_free_stack_ids_3(u64 packed) {
   if (id0 == DefaultIDNo) {
     return;
   }
+  untrack_stack_ids(3);
 
   ptsan_bounds[id0].base = 0;
   ptsan_bounds[id0].span = 0;
@@ -646,6 +856,7 @@ void ptsan_free_stack_ids_4(u64 packed) {
   if (id0 == DefaultIDNo) {
     return;
   }
+  untrack_stack_ids(4);
 
   ptsan_bounds[id0].base = 0;
   ptsan_bounds[id0].span = 0;
@@ -670,11 +881,7 @@ void ptsan_free_stack_ids_4(u64 packed) {
 
 // Given [12, 14, 15, 66], LastID_old = 12, each of the internals
 // to the next, and LastID_new to 66. NextID = 12 if it was null
-extern "C" SANITIZER_INTERFACE_ATTRIBUTE
-void ptsan_free_stack_ids_n(u16 *ids, u64 n) {
-#ifdef PTSAN_NO_IDS
-  return;
-#endif
+static void free_stack_ids(u16 *ids, u64 n) {
 #ifdef PTSAN_VALIDATE
   validate_stack_id_free(ids[0], n);
 #endif
@@ -699,7 +906,6 @@ void ptsan_free_stack_ids_n(u16 *ids, u64 n) {
 
   bool locked = lock_alloc_ids();
 
-  u32 head = NextID;
   u32 tail = IDTail;
 
   // first contiguous chunk: from tail to end of buffer
@@ -719,6 +925,17 @@ void ptsan_free_stack_ids_n(u16 *ids, u64 n) {
   IDTail = (tail + n) & IDsBufMask;
 
   unlock_alloc_ids(locked);
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_free_stack_ids_n(u16 *ids, u64 n) {
+#ifdef PTSAN_NO_IDS
+  return;
+#endif
+  if (ids[0] != DefaultIDNo) {
+    untrack_stack_ids(n);
+  }
+  free_stack_ids(ids, n);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
@@ -744,7 +961,7 @@ u16 ptsan_get_next_nonstack_id(void *base, u64 sz, FREE_TY type) {
     }
     #endif
     unlock_alloc_ids(locked);
-    return DefaultIDNo;
+    return get_fallback_id();
   }
 
   u16 id = AllocationIDs[NextID];
@@ -756,7 +973,7 @@ u16 ptsan_get_next_nonstack_id(void *base, u64 sz, FREE_TY type) {
     if (id != 0 && id != DefaultIDNo) {
       if (ptsan_bounds[id].base != 0 || ptsan_bounds[id].span != 0) {
         Printf("About-to-malloc id is 0x%x. It should be clear\n", id);
-        Abort();
+        internal__exit(1);
       }
     }
   #endif
@@ -774,45 +991,182 @@ u16 ptsan_get_next_nonstack_id(void *base, u64 sz, FREE_TY type) {
 #endif
 }
 
-// False if invalid
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
-bool ptsan_mark_ptr_freed(void *ptr, FREE_TY freeType) {
-#ifdef PTSAN_NO_IDS
-  return true;
-#else
-  u16 id = get_id(ptr);
+RepeatableAllocaIDs *ptsan_get_repeatable_alloca_ids_container() {
+  auto *thread = GetCurrentThread();
+  CHECK(thread);
+  auto *ids = (RepeatableAllocaIDs *)InternalAlloc(sizeof(RepeatableAllocaIDs));
+  ids->Initialize(0);
+  thread->repeatable_alloca_ids.push_back(ids);
+  return ids;
+}
 
-  if (id == 0) {
-    return true;
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+u16 ptsan_get_repeatable_alloca_id(RepeatableAllocaIDs *ids, void *base, u64 size) {
+  u16 id = ptsan_get_next_nonstack_id(base, size, FREE_TY::NONE);
+#ifdef PTSAN_VALIDATE
+  // Keep default-ID requests too so statistics measure demand beyond capacity.
+  if (id != 0) {
+#else
+  if (id != 0 && id != DefaultIDNo) {
+#endif
+    ids->push_back(id);
+#ifdef PTSAN_VALIDATE
+    // The general allocator accounts for total IDs; these are also stack objects.
+    u64 used = __atomic_fetch_add(&__ptsan_used_stack_ids, 1, __ATOMIC_RELAXED) + 1;
+    if (used > __ptsan_max_used_stack_ids) {
+      __ptsan_max_used_stack_ids = used;
+    }
+#endif
+  }
+  return id;
+}
+
+static void free_repeatable_alloca_ids(RepeatableAllocaIDs *ids) {
+#ifdef PTSAN_VALIDATE
+  // The single-ID helper retires default requests without recycling their IDs.
+  for (u16 id : *ids) {
+    free_stack_id(id);
+  }
+#else
+  if (!ids->empty()) {
+    free_stack_ids(ids->data(), ids->size());
+  }
+#endif
+  ids->Destroy();
+  InternalFree(ids);
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_free_repeatable_alloca_ids(RepeatableAllocaIDs *ids) {
+  auto *thread = GetCurrentThread();
+  CHECK(thread);
+  CHECK_EQ(thread->repeatable_alloca_ids.back(), ids);
+  thread->repeatable_alloca_ids.pop_back();
+  free_repeatable_alloca_ids(ids);
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_save_stack_id_checkpoint(StackIDCheckpoint *checkpoint) {
+  auto *thread = GetCurrentThread();
+  checkpoint->slow_ids = thread->slow_stack_ids.size();
+  checkpoint->repeatable_allocas = thread->repeatable_alloca_ids.size();
+}
+
+void __ptsan::RestoreStackIDCheckpoint(PTSanThread &thread,
+                                     const StackIDCheckpoint &checkpoint) {
+  auto &containers = thread.repeatable_alloca_ids;
+  while (containers.size() > checkpoint.repeatable_allocas) {
+    auto *ids = containers.back();
+    containers.pop_back();
+    free_repeatable_alloca_ids(ids);
   }
 
-  //Printf("Freeing malloc ptsan id 0x%x for ptr %p\n", id, clear_id(ptr));
+  auto &ids = thread.slow_stack_ids;
+  while (ids.size() > checkpoint.slow_ids) {
+    free_stack_id(ids.back());
+    ids.pop_back();
+  }
+}
 
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_restore_stack_id_checkpoint(const StackIDCheckpoint *checkpoint) {
+  RestoreStackIDCheckpoint(*GetCurrentThread(), *checkpoint);
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_validate_munmap(const void *address, u64 size) {
+#ifdef PTSAN_NO_IDS
+  // A no-ID runtime has no object metadata from which to validate the range.
+  (void)address;
+  (void)size;
+  return;
+#else
+  // Let zero-length requests reach Linux so callers retain normal EINVAL
+  // behavior without requiring a meaningful allocation pointer.
+  if (size == 0) {
+    return;
+  }
+
+  const u16 id = get_id(address);
+  // DefaultIDNo is the deliberate degradation path after ID exhaustion. It
+  // carries no exact object metadata, so preserve normal kernel behavior.
   if (id == DefaultIDNo) {
-    #ifdef PTSAN_VALIDATE
-      __atomic_fetch_sub(&__ptsan_used_ids, 1, __ATOMIC_RELAXED);
-    #endif
-    return true;
+    return;
+  }
+  // munmap accepts the original byte count, but removes the rounded pages.
+  if (id != 0 && ptsan_obj_types[id] == FREE_TY::MMAP &&
+      ptsan_bounds[id].base == (u64)address &&
+      ptsan_bounds[id].span == RoundUpTo(size, GetPageSizeCached())) {
+    return;
+  }
+
+  REPORT_ERROR("PTSan rejected unsupported munmap before syscall: nonempty "
+               "ranges must exactly match one tracked mmap allocation\n");
+  internal__exit(1);
+#endif
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_retire_mmap_if_exact(void *address, u64 size) {
+#ifndef PTSAN_NO_IDS
+  const u16 id = get_id(address);
+  if (ptsan_obj_types[id] == FREE_TY::MMAP &&
+      ptsan_bounds[id].base == (u64)address &&
+      ptsan_bounds[id].span == RoundUpTo(size, GetPageSizeCached())) {
+    ptsan_mark_ptr_freed(address, FREE_TY::MMAP);
+  }
+#else
+  (void)address;
+  (void)size;
+#endif
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+void ptsan_validate_allocation(const void *ptr, FREE_TY expectedType) {
+#ifndef PTSAN_NO_IDS
+  const u16 id = get_id(ptr);
+  if (id == 0 || id == DefaultIDNo) {
+    return;
   }
 
   u64 current_base = ptsan_bounds[id].base;
   if (UNLIKELY(current_base != (u64)ptr)) {
     if (current_base == 0) {
       REPORT_ERROR("PTSan found double-free!\n");
-      Abort();
+      internal__exit(1);
     } else {
       REPORT_ERROR(
         "PTsan found invalid (maybe double, maybe something else?) free!. "
         "Base is 0x%llx, addr is 0x%llx, id is 0x%x",
         current_base, (u64)ptr, get_id(ptr)
       );
-      Abort();
+      internal__exit(1);
     }
   }
 
-  if (UNLIKELY(ptsan_obj_types[id] != freeType)) {
-    REPORT_ERROR("PTSan found bad free of type %d on memory type %d\n", freeType, ptsan_obj_types[id]);
-    Abort();
+  if (UNLIKELY(ptsan_obj_types[id] != expectedType)) {
+    REPORT_ERROR("PTSan found bad free of type %d on memory type %d\n", expectedType, ptsan_obj_types[id]);
+    internal__exit(1);
+  }
+#endif
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+bool ptsan_mark_ptr_freed(void *ptr, FREE_TY freeType) {
+  ptsan_validate_allocation(ptr, freeType);
+#ifdef PTSAN_NO_IDS
+  return true;
+#else
+  u16 id = get_id(ptr);
+  if (id == 0) {
+    return true;
+  }
+  if (id == DefaultIDNo) {
+    #ifdef PTSAN_VALIDATE
+      __atomic_fetch_sub(&__ptsan_used_ids, 1, __ATOMIC_RELAXED);
+    #endif
+    return true;
   }
 
   ptsan_bounds[id].base = 0;
@@ -857,10 +1211,23 @@ void ptsan_complain(u32 check_id, u64 function_id, u64 ptr_id,
          span, min, min + size, size, min - base, span - size);
 
   if (ClAbortOnError) {
-    Abort();
+    internal__exit(1);
   }
 
   ptsan_handle_error(check_id, function_id, ptr_id, type);
+}
+
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE
+__attribute__((noinline))
+void ptsan_complain_vector(u32 check_id, u64 function_id) {
+  REPORT_ERROR("Found bad VECTOR access: #%d. Function ID: 0x%llx\n",
+               check_id, function_id);
+
+  if (ClAbortOnError) {
+    internal__exit(1);
+  }
+
+  ptsan_handle_error(check_id, function_id, 0, "VECTOR");
 }
 
 // XXX: For a production/'real security' release, we

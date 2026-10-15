@@ -9,7 +9,6 @@
 #include "PTSanPhases.h"
 #include "PTSanUtils.h"
 #include "Optimizations/PTSanStripIDHoisting.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/InstIterator.h"
 
@@ -38,17 +37,54 @@ bool PTSanLateOptimizationPass::run(PTSanAnalysisState &PTA) {
   return true;
 }
 
+static bool isKnownSafeIntrinsicUse(CallBase &CB) {
+  auto *II = dyn_cast<IntrinsicInst>(&CB);
+  if (!II) {
+    return false;
+  }
+
+  switch (II->getIntrinsicID()) {
+  case Intrinsic::assume:
+  case Intrinsic::sideeffect:
+  case Intrinsic::donothing:
+  case Intrinsic::prefetch:
+  case Intrinsic::is_constant:
+  case Intrinsic::objectsize:
+  case Intrinsic::expect:
+  case Intrinsic::expect_with_probability:
+  case Intrinsic::dbg_declare:
+  case Intrinsic::dbg_value:
+  case Intrinsic::dbg_label:
+  case Intrinsic::dbg_assign:
+  case Intrinsic::pseudoprobe:
+  case Intrinsic::experimental_noalias_scope_decl:
+  case Intrinsic::var_annotation:
+  case Intrinsic::annotation:
+  case Intrinsic::lifetime_start:
+  case Intrinsic::lifetime_end:
+  case Intrinsic::invariant_start:
+  case Intrinsic::invariant_end:
+  case Intrinsic::threadlocal_address:
+    return true;
+  default:
+    return false;
+  }
+}
+
 void PTSanLateOptimizer::insertTaggedUseAnchors() {
   SmallVector<Use *, 32> Uses;
   auto addPointerUse = [&](Use &U) {
-    if (U->getType()->isPointerTy()) {
+    if (U->getType()->isPtrOrPtrVectorTy()) {
       Uses.push_back(&U);
     }
   };
 
   for (Instruction &I : instructions(F)) {
     if (auto ID = DS.getAsAnchor<GetIDAnchor>(&I)) {
-      Uses.push_back(&ID->Call->getOperandUse(0));
+      // A source ID is assigned by lowering, not extracted from pointer bits.
+      if (!DS.getAsAnchor<SourceAnchor>(ID->getBase())) {
+        Uses.push_back(&ID->Call->getOperandUse(0));
+      }
       continue;
     }
 
@@ -60,6 +96,13 @@ void PTSanLateOptimizer::insertTaggedUseAnchors() {
 
     if (auto *PtrToInt = dyn_cast<PtrToIntInst>(&I)) {
       addPointerUse(PtrToInt->getOperandUse(0));
+      continue;
+    }
+
+    if (isa<ExtractElementInst, InsertElementInst, InsertValueInst>(&I)) {
+      for (Use &U : I.operands()) {
+        addPointerUse(U);
+      }
       continue;
     }
 
@@ -105,6 +148,15 @@ void PTSanLateOptimizer::materializeGlobalConstants() {
   PTU.KnownBases.clear();
 
   bool MaterializedGlobalConstants = false;
+  for (auto &GI : DS.GlobalVariableProxies) {
+    MaterializedGlobalConstants |=
+        materializeConstantUsersOfGlobal(F, GI.first);
+  }
+  for (auto &GA : DS.GlobalAliasProxies) {
+    MaterializedGlobalConstants |=
+        materializeConstantUsersOfGlobal(F, GA.first);
+  }
+
   for (StripAnchor StripID : DS.collectAnchors<StripAnchor>(F)) {
     if (!StripID.isPointerStrip()) {
       continue;
@@ -122,155 +174,122 @@ void PTSanLateOptimizer::materializeGlobalConstants() {
   }
 }
 
-class PTSanPolarityAnnotator {
-private:
-  PointerTagSanitizer &DS;
-  Function &F;
-  DenseMap<Value *, Polarity> Polarities;
+static bool validatePolarities(PointerTagSanitizer &DS, Function &F) {
+  PTSanPolarityReader Polarities(DS, F);
 
-  void annotate(Value *V, Polarity P) {
-    setPTSanPolarityMetadata(V, P);
-  }
+  auto haveSamePolarity = [&](Value *A, Value *B) {
+    return Polarities.getPolarity(A) == Polarities.getPolarity(B);
+  };
 
-  bool mark(Value *V, Polarity P) {
-    assert(V->getType()->isPointerTy());
+  auto validateJoin = [&](Value *V, ArrayRef<Value *> Inputs) {
+    Polarity P = Polarities.getPolarity(V);
 
-    std::optional<Polarity> Expected =
-        getPTSanPolarityMetadata(V, "ptsan.expected.");
-    if (Expected && *Expected != P) {
-      errs() << "PTSan polarity disagrees with min-cut expectation for " << *V
-             << ": expected " << getPTSanPolarityName(*Expected) << ", got "
-             << getPTSanPolarityName(P) << "\n";
-      die();
-    }
-
-    auto [It, Inserted] = Polarities.insert({V, P});
-    if (Inserted) {
-      annotate(V, P);
-      return true;
-    }
-
-    if (It->second != P) {
-      errs() << "Contradictory PTSan polarity for " << *V << ": "
-             << getPTSanPolarityName(It->second) << " and "
-             << getPTSanPolarityName(P) << "\n";
-      die();
-    }
-
-    return false;
-  }
-
-  bool markFromKnown(Value *V, Value *Source) {
-    auto It = Polarities.find(Source);
-    if (It == Polarities.end()) {
-      return false;
-    }
-
-    return mark(V, It->second);
-  }
-
-  bool markJoin(Value *V, ArrayRef<Value *> Values) {
-    optional<Polarity> Joined;
-    for (Value *Input : Values) {
-      auto It = Polarities.find(Input);
-      if (It == Polarities.end()) {
+    for (Value *Input : Inputs) {
+      if (Polarities.getPolarity(Input) != P) {
         return false;
       }
+    }
 
-      if (!Joined) {
-        Joined = It->second;
-        continue;
-      }
+    return true;
+  };
 
-      if (*Joined != It->second) {
-        errs() << "Contradictory PTSan polarity in value join\n";
-        die();
+  bool Valid = true;
+  for (Instruction &I : instructions(F)) {
+    if (I.getType()->isPtrOrPtrVectorTy()) {
+      if (auto Required = getRequiredPolarity(DS, &I)) {
+        Valid &= Polarities.getPolarity(&I) == *Required;
       }
     }
 
-    return Joined && mark(V, *Joined);
-  }
+    if (auto Source = DS.getAsAnchor<SourceAnchor>(&I)) {
+      Valid &= Polarities.getPolarity(Source->getSource()) == Polarity::Stripped;
+      continue;
+    }
 
-  void clearMetadata() {
-    clearPTSanPolarityMetadata(F);
-  }
-
-public:
-  PTSanPolarityAnnotator(PointerTagSanitizer &DS, Function &F) : DS(DS), F(F) {}
-
-  void run() {
-    clearMetadata();
-
-    bool Changed = true;
-    while (Changed) {
-      Changed = false;
-
-      for (Instruction &I : instructions(F)) {
-        if (!I.getType()->isPointerTy()) {
-          continue;
-        }
-
-        if (auto Strip = DS.getAsAnchor<StripAnchor>(&I)) {
-          Changed |= mark(Strip->Call, Polarity::Stripped);
-          continue;
-        }
-
-        if (auto Tag = DS.getAsAnchor<TagAnchor>(&I)) {
-          Changed |= mark(Tag->getValue(), Polarity::Stripped);
-          Changed |= mark(Tag->Call, Polarity::Tagged);
-          continue;
-        }
-
-        if (auto Tagged = DS.getAsAnchor<TaggedAnchor>(&I)) {
-          Changed |= mark(Tagged->getValue(), Polarity::Tagged);
-          Changed |= mark(Tagged->Call, Polarity::Tagged);
-          continue;
-        }
-
-        if (auto *PHI = dyn_cast<PHINode>(&I)) {
-          SmallVector<Value *, 4> IncomingValues(PHI->incoming_values());
-          Changed |= markJoin(PHI, IncomingValues);
-          continue;
-        }
-
-        if (auto *Select = dyn_cast<SelectInst>(&I)) {
-          SmallVector<Value *, 2> Values = {Select->getTrueValue(),
-                                            Select->getFalseValue()};
-          Changed |= markJoin(Select, Values);
-          continue;
-        }
-
-        if (Value *Peeled = getPTSanPointerPeel(&I)) {
-          Changed |= markFromKnown(&I, Peeled);
+    if (!ClClearIdsOnArith) {
+      if (auto *Sub = dyn_cast<BinaryOperator>(&I)) {
+        if (Sub->getOpcode() == Instruction::Sub) {
+          auto *Left = dyn_cast<PtrToIntInst>(Sub->getOperand(0));
+          auto *Right = dyn_cast<PtrToIntInst>(Sub->getOperand(1));
+          if (Left && Right) {
+            Valid &= haveSamePolarity(Left->getPointerOperand(),
+                                      Right->getPointerOperand());
+          }
         }
       }
     }
+
+    if (auto *Cmp = dyn_cast<ICmpInst>(&I)) {
+      if (Cmp->getOperand(0)->getType()->isPtrOrPtrVectorTy()) {
+        Valid &= haveSamePolarity(Cmp->getOperand(0), Cmp->getOperand(1));
+      }
+      continue;
+    }
+
+    if (!I.getType()->isPtrOrPtrVectorTy()) {
+      continue;
+    }
+
+    if (auto Strip = DS.getAsAnchor<StripAnchor>(&I)) {
+      Valid &= Polarities.getPolarity(Strip->getValue()) == Polarity::Tagged;
+      continue;
+    }
+
+    if (auto Tag = DS.getAsAnchor<TagAnchor>(&I)) {
+      Valid &= Polarities.getPolarity(Tag->getValue()) == Polarity::Stripped;
+      continue;
+    }
+
+    if (auto Tagged = DS.getAsAnchor<TaggedAnchor>(&I)) {
+      Valid &= Polarities.getPolarity(Tagged->getValue()) == Polarity::Tagged;
+      continue;
+    }
+
+    if (auto *PHI = dyn_cast<PHINode>(&I)) {
+      SmallVector<Value *, 4> IncomingValues(PHI->incoming_values());
+      Valid &= validateJoin(PHI, IncomingValues);
+      continue;
+    }
+
+    if (auto *Select = dyn_cast<SelectInst>(&I)) {
+      SmallVector<Value *, 2> Values = {Select->getTrueValue(),
+                                        Select->getFalseValue()};
+      Valid &= validateJoin(Select, Values);
+      continue;
+    }
+
+    if (auto *Shuffle = dyn_cast<ShuffleVectorInst>(&I)) {
+      auto [UsesLHS, UsesRHS] = getPTSanUsedShuffleOperands(*Shuffle);
+      if (UsesLHS) {
+        Valid &= haveSamePolarity(Shuffle, Shuffle->getOperand(0));
+      }
+      if (UsesRHS) {
+        Valid &= haveSamePolarity(Shuffle, Shuffle->getOperand(1));
+      }
+      continue;
+    }
+
+    if (Use *U = getPTSanRewriteablePointerUse(I)) {
+      Valid &= haveSamePolarity(&I, U->get());
+      continue;
+    }
   }
-};
+
+  return Valid;
+}
 
 void PTSanLateOptimizer::run() {
+  // Polarity solving and conversion insertion are required for correctness,
+  // including under ptsan-no-opts. Sources are raw until explicitly tagged.
+  materializeGlobalConstants();
   insertTaggedUseAnchors();
-
-  if (ClNoPTSanOpts) {
-    PTSanPolarityAnnotator(DS, F).run();
-    return;
-  }
 
   PTSanAnchorOptimizer Anchors(PTA);
   Anchors.hoistStripAnchors();
   Anchors.mergeStripAnchors();
 
-  if (!ClNoStripIDHoist) {
-    materializeGlobalConstants();
-    Anchors.hoistStripAnchors();
-    Anchors.mergeStripAnchors();
-
-    if (ClUseLocalStripIDHoist) {
-      runLocalStripIDHoisting(PTA);
-    } else {
-      runMinCutStripIDHoisting(PTA);
-    }
-  }
+  runMinCutStripIDHoisting(PTA);
+  Anchors.foldRedundantStripAnchors();
 
   Anchors.foldStripOfTagAnchors();
   Anchors.foldTagOfStripAnchors();
@@ -280,7 +299,8 @@ void PTSanLateOptimizer::run() {
   Anchors.hoistStripAnchors();
   Anchors.mergeStripAnchors();
   Anchors.eraseUnusedDependencyAnchors();
-  PTSanPolarityAnnotator(DS, F).run();
+  assert(validatePolarities(DS, F) &&
+         "min-cut polarity metadata must match rewritten IR");
 }
 
 } // namespace llvm::ptsan

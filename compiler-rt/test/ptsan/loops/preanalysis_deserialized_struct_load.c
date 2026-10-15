@@ -1,7 +1,7 @@
-// Regression test for the espresso failure mode. Loop preanalysis deserializes
-// a trip-count SCEV that contains loads from a tagged struct pointer. Those
-// loads must be recovered by lookup or left to normal checks rather than rebuilt
-// unsafely in generated preanalysis code.
+// Regression test for the espresso failure mode. A loop-preanalysis trip-count
+// SCEV contains loads from a tagged struct pointer. Those loads must not be
+// rebuilt unsafely in generated preanalysis code; exact capture and safe
+// fallback are both valid.
 //
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names \

@@ -9,9 +9,9 @@ add_llvm_component_library(LLVMInstrumentation
   PTSan/PTSanDiscovery.cpp
   PTSan/PTSanAnchorOptimization.cpp
   PTSan/PTSanOptimization.cpp
+  PTSan/PTSanPreanalysisElider.cpp
   PTSan/PTSanMetadataLowering.cpp
   PTSan/PTSanLateOptimization.cpp
-  PTSan/Optimizations/PTSanLocalStripIDHoisting.cpp
   PTSan/Optimizations/PTSanMinCutStripIDHoisting.cpp
   PTSan/PTSanLowering.cpp
   PTSan/PTSanIDStrip.cpp
@@ -54,4 +54,5 @@ add_llvm_component_library(LLVMInstrumentation
   TargetParser
   TransformUtils
   ProfileData
+  Scalar
   )

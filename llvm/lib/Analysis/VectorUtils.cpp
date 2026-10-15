@@ -848,7 +848,8 @@ Instruction *llvm::propagateMetadata(Instruction *Inst, ArrayRef<Value *> VL) {
   for (auto Kind : {LLVMContext::MD_tbaa, LLVMContext::MD_alias_scope,
                     LLVMContext::MD_noalias, LLVMContext::MD_fpmath,
                     LLVMContext::MD_nontemporal, LLVMContext::MD_invariant_load,
-                    LLVMContext::MD_access_group, LLVMContext::MD_mmra}) {
+                    LLVMContext::MD_access_group, LLVMContext::MD_mmra,
+                    LLVMContext::MD_ptsan_loop_ids}) {
     MDNode *MD = I0->getMetadata(Kind);
     for (int J = 1, E = VL.size(); MD && J != E; ++J) {
       const Instruction *IJ = cast<Instruction>(VL[J]);
@@ -868,6 +869,9 @@ Instruction *llvm::propagateMetadata(Instruction *Inst, ArrayRef<Value *> VL) {
       case LLVMContext::MD_fpmath:
         MD = MDNode::getMostGenericFPMath(MD, IMD);
         break;
+      // A PTSan summary must cover every scalar access, not just some lanes.
+      // Preserve common loop IDs for use after full unrolling removes the loop.
+      case LLVMContext::MD_ptsan_loop_ids:
       case LLVMContext::MD_noalias:
       case LLVMContext::MD_nontemporal:
       case LLVMContext::MD_invariant_load:
