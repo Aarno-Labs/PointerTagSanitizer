@@ -1,3 +1,4 @@
+// LAM and the 32-bit encoding are mutually exclusive.
 // REQUIRES: ptsan-lam-u48-runtime
 //
 // Mirrors conservative GC scans such as SIOD's: raw machine words are cast to
@@ -8,7 +9,7 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -mllvm -ptsan-quiet-errors -o %exe.ptsan %s
 // RUN: ./%exe.ptsan | FileCheck %s
-// RUN: %clang_ptsan -g -O2 -mllvm -ptsan-quiet-errors -mllvm -ptsan-lam -o %exe.lam %s
+// RUN: %clang_ptsan -g -O2 -mllvm -ptsan-quiet-errors -fsanitize-ptsan-lam -o %exe.lam %s
 // RUN: ./%exe.lam | FileCheck %s
 
 // CHECK: hits=0

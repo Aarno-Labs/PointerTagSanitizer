@@ -44,14 +44,12 @@ if(LLVM_ENABLE_PTSAN_DEPENDENCIES AND LLVM_INCLUDE_RUNTIMES AND
   # paths at generation time, before any dependency artifacts need to exist.
   set(PTSAN_MUSL_TEST_COMPILER
     "$<TARGET_PROPERTY:ptsan-musl-strict,PTSAN_MUSL_COMPILER>")
-  set(PTSAN_MUSL_TEST_STRICT_CONFIG
-    "$<TARGET_PROPERTY:ptsan-musl-strict,PTSAN_MUSL_CONFIG>")
-  set(PTSAN_MUSL_TEST_NONSTRICT_CONFIG
-    "$<TARGET_PROPERTY:ptsan-musl-nonstrict,PTSAN_MUSL_CONFIG>")
-  set(PTSAN_MUSL_TEST_STRICT_CXX_CONFIG
-    "$<TARGET_PROPERTY:ptsan-musl-strict-cxx,PTSAN_MUSL_CXX_CONFIG>")
-  set(PTSAN_MUSL_TEST_NONSTRICT_CXX_CONFIG
-    "$<TARGET_PROPERTY:ptsan-musl-nonstrict-cxx,PTSAN_MUSL_CXX_CONFIG>")
+  set(PTSAN_MUSL_TEST_CONFIGS "")
+  foreach(mode strict nonstrict id32-strict id32-nonstrict id32-strict-indicator)
+    string(APPEND PTSAN_MUSL_TEST_CONFIGS
+      "    '${mode}': ('$<TARGET_PROPERTY:ptsan-musl-${mode},PTSAN_MUSL_CONFIG>', "
+      "'$<TARGET_PROPERTY:ptsan-musl-${mode}-cxx,PTSAN_MUSL_CXX_CONFIG>'),\n")
+  endforeach()
   set(PTSAN_MUSL_TEST_CONFIG_DIR
     ${CMAKE_CURRENT_BINARY_DIR}/Musl${PTSAN_MUSL_TEST_TARGET_ARCH}Config)
 

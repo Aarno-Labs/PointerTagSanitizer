@@ -29,12 +29,8 @@
 // AFTER: invoke void @_Z6throwsv()
 // AFTER: landingpad
 // AFTER: resume
-#include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 #include <stdio.h>
-
-extern "C" {
-extern __thread uint16_t ptsan_next_stack_id;
-}
 
 // Exercise the throw, but keep the normal return paths in the generated IR.
 static volatile bool should_throw = true;
@@ -60,7 +56,7 @@ __attribute__((noinline)) void g() {
 
 
 int main() {
-  uint16_t before = ptsan_next_stack_id;
+  uint64_t before = ptsan_get_stack_cursor();
   try {
     g();
     printf("should not get here\n");
@@ -68,7 +64,7 @@ int main() {
     printf("caught %d\n", x);
   }
 
-  uint16_t after = ptsan_next_stack_id;
+  uint64_t after = ptsan_get_stack_cursor();
   fprintf(stderr, "fast stack ID delta: %d\n", (int)after - (int)before);
   printf("continued normally\n");
   return 0;

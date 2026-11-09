@@ -5,12 +5,12 @@
 // REQUIRES: x86_64-target-arch
 // RUN: split-file %s %t
 // RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error -c %t/relative.ll -o %t/full.o
-// RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error %t/main.c %t/full.o -o %t/full
+// RUN: %clang_ptsan -O2 -I%S -mllvm -ptsan-abort-on-error %t/main.c %t/full.o -o %t/full
 // RUN: %t/full
 // RUN: not %t/full past-end 2>&1 | FileCheck %s --check-prefix=BAD
 // RUN: not %t/full before-start 2>&1 | FileCheck %s --check-prefix=BAD
-// RUN: %clang_raw -O2 -mllvm -ptsan-strip-ids -c %t/relative.ll -o %t/strip.o
-// RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error %t/main.c %t/strip.o -o %t/strip
+// RUN: %clang_strip -O2 -c %t/relative.ll -o %t/strip.o
+// RUN: %clang_ptsan -O2 -I%S -mllvm -ptsan-abort-on-error %t/main.c %t/strip.o -o %t/strip
 // RUN: %t/strip
 // BAD: Found bad POINT access
 
@@ -35,6 +35,7 @@ declare ptr @llvm.load.relative.i32(ptr, i32)
 declare ptr @llvm.load.relative.i64(ptr, i64)
 
 //--- main.c
+#include "Inputs/ptsan_test_interface.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -47,8 +48,8 @@ int main(int argc, char **argv) {
   assert(table);
   table[0] = 4;
   table[1] = -4;
-  uintptr_t id = (uintptr_t)table >> 48;
-  assert(id && id != 0xffff);
+  uintptr_t id = get_id(table);
+  assert(id && id != ptsan_default_id());
 
   if (argc > 1) {
     // Offset 5 leaves three bytes in the object; the load needs four.
@@ -62,8 +63,8 @@ int main(int argc, char **argv) {
   int32_t *forward = relative32(table, 0);
   int32_t *backward = relative64(table + 1, 0);
   assert(forward == table + 1 && backward == table);
-  assert(((uintptr_t)forward >> 48) == id);
-  assert(((uintptr_t)backward >> 48) == id);
+  assert(get_id(forward) == id);
+  assert(get_id(backward) == id);
   assert(*forward == -4 && *backward == 4);
   free(table);
   return 0;

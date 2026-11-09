@@ -6,6 +6,9 @@
 // RUN: %clang_ptsan -fno-builtin-strstr -o %t %s
 // RUN: %run %t
 
+// RUN: %clang_ptsan_id32 -fno-builtin-strstr -o %t %s
+// RUN: %run %t
+
 #include "Inputs/ptsan_test_interface.h"
 
 #include <assert.h>

@@ -1,7 +1,7 @@
 // Constant-segment folding expectations live separately in
 // constant_global_bounds_folding_xfail.c so they cannot mask regressions here.
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s --check-prefix=CHECK
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-instrument-globals=0 -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOGLOBALS
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s --check-prefix=CHECK
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-instrument-globals=0 -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOGLOBALS
 
 int G[8];
 int Scalar;
@@ -39,9 +39,8 @@ void use_global_pointer(int i) {
 
 // CHECK-LABEL: define {{.*}}@use_stack_unknown(
 // CHECK: [[BUF:%[A-Za-z0-9_.]+]] = alloca [20 x i8]
+// CHECK: call void @ptsan_get_stack_ids(ptr {{[^,]+}}, i64 1)
 // CHECK: [[BASE:%[A-Za-z0-9_.]+]] = ptrtoint ptr [[BUF]] to i64
-// CHECK: call i16 @ptsan_get_stack_ids_1(ptr nonnull [[BUF]], i64 20)
-// CHECK: [[ID:%[A-Za-z0-9_.-]+]] = phi i16
 // CHECK: icmp ugt i32 %i, 19
 // CHECK: call void @ptsan_complain
 // CHECK: ret void
@@ -51,9 +50,9 @@ void use_global_pointer(int i) {
 // CHECK: ret void
 
 // CHECK-LABEL: define {{.*}}@use_global(
-// CHECK: [[TAGGED:%[A-Za-z0-9_.]+]] = load ptr, ptr @G.ptsan.ptr
 // CHECK-NOT: @ptsan_bounds
-// CHECK: icmp ugt i64 {{%[A-Za-z0-9_.]+}}, 28
+// CHECK-DAG: [[TAGGED:%[A-Za-z0-9_.]+]] = load ptr, ptr @G.ptsan.ptr
+// CHECK-DAG: icmp ugt i64 {{%[A-Za-z0-9_.]+}}, 28
 // CHECK-NOT: @ptsan_bounds
 // CHECK: ptrtoint ptr [[TAGGED]] to i64
 // CHECK-NOT: @ptsan_bounds
@@ -75,8 +74,8 @@ void use_global_pointer(int i) {
 
 // CHECK-LABEL: define {{.*}}@use_scalar(
 // CHECK-NOT: @ptsan_bounds
-// CHECK: [[SCALAR:%[A-Za-z0-9_.]+]] = load ptr, ptr @Scalar.ptsan.ptr
-// CHECK: icmp eq i32 %i, 0
+// CHECK-DAG: [[SCALAR:%[A-Za-z0-9_.]+]] = load ptr, ptr @Scalar.ptsan.ptr
+// CHECK-DAG: icmp eq i32 %i, 0
 // CHECK: ptrtoint ptr [[SCALAR]] to i64
 // CHECK-NOT: @ptsan_bounds
 // CHECK: call void @ptsan_complain

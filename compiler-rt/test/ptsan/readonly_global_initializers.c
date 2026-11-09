@@ -4,13 +4,17 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // RUN: split-file %s %t
-// RUN: %clang_ptsan -O2 -fno-pie -no-pie %t/main.c %t/owners.c %t/target.c -o %t/nopie
+// RUN: %clang_ptsan -I%S -O2 -fno-pie -no-pie %t/main.c %t/owners.c %t/target.c -o %t/nopie
 // RUN: %t/nopie
 // RUN: %t/nopie protect
-// RUN: %clang_ptsan -O2 -fuse-ld=bfd %t/empty.c -o %t/empty-bfd
+// RUN: %clang_ptsan -I%S -O2 -fuse-ld=bfd %t/empty.c -o %t/empty-bfd
 // RUN: %t/empty-bfd
-// RUN: %if lld-available %{ %clang_ptsan -O2 -fuse-ld=lld %t/empty.c -o %t/empty-lld %}
+// RUN: %if lld-available %{ %clang_ptsan -I%S -O2 -fuse-ld=lld %t/empty.c -o %t/empty-lld %}
 // RUN: %if lld-available %{ %t/empty-lld %}
+// RUN: %clang_ptsan_id32 -I%S -O2 -fno-pie -no-pie \
+// RUN:   %t/main.c %t/owners.c %t/target.c -o %t/id32
+// RUN: %t/id32
+// RUN: %t/id32 protect
 
 // Separate modules prevent constant folding of the loads and exercise replay
 // ordering and deduplication of the final sealing constructor.
@@ -33,6 +37,7 @@ int *const *const indirect = &slot;
 #include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "Inputs/ptsan_test_interface.h"
 
 extern int target[4];
 extern int *const slot;
@@ -41,12 +46,12 @@ struct Table { int *elements[2]; int count; };
 extern const struct Table table;
 
 __attribute__((constructor)) static void check_initializers(void) {
-  uintptr_t id = (uintptr_t)target >> 48;
-  assert(id && id != 0xffff);
-  assert((uintptr_t)slot >> 48 == id);
-  assert((uintptr_t)table.elements[0] >> 48 == id);
-  assert((uintptr_t)table.elements[1] >> 48 == id);
-  assert((uintptr_t)indirect >> 48 == (uintptr_t)&slot >> 48);
+  uintptr_t id = get_id(target);
+  assert(id && id != ptsan_default_id());
+  assert(get_id(slot) == id);
+  assert(get_id(table.elements[0]) == id);
+  assert(get_id(table.elements[1]) == id);
+  assert(get_id(indirect) == get_id(&slot));
   assert(*indirect == slot);
   assert(*slot == 11 && *table.elements[0] == 22);
   assert(*table.elements[1] == 44 && table.count == 2);
@@ -61,7 +66,7 @@ static void protected_write(int signal_number) {
 
 __attribute__((noinline, disable_sanitizer_instrumentation))
 static void overwrite(void *pointer) {
-  *(volatile uintptr_t *)((uintptr_t)pointer & ((1ULL << 48) - 1)) = 0;
+  *(volatile uintptr_t *)ptsan_get_address(pointer) = 0;
 }
 
 int main(int argc, char **argv) {

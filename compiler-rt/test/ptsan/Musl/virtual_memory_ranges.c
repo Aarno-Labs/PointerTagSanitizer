@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
@@ -38,9 +39,21 @@ int main(void) {
   mapping[0] = 1;
   if (mprotect(mapping, page_size, PROT_READ) != 0 ||
       mprotect(mapping, page_size, PROT_READ | PROT_WRITE) != 0) {
+    perror("mprotect mapping base");
     munmap(mapping, mapping_size);
     return 3;
   }
+
+  // Musl rounds both ends to pages before the encoded syscall boundary. Cover
+  // a derived pointer and a non-page-sized range as well as the mapping base.
+  if (mprotect(mapping + page_size + 1, page_size - 2, PROT_NONE) != 0 ||
+      mprotect(mapping + page_size, page_size, PROT_READ | PROT_WRITE) != 0) {
+    perror("mprotect mapping interior");
+    munmap(mapping, mapping_size);
+    return 11;
+  }
+  mapping[page_size] = 2;
+  mapping[mapping_size - 1] = 3;
 
   if (madvise(mapping, mapping_size, MADV_NORMAL) != 0 ||
       msync(mapping, mapping_size, MS_SYNC) != 0) {

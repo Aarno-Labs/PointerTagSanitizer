@@ -11,6 +11,14 @@
 // RUN: %run %t good
 // RUN: not %run %t bad 2> %t.bad
 // RUN: FileCheck %s < %t.bad
+
+// ID32 allocator wrappers must decode inputs and retain exact output bounds.
+// RUN: %ptsan_musl_id32_nonstrict -fno-builtin %s -o %t.id32
+// RUN: %run %t.id32 good
+// RUN: not %run %t.id32 bad 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict -fno-builtin %s -o %t.id32.strict
+// RUN: %run %t.id32.strict good
+// RUN: not %run %t.id32.strict bad 2>&1 | FileCheck %s
 //
 // CHECK: BAD-READY
 // CHECK: Found bad

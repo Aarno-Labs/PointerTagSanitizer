@@ -45,10 +45,14 @@ PTSanPreanalysisElider::tryMaterializeBase(HoistTarget EnvironmentTarget,
     Instruction *IP = PlaceablePtrCheck::getCheckIP(CheckIPs, PTA.DT);
     Instruction *BoundsIP = BoundsTarget.getIP();
     GetIDAnchor ID = GetIDAnchor::create(DS, BoundsIP, Base);
-    BoundAnchor BaseBound = LoadBoundAnchor::createBase(DS, BoundsIP, ID);
-    BoundAnchor SpanBound = LoadBoundAnchor::createSpan(DS, BoundsIP, ID);
+    BoundAnchor BaseBound = LoadBoundAnchor::createBase(DS, BoundsIP, ID.Call);
+    BoundAnchor SpanBound = LoadBoundAnchor::createSpan(DS, BoundsIP, ID.Call);
+    optional<LoadBoundAnchor> Origin;
+    if (Cl32BitIDs) {
+      Origin = LoadBoundAnchor::createOrigin(DS, BoundsIP, ID.Call);
+    }
     LoopPreanalysisAnchor Anchor =
-        LoopPreanalysisAnchor::create(DS, IP, ID, BaseBound, SpanBound);
+        LoopPreanalysisAnchor::create(DS, IP, ID, BaseBound, SpanBound, Origin);
     PtrOp Op(FakeUse, 1, CHK_TY::PREANALYZED_LOOP, nullptr);
     BoundedPtrCheck BoundedCheck(Anchor, Op, Base, Range);
     // If this check is trivial, remove it

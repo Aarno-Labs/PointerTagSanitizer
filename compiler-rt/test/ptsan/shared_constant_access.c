@@ -35,7 +35,7 @@ static unsigned char Writable = 0x5a;
 unsigned char read_constant_offset(const unsigned char *base, intptr_t offset);
 
 static intptr_t raw_address(const void *p) {
-  return (uintptr_t)p & ((UINT64_C(1) << 48) - 1);
+  return ptsan_get_address(p);
 }
 
 int main(int argc, char **argv) {
@@ -55,7 +55,7 @@ int main(int argc, char **argv) {
 
   // The target is genuinely readable, but outside the shared ID's bounds.
   assert(read_constant_offset(&Writable, 0) == 0x5a);
-  uintptr_t begin = ptsan_get_base(id) & ((UINT64_C(1) << 48) - 1);
+  uintptr_t begin = ptsan_get_address((void *)ptsan_get_base(id));
   uintptr_t end = begin + ptsan_get_size(id);
   uintptr_t target = raw_address(&Writable);
   assert(target < begin || target >= end);

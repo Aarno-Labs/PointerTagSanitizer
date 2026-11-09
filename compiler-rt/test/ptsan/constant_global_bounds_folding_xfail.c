@@ -7,10 +7,10 @@
 // These accesses deliberately extend beyond SmallConstant itself. Shared IDs
 // require the segment's runtime bounds, so the old full-elision expectations
 // remain XFAIL. Keep them separate from stack and mutable-global coverage.
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names \
 // RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefix=DEFAULT
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names \
-// RUN:   --target=x86_64-unknown-linux-musl -mllvm -ptsan-strict-mode -S -emit-llvm -o - %s | \
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names \
+// RUN:   --target=x86_64-unknown-linux-musl -fsanitize-ptsan-strict-mode -S -emit-llvm -o - %s | \
 // RUN:   FileCheck %s --check-prefix=STRICT
 
 unsigned char ConstantCopyDst[256];

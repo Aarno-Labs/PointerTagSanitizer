@@ -11,7 +11,7 @@
 
 extern volatile uint64_t runtime_thread_count
     __asm__("_ZN7__ptsan11num_threadsE");
-extern __thread uint16_t ptsan_stack_id_limit;
+extern __thread uint64_t ptsan_stack_id_limit;
 static _Thread_local int value = 7;
 
 // Read runtime bookkeeping without requiring instrumentation for its globals.
@@ -21,7 +21,7 @@ static uint64_t thread_count(void) {
 }
 
 __attribute__((noinline, disable_sanitizer_instrumentation))
-static uint16_t bucket_limit(void) {
+static uint64_t bucket_limit(void) {
   return ptsan_stack_id_limit;
 }
 

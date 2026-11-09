@@ -5,21 +5,21 @@
 //
 // REQUIRES: x86_64-target-arch
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-vectorize -fno-slp-vectorize \
-// RUN:   -fno-discard-value-names -mllvm -ptsan-runtime-validate \
+// RUN: %clang_ptsan_plain -g -O3 -fno-vectorize -fno-slp-vectorize \
+// RUN:   -fno-discard-value-names -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-abort-on-error -mllvm -ptsan-stack-temporal-safety=0 \
 // RUN:   -mllvm -ptsan-preanalyze-loops=0 -o no-preanalysis %s
 // RUN: ./no-preanalysis good 2> no-preanalysis-good.txt
 // RUN: FileCheck %s --check-prefix=GOOD --allow-empty < no-preanalysis-good.txt
 // RUN: not ./no-preanalysis bad 2> no-preanalysis-bad.txt
 // RUN: FileCheck %s --check-prefix=BAD < no-preanalysis-bad.txt
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-vectorize -fno-slp-vectorize \
-// RUN:   -fno-discard-value-names -mllvm -ptsan-runtime-validate \
+// RUN: %clang_ptsan_plain -g -O3 -fno-vectorize -fno-slp-vectorize \
+// RUN:   -fno-discard-value-names -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-abort-on-error -mllvm -ptsan-stack-temporal-safety=0 \
 // RUN:   -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | \
 // RUN:   FileCheck %s --check-prefix=PREANALYSIS
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-vectorize -fno-slp-vectorize \
-// RUN:   -fno-discard-value-names -mllvm -ptsan-runtime-validate \
+// RUN: %clang_ptsan_plain -g -O3 -fno-vectorize -fno-slp-vectorize \
+// RUN:   -fno-discard-value-names -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-abort-on-error -mllvm -ptsan-stack-temporal-safety=0 \
 // RUN:   -o preanalysis %s
 // RUN: ./preanalysis good 2> preanalysis-good.txt

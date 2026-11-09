@@ -9,6 +9,12 @@
 // RUN:   -mllvm -ptsan-abort-on-error -o %t.noopts %s
 // RUN: %t.noopts 2>&1 | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -O2 -mllvm -ptsan-abort-on-error -o %t %s
+// RUN: %t 2>&1 | FileCheck %s
+// RUN: %clang_ptsan_id32 -O2 -mllvm -ptsan-no-opts \
+// RUN:   -mllvm -ptsan-abort-on-error -o %t.noopts %s
+// RUN: %t.noopts 2>&1 | FileCheck %s
+
 // CHECK-NOT: Found bad
 // CHECK: va-list-source-ids-ok
 // CHECK-NOT: Found bad
@@ -19,10 +25,11 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 #include <stdio.h>
 
 __attribute__((noinline)) static unsigned id_of(const void *p) {
-  return (uintptr_t)p >> 48;
+  return get_id(p);
 }
 
 __attribute__((noinline)) static void consume(va_list *arguments) {

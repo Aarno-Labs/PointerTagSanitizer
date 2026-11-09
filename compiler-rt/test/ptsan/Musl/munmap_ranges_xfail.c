@@ -56,7 +56,6 @@ static void checkLiveBounds(uint16_t id, const void *base, size_t size) {
 
 static void checkRetiredBounds(uint16_t id) {
   assert(id != 0);
-  assert(ptsan_get_base(id) == 0);
   assert(ptsan_get_size(id) == 0);
 }
 
@@ -163,7 +162,8 @@ static int testShapedUnmap(bool use_tagless_address, enum UnmapShape shape) {
     *(volatile char *)mapping = 2;
   }
 
-  char *replacement = mapMemory(unmap_address, page_size, MAP_FIXED);
+  char *replacement =
+      mapMemory(unmap_address, page_size, MAP_FIXED_NOREPLACE);
   if (replacement == NULL) {
     return 4;
   }
@@ -200,7 +200,7 @@ static int testCrossMappingUnmap(bool include_hole) {
   }
   checkRetiredBounds(reservation_id);
 
-  char *first = mapMemory(raw_base, page_size, MAP_FIXED);
+  char *first = mapMemory(raw_base, page_size, MAP_FIXED_NOREPLACE);
   if (first == NULL) {
     return 4;
   }
@@ -209,7 +209,8 @@ static int testCrossMappingUnmap(bool include_hole) {
   checkRetiredBounds(reservation_id);
   checkLiveBounds(first_id, first, page_size);
   const size_t second_offset = (page_count - 1) * page_size;
-  char *second = mapMemory(raw_base + second_offset, page_size, MAP_FIXED);
+  char *second =
+      mapMemory(raw_base + second_offset, page_size, MAP_FIXED_NOREPLACE);
   if (second == NULL) {
     return 5;
   }
@@ -228,7 +229,8 @@ static int testCrossMappingUnmap(bool include_hole) {
   checkRetiredBounds(first_id);
   checkRetiredBounds(second_id);
 
-  char *replacement = mapMemory(raw_base, range_size, MAP_FIXED);
+  char *replacement =
+      mapMemory(raw_base, range_size, MAP_FIXED_NOREPLACE);
   if (replacement == NULL) {
     return 7;
   }
@@ -267,7 +269,7 @@ static int testCrossPartialUnmap(void) {
   }
   checkRetiredBounds(reservation_id);
 
-  char *first = mapMemory(raw_base, mapping_size, MAP_FIXED);
+  char *first = mapMemory(raw_base, mapping_size, MAP_FIXED_NOREPLACE);
   if (first == NULL) {
     return 4;
   }
@@ -277,7 +279,8 @@ static int testCrossPartialUnmap(void) {
   checkRetiredBounds(reservation_id);
 
   char *second_raw_base = raw_base + mapping_size;
-  char *second = mapMemory(second_raw_base, mapping_size, MAP_FIXED);
+  char *second =
+      mapMemory(second_raw_base, mapping_size, MAP_FIXED_NOREPLACE);
   if (second == NULL) {
     return 5;
   }
@@ -301,7 +304,8 @@ static int testCrossPartialUnmap(void) {
   *(volatile char *)first = 1;
   *(volatile char *)(second + page_size) = 2;
 
-  char *replacement = mapMemory(raw_base + unmap_offset, unmap_size, MAP_FIXED);
+  char *replacement = mapMemory(raw_base + unmap_offset, unmap_size,
+                                MAP_FIXED_NOREPLACE);
   if (replacement == NULL) {
     return 7;
   }

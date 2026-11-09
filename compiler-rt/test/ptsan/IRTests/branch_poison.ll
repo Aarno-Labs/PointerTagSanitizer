@@ -5,9 +5,9 @@
 ; Check should only get to if.end
 ; CHECK-LABEL: define{{.*}}@case_branch_poison
 ; CHECK-LABEL: if.end:
-; CHECK: baseGep = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64
+; CHECK: baseGep = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64
 ; CHECK: base = load i64,
-; CHECK: spanGep = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64
+; CHECK: spanGep = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64
 ; CHECK: span = load i64,
 
 

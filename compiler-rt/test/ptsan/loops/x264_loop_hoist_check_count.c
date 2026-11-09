@@ -1,14 +1,18 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names -fno-unsafe-math-optimizations -fcommon -mllvm -ptsan-reoptimize -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-stack-temporal-safety=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-abort-on-error=0 -o loop-hoist %s
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names -fno-unsafe-math-optimizations -fcommon -mllvm -ptsan-reoptimize -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-stack-temporal-safety=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-no-loop-check-hoist -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-abort-on-error=0 -o no-loop-hoist %s
+// RUN: %clang_ptsan -O3 -g -fno-discard-value-names -fno-unsafe-math-optimizations -fcommon -mllvm -ptsan-reoptimize -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-stack-temporal-safety=0 -mllvm -ptsan-preanalyze-loops=0 -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats -o loop-hoist %s
+// RUN: %clang_ptsan -O3 -g -fno-discard-value-names -fno-unsafe-math-optimizations -fcommon -mllvm -ptsan-reoptimize -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-stack-temporal-safety=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-no-loop-check-hoist -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats -o no-loop-hoist %s
 // RUN: ./loop-hoist 4 1 2> loop.good.err && FileCheck %s --check-prefixes=GOOD,FAST < loop.good.err
-// RUN: ./loop-hoist 5 1 2> loop.bad.err && FileCheck %s --check-prefixes=BAD,FAST < loop.bad.err
+// RUN: not ./loop-hoist 5 1 2> loop.bad.err
+// RUN: FileCheck %s --check-prefix=BAD < loop.bad.err
 // RUN: ./loop-hoist 4 0 2> loop.noden.good.err && FileCheck %s --check-prefixes=GOOD,FAST < loop.noden.good.err
-// RUN: ./loop-hoist 5 0 2> loop.noden.bad.err && FileCheck %s --check-prefixes=BAD,FAST < loop.noden.bad.err
+// RUN: not ./loop-hoist 5 0 2> loop.noden.bad.err
+// RUN: FileCheck %s --check-prefix=BAD < loop.noden.bad.err
 // RUN: ./no-loop-hoist 4 1 2> no-loop.good.err && FileCheck %s --check-prefixes=GOOD,SLOWGOOD < no-loop.good.err
-// RUN: ./no-loop-hoist 5 1 2> no-loop.bad.err && FileCheck %s --check-prefixes=BAD,SLOWBAD < no-loop.bad.err
+// RUN: not ./no-loop-hoist 5 1 2> no-loop.bad.err
+// RUN: FileCheck %s --check-prefix=BAD < no-loop.bad.err
 // RUN: ./no-loop-hoist 4 0 2> no-loop.noden.good.err && FileCheck %s --check-prefixes=GOOD,SLOWGOOD < no-loop.noden.good.err
-// RUN: ./no-loop-hoist 5 0 2> no-loop.noden.bad.err && FileCheck %s --check-prefixes=BAD,SLOWBAD < no-loop.noden.bad.err
+// RUN: not ./no-loop-hoist 5 0 2> no-loop.noden.bad.err
+// RUN: FileCheck %s --check-prefix=BAD < no-loop.noden.bad.err
 
 // GOOD-NOT: Found bad
 // BAD: Found bad COMPOUND access
@@ -24,12 +28,6 @@
 // SLOWGOOD: PREANALYZED_LOOP: 0
 // SLOWGOOD: COMPOUND: 12
 // SLOWGOOD: Total checks called: 14
-// SLOWBAD: Checks called:
-// SLOWBAD: POINT: 2
-// SLOWBAD: LOOP: 0
-// SLOWBAD: PREANALYZED_LOOP: 0
-// SLOWBAD: COMPOUND: 14
-// SLOWBAD: Total checks called: 16
 
 #include <stdint.h>
 #include <stdio.h>

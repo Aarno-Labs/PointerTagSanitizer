@@ -11,6 +11,13 @@
 // RUN: ./fix > out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=FIXED
 
+// RUN: %clang_ptsan_id32 -g -O2 -mllvm -ptsan-runtime-validate-arith -mllvm -ptsan-clear-ids-on-arith=0 -o nofix %s
+// RUN: ./nofix 2> err.txt
+// RUN: cat err.txt | FileCheck %s --check-prefix=UNFIXED
+// RUN: %clang_ptsan_id32 -g -O2 -o fix -mllvm -ptsan-clear-ids-on-arith=1 %s
+// RUN: ./fix > out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=FIXED
+
 //UNFIXED: WARNING: Pointer-arith-or-compare pointers with different IDs
 
 //FIXED: === test_ptr_minus_int ===
@@ -28,6 +35,7 @@
 #include <stdio.h>
 #include <stddef.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 
 __attribute__((noinline))
 int *do_p_i_sub(int *p, int n) {
@@ -111,11 +119,11 @@ void test_stack_ptr_diff_ub(int n, int m) {
   ptrdiff_t diff_elems = do_p_p_sub_int(p2, p1);
   ptrdiff_t diff_bytes = do_p_p_sub_char((char *)p2, (char *)p1);
 
-  // Compute the reference with integer arithmetic on the low 48 address bits.
+  // Compute the reference with integer arithmetic on decoded addresses.
   // Signed subtraction handles either stack ordering without depending on the
   // distance between these objects or repeating the pointer subtraction above.
-  intptr_t address1 = (intptr_t)((uintptr_t)p1 & UINT64_C(0x0000ffffffffffff));
-  intptr_t address2 = (intptr_t)((uintptr_t)p2 & UINT64_C(0x0000ffffffffffff));
+  intptr_t address1 = (intptr_t)ptsan_get_address(p1);
+  intptr_t address2 = (intptr_t)ptsan_get_address(p2);
   ptrdiff_t expected_bytes = address2 - address1;
   ptrdiff_t expected_elems = expected_bytes / (ptrdiff_t)sizeof(*p1);
 

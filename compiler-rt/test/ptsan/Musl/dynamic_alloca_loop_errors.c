@@ -7,6 +7,17 @@
 // RUN:   -mllvm -ptsan-abort-on-error -o %t %s
 // RUN: not %t oob 2>&1 | FileCheck %s --check-prefix=OOB
 // RUN: not %t use after-return 2>&1 | FileCheck %s --check-prefix=UAR
+
+// Retiring dynamic ID32 objects must invalidate escaped pointers.
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32
+// RUN: not %run %t.id32 oob 2>&1 | FileCheck %s --check-prefix=OOB
+// RUN: not %run %t.id32 use after-return 2>&1 | FileCheck %s --check-prefix=UAR
+// Runtime-managed repeatable allocas retain temporal checks even when the
+// compiler is allowed to optimize fixed-stack allocation and cleanup.
+// RUN: %ptsan_musl_strict -mllvm -ptsan-stack-temporal-safety=0 %s -o %t.weak16
+// RUN: not %run %t.weak16 use after-return 2>&1 | FileCheck %s --check-prefix=UAR
+// RUN: %ptsan_musl_id32_strict -mllvm -ptsan-stack-temporal-safety=0 %s -o %t.weak32
+// RUN: not %run %t.weak32 use after-return 2>&1 | FileCheck %s --check-prefix=UAR
 // OOB: checking repeatable alloca bounds
 // OOB: Found bad
 // UAR: checking retired repeatable alloca

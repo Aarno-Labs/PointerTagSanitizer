@@ -103,7 +103,8 @@ static int test_bad_fdset(void) {
 }
 
 static int test_bad_signal_mask(void) {
-  void *signal_mask = calloc(1, sizeof(sigset_t) - 1);
+  // The kernel reads eight bytes on x86-64/AArch64, not sizeof(sigset_t).
+  void *signal_mask = calloc(1, 7);
   if (!signal_mask) {
     return 1;
   }

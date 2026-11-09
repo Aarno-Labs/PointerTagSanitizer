@@ -2,9 +2,9 @@
 // RUN: %clang_ptsan -g -O2 -o %exe %s
 // RUN: ./%exe 19 2> good.txt
 // RUN: cat good.txt | FileCheck %s --check-prefix=GOOD
-// RUN: ./%exe 20 2> bad.txt
+// RUN: not ./%exe 20 2> bad.txt
 // RUN: cat bad.txt | FileCheck %s --check-prefix=BAD
-// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR
+// RUN: %clang_ptsan_plain -O2 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR
 
 // BAD: Found bad POINT access
 // GOOD-NOT: Found bad POINT access

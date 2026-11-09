@@ -9,6 +9,16 @@
 // RUN: ./%exe 79 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
 
+// RUN: %clang_ptsan_id32 -g -O2 -mllvm -ptsan-abort-on-error -o %exe %s
+// RUN: not ./%exe 83 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=BAD
+// RUN: not ./%exe 81 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=BAD
+// RUN: ./%exe 80 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
+// RUN: ./%exe 79 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
+
 // Stop before the invalid copy can corrupt adjacent stack storage.
 // BAD: Found bad RANGE access
 

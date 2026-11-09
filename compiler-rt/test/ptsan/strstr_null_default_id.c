@@ -1,3 +1,4 @@
+// The permissive exhaustion ID exists only in 16-bit mode.
 // Reproduces the dbms shape where strstr returns NULL, then the generic
 // interceptor return-ID restoration turns it into a non-null default-ID pointer.
 

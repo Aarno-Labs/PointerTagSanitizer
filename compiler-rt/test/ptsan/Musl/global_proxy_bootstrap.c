@@ -3,5 +3,5 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// RUN: %ptsan_musl_strict -o %t %S/../global_proxy_bootstrap.c
+// RUN: %ptsan_musl_strict -DPTSAN_EARLY_GLOBALS -o %t %S/../global_proxy_bootstrap.c
 // RUN: %run %t

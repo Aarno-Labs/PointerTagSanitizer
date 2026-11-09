@@ -15,68 +15,51 @@
 #pragma once
 #include "ptsan.h"
 
+#ifndef PTSAN_32_BIT_IDS
+#define PTSAN_HAS_DEFAULT_ID 1
+#endif
+
+#ifdef PTSAN_32_BIT_IDS
 #ifdef PTSAN_LAM
-#ifdef PTSAN_ID_BITS
-#if PTSAN_ID_BITS != 15
-#error "PTSAN_LAM requires PTSAN_ID_BITS to be 15"
+#error "PTSAN_32_BIT_IDS and PTSAN_LAM are incompatible"
 #endif
-#else
+#define PTSAN_ID_BITS 32
+#elif defined(PTSAN_LAM)
 #define PTSAN_ID_BITS 15
-#endif
-#elif !defined(PTSAN_ID_BITS)
+#else
 #define PTSAN_ID_BITS 16
 #endif
 
-constexpr u16 DEFAULT_NUM_STACK_ID_BUCKETS = 12;
-constexpr u16 DEFAULT_IDS_PER_STACK_BUCKET = 0x200; // 512
-constexpr u16 MAX_STACK_ID_BUCKETS = 128;
-constexpr u16 MAX_FAST_STACK_ID_LIMIT = 0x7fff;
-
-// Allocatable ID-space size. LAM keeps one top bit free for hardware tagging,
-// so its usable ID space is smaller than the metadata table's physical size.
-constexpr u32 NumIDs = 1 << PTSAN_ID_BITS;
-// ID to default to if we run out
+// Size of the ID namespace, including reserved IDs.
+constexpr u64 NumIDs = 1ULL << PTSAN_ID_BITS;
+#ifdef PTSAN_HAS_DEFAULT_ID
+// ID to default to if we run out.
 constexpr u32 DefaultIDNo = NumIDs - 1;
-// Last valid id
 constexpr u32 LastIDNo = NumIDs - 2;
+#else
+constexpr u32 LastIDNo = NumIDs - 1;
+#endif
 
-// Metadata tables are indexed from the raw top 16 bits of a pointer. In LAM
-// mode only the low half is allocatable, but speculative/hoisted metadata reads
-// can still see arbitrary high-half values from non-pointer words.
-constexpr u32 MetadataIDBits = 16;
-constexpr u32 MetadataNumIDs = 1 << MetadataIDBits;
-static_assert(MetadataNumIDs >= NumIDs,
-              "Metadata table must cover the allocatable ID space");
+// Bucket boundaries cover this aligned namespace; ID zero remains reserved.
+#ifdef PTSAN_32_BIT_IDS
+#define PTSAN_ID_SPACE_BEGIN                                                    \
+  ((!ClStrictMode || ClSupportIndicatorBit) ? 0x80000000U : 0U)
+#else
+#define PTSAN_ID_SPACE_BEGIN 0U
+#endif
 
-constexpr u32 ceil_pow2(u32 n) {
-  if (n <= 1) return 1;
-  n--;
-  n |= n >> 1;
-  n |= n >> 2;
-  n |= n >> 4;
-  n |= n >> 8;
-  n |= n >> 16;
-  return n + 1;
+inline bool isDefaultID(PTSanID id) {
+#ifdef PTSAN_HAS_DEFAULT_ID
+  return id == DefaultIDNo;
+#else
+  return false;
+#endif
 }
 
-// -1 for 0, -1 for DefaultID
-constexpr u32 NumValidIDs = NumIDs - 2;
-
-// We use -2 ids (0 and default), but we want one free
-// space in the buffer so we don't have to deal with
-// empty/full ambiguity. For 3 id bits, we'd have 8 ids
-// (0bx111) + 0, and we would reserve 0 and 7, so we'd have 6
-// valid ones and want a buffer of size 7, which is
-// NumValidIDs + 1.
-//
-// We then round to the nearest power of two so we can more
-// efficiently modulo it
-//   0   1   2   3   4   5   6    7
-// [| 1 | 2 | 3 | 4 | 5 | 6 |   |   |]
-constexpr u32 IDsBufSz = ceil_pow2(NumValidIDs);
-// Make sure this really is a power of 2 or the masking logic later
-// will explode
-static_assert((IDsBufSz & (IDsBufSz - 1)) == 0,
-              "IDsBufSz must be a power of two");
-
-constexpr u32 IDsBufMask = IDsBufSz - 1;
+// Metadata tables cover the IDs extracted from pointers. ID16 needs all 16
+// index bits even under LAM: speculative/hoisted reads can see high-half IDs
+// from non-pointer words. ID32 uses its configured ID width.
+constexpr u32 MetadataIDBits = PTSAN_ID_BITS > 16 ? PTSAN_ID_BITS : 16;
+constexpr u64 MetadataNumIDs = 1ULL << MetadataIDBits;
+static_assert(MetadataNumIDs >= NumIDs,
+              "Metadata table must cover the allocatable ID space");

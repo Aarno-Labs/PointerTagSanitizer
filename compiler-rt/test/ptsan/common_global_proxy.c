@@ -17,6 +17,19 @@
 // RUN:   %t.split/second.c %t.split/first.c %t.split/main.c
 // RUN: %run %t.strong_reverse 2>&1 | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -O2 -fcommon -I%S -o %t.common \
+// RUN:   %t.split/main.c %t.split/first.c %t.split/second.c
+// RUN: %run %t.common 2>&1 | FileCheck %s
+// RUN: %clang_ptsan_id32 -O2 -fcommon -I%S -o %t.reverse \
+// RUN:   %t.split/second.c %t.split/first.c %t.split/main.c
+// RUN: %run %t.reverse 2>&1 | FileCheck %s
+// RUN: %clang_ptsan_id32 -O2 -fcommon -DSTRONG -I%S -o %t.strong \
+// RUN:   %t.split/main.c %t.split/first.c %t.split/second.c
+// RUN: %run %t.strong 2>&1 | FileCheck %s
+// RUN: %clang_ptsan_id32 -O2 -fcommon -DSTRONG -I%S -o %t.strong_reverse \
+// RUN:   %t.split/second.c %t.split/first.c %t.split/main.c
+// RUN: %run %t.strong_reverse 2>&1 | FileCheck %s
+
 // Common definitions must share a tagged proxy across translation units. A
 // strong definition must override them without creating a different proxy.
 // Exercise both link orders, including an extern-only consumer.
@@ -36,7 +49,7 @@ int read_shared(const volatile int *p);
 int main(void) {
   int *first = first_address();
   int *second = second_address();
-  uint16_t id = get_id(first);
+  PTSanID id = get_id(first);
   assert(id != 0 && id != ptsan_default_id());
   assert(id == get_id(second) && id == get_id(&Shared));
   // Integer equality checks the whole tagged representation, not just the

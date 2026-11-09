@@ -5,11 +5,16 @@
 //
 // RUN: %ptsan_musl_strict %s -o %t
 // RUN: echo input | %t 2>&1 | FileCheck %s
+
+// Standard FILE globals must be tagged before ID32 stdio accesses them.
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32
+// RUN: echo input | %run %t.id32 2>&1 | FileCheck %s
 // CHECK-NOT: Found bad
 // CHECK: stdout-ok
 // CHECK-NEXT: stderr-ok
 // CHECK-NOT: Found bad
 
+#include "../Inputs/ptsan_test_interface.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -17,9 +22,9 @@
 int main(void) {
   // These are constant pointer globals, not constant FILE objects. Their
   // stored values must be tagged before the instrumented stdio code runs.
-  assert((uintptr_t)stdin >> 48);
-  assert((uintptr_t)stdout >> 48);
-  assert((uintptr_t)stderr >> 48);
+  assert(get_id(stdin));
+  assert(get_id(stdout));
+  assert(get_id(stderr));
   char buffer[16];
   assert(fgets(buffer, sizeof buffer, stdin) == buffer);
   assert(buffer[0] == 'i' && buffer[4] == 't' && buffer[5] == '\n');

@@ -9,7 +9,7 @@
 // RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
 // RUN:   -mllvm -ptsan-stop-after=discovery -S -emit-llvm -o discovery.ll %s
 // RUN: FileCheck %s --check-prefix=DISCOVERY-GATHER \
-// RUN:   --check-prefix=DISCOVERY-SCATTER < discovery.ll
+// RUN:   --check-prefix=DISCOVERY-SCATTER --check-prefix=DEFAULT < discovery.ll
 // RUN: %clang_ptsan -O2 -march=skylake-avx512 \
 // RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
 // RUN:   -S -emit-llvm -o ptsan.ll %s
@@ -23,9 +23,32 @@
 // RUN:   %clang_ptsan -O2 -march=x86-64 -Xclang -disable-llvm-passes -x ir -o %exe -
 // RUN: ./%exe 0 2>good.txt
 // RUN: FileCheck %s --check-prefix=GOOD --allow-empty < good.txt
-// RUN: ./%exe 1 2>bad.txt
+// RUN: not ./%exe 1 2>bad.txt
 // RUN: FileCheck %s --check-prefix=BAD < bad.txt
-// RUN: ./%exe 2 2>bad.txt
+// RUN: not ./%exe 2 2>bad.txt
+// RUN: FileCheck %s --check-prefix=BAD < bad.txt
+// RUN: ./%exe 3 2>good.txt
+// RUN: FileCheck %s --check-prefix=GOOD --allow-empty < good.txt
+
+// RUN: %clang_ptsan_id32 -O2 -march=skylake-avx512 -fno-discard-value-names \
+// RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
+// RUN:   -mllvm -ptsan-stop-after=discovery -S -emit-llvm -o discovery.ll %s
+// RUN: FileCheck %s --check-prefix=DISCOVERY-GATHER \
+// RUN:   --check-prefix=DISCOVERY-SCATTER --check-prefix=ID32 < discovery.ll
+// RUN: %clang_ptsan_id32 -O2 -march=skylake-avx512 \
+// RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
+// RUN:   -S -emit-llvm -o ptsan.ll %s
+// RUN: FileCheck %s --check-prefix=OPT-GATHER --check-prefix=OPT-SCATTER < ptsan.ll
+// RUN: %clang_ptsan_id32 -O2 -march=skylake-avx512 \
+// RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
+// RUN:   -S -emit-llvm -o runtime.ll %s
+// RUN: sed -E 's/"(target-cpu|target-features|tune-cpu)"="[^"]*"//g' runtime.ll | \
+// RUN:   %clang_ptsan_id32 -O2 -march=x86-64 -Xclang -disable-llvm-passes -x ir -o %exe -
+// RUN: ./%exe 0 2>good.txt
+// RUN: FileCheck %s --check-prefix=GOOD --allow-empty < good.txt
+// RUN: not ./%exe 1 2>bad.txt
+// RUN: FileCheck %s --check-prefix=BAD < bad.txt
+// RUN: not ./%exe 2 2>bad.txt
 // RUN: FileCheck %s --check-prefix=BAD < bad.txt
 // RUN: ./%exe 3 2>good.txt
 // RUN: FileCheck %s --check-prefix=GOOD --allow-empty < good.txt
@@ -40,21 +63,27 @@
 // DISCOVERY-GATHER-LABEL: define {{.*}} @mixed_gather(
 // DISCOVERY-GATHER: [[GATHER_MASK:%.*]] = icmp ne <4 x i32>
 // DISCOVERY-GATHER: [[GATHER_POINTERS:%.*]] = {{.*}}call <4 x ptr> @llvm.masked.load.v4p0.p0({{.*}}<4 x i1> [[GATHER_MASK]],
-// DISCOVERY-GATHER: [[GATHER_RAW:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[GATHER_POINTERS]])
+// DEFAULT: [[GATHER_RAW:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[GATHER_POINTERS]])
+// ID32: [[GATHER_DECODE_ID:%.*]] = call <4 x i64> @__ptsan_get_id(<4 x ptr> [[GATHER_POINTERS]])
+// ID32: [[GATHER_BIAS:%.*]] = call <4 x i64> @__ptsan_load_base(<4 x i64> [[GATHER_DECODE_ID]], <4 x i1> [[GATHER_MASK]])
+// ID32: [[GATHER_RAW:%.*]] = call <4 x ptr> @__ptsan_strip_id32(<4 x ptr> [[GATHER_POINTERS]], <4 x i64> [[GATHER_DECODE_ID]], <4 x i64> [[GATHER_BIAS]])
 // DISCOVERY-GATHER: [[GATHER_IDS:%.*]] = call <4 x i64> @__ptsan_get_id(<4 x ptr> [[GATHER_POINTERS]])
 // DISCOVERY-GATHER: [[GATHER_BASES:%.*]] = call <4 x i64> @__ptsan_load_base(<4 x i64> [[GATHER_IDS]], <4 x i1> [[GATHER_MASK]])
 // DISCOVERY-GATHER: [[GATHER_SPANS:%.*]] = call <4 x i64> @__ptsan_load_span(<4 x i64> [[GATHER_IDS]], <4 x i1> [[GATHER_MASK]])
-// DISCOVERY-GATHER: call void (...) @__ptsan_access(<4 x i64> [[GATHER_IDS]], <4 x i64> [[GATHER_BASES]], <4 x i64> [[GATHER_SPANS]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0, <4 x i1> [[GATHER_MASK]])
+// DISCOVERY-GATHER: call void (...) @__ptsan_access(<4 x i64> [[GATHER_IDS]], <4 x i64> [[GATHER_BASES]], <4 x i64> [[GATHER_SPANS]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0, <4 x i1> [[GATHER_MASK]]
 // DISCOVERY-GATHER-NEXT: {{.*}}call <4 x i32> @llvm.masked.gather.v4i32.v4p0(<4 x ptr> [[GATHER_RAW]], i32 4, <4 x i1> [[GATHER_MASK]],
 //
 // DISCOVERY-SCATTER-LABEL: define {{.*}} @mixed_scatter(
 // DISCOVERY-SCATTER: [[SCATTER_MASK:%.*]] = icmp ne <4 x i32>
 // DISCOVERY-SCATTER: [[SCATTER_POINTERS:%.*]] = {{.*}}call <4 x ptr> @llvm.masked.load.v4p0.p0({{.*}}<4 x i1> [[SCATTER_MASK]],
-// DISCOVERY-SCATTER: [[SCATTER_RAW:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[SCATTER_POINTERS]])
+// DEFAULT: [[SCATTER_RAW:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[SCATTER_POINTERS]])
+// ID32: [[SCATTER_DECODE_ID:%.*]] = call <4 x i64> @__ptsan_get_id(<4 x ptr> [[SCATTER_POINTERS]])
+// ID32: [[SCATTER_BIAS:%.*]] = call <4 x i64> @__ptsan_load_base(<4 x i64> [[SCATTER_DECODE_ID]], <4 x i1> [[SCATTER_MASK]])
+// ID32: [[SCATTER_RAW:%.*]] = call <4 x ptr> @__ptsan_strip_id32(<4 x ptr> [[SCATTER_POINTERS]], <4 x i64> [[SCATTER_DECODE_ID]], <4 x i64> [[SCATTER_BIAS]])
 // DISCOVERY-SCATTER: [[SCATTER_IDS:%.*]] = call <4 x i64> @__ptsan_get_id(<4 x ptr> [[SCATTER_POINTERS]])
 // DISCOVERY-SCATTER: [[SCATTER_BASES:%.*]] = call <4 x i64> @__ptsan_load_base(<4 x i64> [[SCATTER_IDS]], <4 x i1> [[SCATTER_MASK]])
 // DISCOVERY-SCATTER: [[SCATTER_SPANS:%.*]] = call <4 x i64> @__ptsan_load_span(<4 x i64> [[SCATTER_IDS]], <4 x i1> [[SCATTER_MASK]])
-// DISCOVERY-SCATTER: call void (...) @__ptsan_access(<4 x i64> [[SCATTER_IDS]], <4 x i64> [[SCATTER_BASES]], <4 x i64> [[SCATTER_SPANS]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 1, <4 x i1> [[SCATTER_MASK]])
+// DISCOVERY-SCATTER: call void (...) @__ptsan_access(<4 x i64> [[SCATTER_IDS]], <4 x i64> [[SCATTER_BASES]], <4 x i64> [[SCATTER_SPANS]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 1, <4 x i1> [[SCATTER_MASK]]
 // DISCOVERY-SCATTER-NEXT: {{.*}}call void @llvm.masked.scatter.v4i32.v4p0({{.*}}<4 x ptr> [[SCATTER_RAW]], i32 4, <4 x i1> [[SCATTER_MASK]])
 //
 // OPT-GATHER-LABEL: define {{.*}} @mixed_gather(

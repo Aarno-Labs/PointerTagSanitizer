@@ -1,10 +1,10 @@
 // XFAIL: *
 // TODO: Shared runtime bounds must not prevent the removable-check filter from
 // proving these accesses safe using the globals' exact static object bounds.
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-no-loop-check-hoist -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-filter-removable-checks -S -emit-llvm -o - %s | FileCheck %s --check-prefix=UNFILTERED
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-no-loop-check-hoist -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=FILTERED
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-preanalyze-loops=1 -mllvm -ptsan-no-loop-check-hoist -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=PREONLY
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-preanalyze-loops=1 -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=BOTH
+// RUN: %clang_ptsan_plain -O3 -g -fno-discard-value-names -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-no-loop-check-hoist -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-filter-removable-checks -S -emit-llvm -o - %s | FileCheck %s --check-prefix=UNFILTERED
+// RUN: %clang_ptsan_plain -O3 -g -fno-discard-value-names -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-no-loop-check-hoist -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=FILTERED
+// RUN: %clang_ptsan_plain -O3 -g -fno-discard-value-names -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-preanalyze-loops=1 -mllvm -ptsan-no-loop-check-hoist -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=PREONLY
+// RUN: %clang_ptsan_plain -O3 -g -fno-discard-value-names -mllvm -ptsan-clear-ids-on-arith=0 -mllvm -ptsan-clear-ids-on-cmp=0 -mllvm -ptsan-preanalyze-loops=1 -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=BOTH
 
 // Extracted from 525.x264_r x264_src/encoder/rdo.c:x264_rdo_init.
 // Without removable-check filtering this produces many global bounds checks;

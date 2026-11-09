@@ -1,5 +1,9 @@
-; RUN: %opt_ptsan -ptsan-nochecks -ptsan-stop-after=lowering %s -S | FileCheck %s
+; RUN: %opt_ptsan -ptsan-nochecks -ptsan-stop-after=late-optimization %s | FileCheck %s
+; RUN: %opt_ptsan -ptsan-32-bit-ids -ptsan-nochecks -ptsan-stop-after=late-optimization %s | FileCheck %s
+; RUN: %opt_ptsan -ptsan-nochecks %s -o /dev/null
+; RUN: %opt_ptsan -ptsan-32-bit-ids -ptsan-nochecks %s -o /dev/null
 
+; Check legal anchor placement, then run through lowering to verify the result.
 ; This is the ID-only sibling of strip_id_hoist_invoke_phi.ll. The invoke-result
 ; PHI itself stays tagged, but a stripped descendant needs a retag at loop exit.
 ; Computing that retag ID structurally as a PHI of incoming IDs is illegal for
@@ -10,7 +14,6 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 target triple = "x86_64-unknown-linux-gnu"
 
 declare ptr @may_throw()
-declare ptr @__ptsan_strip(ptr)
 declare i32 @__gxx_personality_v0(...)
 
 define void @invoke_result_phi_descendant_retag_id(ptr %other, ptr %slot,
@@ -21,18 +24,15 @@ define void @invoke_result_phi_descendant_retag_id(ptr %other, ptr %slot,
 ; CHECK-NEXT: %p = invoke ptr @may_throw()
 ; CHECK: join:
 ; CHECK-NEXT: %phi = phi ptr [ %p, %invoke.pred ], [ %other, %null.pred ]
-; CHECK-NEXT: [[PHI_ASINT:%.*]] = ptrtoint ptr %phi to i64
-; CHECK-NEXT: [[PHI_BITS:%.*]] = call i64 asm "andq $2, $0", "=r,0,r,~{flags}"(i64 [[PHI_ASINT]], i64 281474976710655)
-; CHECK-NEXT: [[PHI_STRIP:%.*]] = inttoptr i64 [[PHI_BITS]] to ptr
-; CHECK-NEXT: [[PHI_ID:%.*]] = lshr i64 [[PHI_ASINT]], 48
+; CHECK-DAG: [[PHI_ID:%.*]] = call i64 @__ptsan_get_id(ptr %phi)
+; CHECK-DAG: [[PHI_STRIP:%.*]] = call ptr @__ptsan_strip{{(_id32)?}}(ptr %phi
 ; CHECK: loop:
-; CHECK: %g = getelementptr i8, ptr [[PHI_STRIP]], i64 %iv, !ptsan.stripped {{![0-9]+}}
+; CHECK: %g = getelementptr inbounds i8, ptr [[PHI_STRIP]], i64 %iv
 ; CHECK: exit:
-; CHECK-NEXT: [[G_LCSSA_ASINT:%.*]] = ptrtoint ptr %g to i64
-; CHECK-NEXT: [[G_TAGBITS:%.*]] = shl i64 [[PHI_ID]], 48
-; CHECK-NEXT: [[G_TAGGED_ASINT:%.*]] = or i64 [[G_LCSSA_ASINT]], [[G_TAGBITS]]
-; CHECK-NEXT: [[G_TAGGED:%.*]] = inttoptr i64 [[G_TAGGED_ASINT]] to ptr
-; CHECK-NEXT: store ptr [[G_TAGGED]]
+; CHECK: %g.lcssa = phi ptr [ %g, %loop ]
+; CHECK: [[RETAG:%.*]] = call ptr @__ptsan_tag{{(_id32)?}}(ptr %g.lcssa, i64 [[PHI_ID]]
+; CHECK: [[TAGGED:%.*]] = call ptr @__ptsan_tagged(ptr {{.*}}[[RETAG]])
+; CHECK: store ptr [[TAGGED]]
 entry:
   br i1 %cond, label %invoke.pred, label %null.pred
 
@@ -53,18 +53,14 @@ join:
 
 loop:
   %iv = phi i64 [ 0, %join ], [ %next, %loop ]
-  %g = getelementptr i8, ptr %phi, i64 %iv
-  %s0 = call ptr @__ptsan_strip(ptr %g)
-  %v0 = load volatile i8, ptr %s0, align 1
-  %g1 = getelementptr i8, ptr %g, i64 1
-  %s1 = call ptr @__ptsan_strip(ptr %g1)
-  %v1 = load volatile i8, ptr %s1, align 1
-  %g2 = getelementptr i8, ptr %g, i64 2
-  %s2 = call ptr @__ptsan_strip(ptr %g2)
-  %v2 = load volatile i8, ptr %s2, align 1
-  %g3 = getelementptr i8, ptr %g, i64 3
-  %s3 = call ptr @__ptsan_strip(ptr %g3)
-  %v3 = load volatile i8, ptr %s3, align 1
+  %g = getelementptr inbounds i8, ptr %phi, i64 %iv
+  %v0 = load volatile i8, ptr %g, align 1
+  %g1 = getelementptr inbounds i8, ptr %g, i64 1
+  %v1 = load volatile i8, ptr %g1, align 1
+  %g2 = getelementptr inbounds i8, ptr %g, i64 2
+  %v2 = load volatile i8, ptr %g2, align 1
+  %g3 = getelementptr inbounds i8, ptr %g, i64 3
+  %v3 = load volatile i8, ptr %g3, align 1
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, 4
   br i1 %done, label %exit, label %loop

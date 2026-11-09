@@ -25,14 +25,14 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <search.h>
+#include "ptsan_bounds_abi.h"
 
 # define __set_errno(ev) ((errno) = (ev))
 
 // Clear ids of things going into env. Makes us need a looot
 // fewer env-handling-specific wrappers
 inline const char *clear_id(const char *ptr) {
-  uint64_t addr = (uint64_t)ptr & 0x0000ffffffffffff;
-  return (const char *)addr;
+  return (const char *)ptsan_raw_address((uintptr_t)ptr);
 }
 
 

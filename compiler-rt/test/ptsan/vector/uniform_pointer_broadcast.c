@@ -9,7 +9,7 @@
 // RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
 // RUN:   -mllvm -ptsan-stop-after=discovery -fno-discard-value-names \
 // RUN:   -S -emit-llvm -o discovery.ll %s
-// RUN: FileCheck %s --check-prefix=DISCOVERY < discovery.ll
+// RUN: FileCheck %s --check-prefix=DISCOVERY --check-prefix=DEFAULT < discovery.ll
 // RUN: %clang_ptsan -O3 -march=skylake-avx512 -DNDEBUG \
 // RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
 // RUN:   -mllvm -ptsan-abort-on-error -S -emit-llvm -o runtime.ll %s
@@ -17,6 +17,23 @@
 // Disable LLVM passes in the second compile to avoid reinstrumenting the IR.
 // RUN: sed -E 's/"(target-cpu|target-features|tune-cpu)"="[^"]*"//g' runtime.ll | \
 // RUN:   %clang_ptsan -O2 -march=x86-64 -Xclang -disable-llvm-passes -x ir -o %exe -
+// RUN: ./%exe 2>good.txt
+// RUN: FileCheck %s --check-prefix=GOOD < good.txt
+// RUN: ./%exe inactive 2>inactive.txt
+// RUN: FileCheck %s --check-prefix=GOOD < inactive.txt
+// RUN: not ./%exe bad 2>bad.txt
+// RUN: FileCheck %s --check-prefix=BAD < bad.txt
+
+// RUN: %clang_ptsan_id32 -O3 -march=skylake-avx512 -DNDEBUG \
+// RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
+// RUN:   -mllvm -ptsan-stop-after=discovery -fno-discard-value-names \
+// RUN:   -S -emit-llvm -o discovery.ll %s
+// RUN: FileCheck %s --check-prefix=DISCOVERY --check-prefix=ID32 < discovery.ll
+// RUN: %clang_ptsan_id32 -O3 -march=skylake-avx512 -DNDEBUG \
+// RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
+// RUN:   -mllvm -ptsan-abort-on-error -S -emit-llvm -o runtime.ll %s
+// RUN: sed -E 's/"(target-cpu|target-features|tune-cpu)"="[^"]*"//g' runtime.ll | \
+// RUN:   %clang_ptsan_id32 -O2 -march=x86-64 -Xclang -disable-llvm-passes -x ir -o %exe -
 // RUN: ./%exe 2>good.txt
 // RUN: FileCheck %s --check-prefix=GOOD < good.txt
 // RUN: ./%exe inactive 2>inactive.txt
@@ -33,7 +50,11 @@
 // DISCOVERY-LABEL: define {{.*}} @masked_uniform(
 // DISCOVERY: [[FIELD_INSERT:%.*]] = insertelement <4 x ptr> poison, ptr {{%.*}}, i64 0
 // DISCOVERY: [[FIELD_SPLAT:%.*]] = shufflevector <4 x ptr> [[FIELD_INSERT]], <4 x ptr> poison, <4 x i32> zeroinitializer
-// DISCOVERY: [[RAW_FIELD:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[FIELD_SPLAT]])
+// DEFAULT: [[RAW_FIELD:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[FIELD_SPLAT]])
+// ID32: [[MASK:%.*]] = icmp ne <4 x i32>
+// ID32: [[DECODE_ID:%.*]] = call i64 @__ptsan_get_id(ptr %boxes)
+// ID32: [[BIAS:%.*]] = call i64 @__ptsan_load_base(i64 [[DECODE_ID]])
+// ID32: [[RAW_FIELD:%.*]] = call <4 x ptr> @__ptsan_strip_id32(<4 x ptr> [[FIELD_SPLAT]], i64 [[DECODE_ID]], i64 [[BIAS]])
 // DISCOVERY: [[BOXES_ID:%.*]] = call i64 @__ptsan_get_id(ptr %boxes)
 // DISCOVERY: call i64 @__ptsan_load_base(i64 [[BOXES_ID]])
 // DISCOVERY: call i64 @__ptsan_load_span(i64 [[BOXES_ID]])

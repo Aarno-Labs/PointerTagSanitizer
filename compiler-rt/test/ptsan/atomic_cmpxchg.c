@@ -4,6 +4,10 @@
 // RUN: ./%exe > out.txt
 // RUN: cat out.txt | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe > out.txt
+// RUN: cat out.txt | FileCheck %s
+
 //CHECK: CAS idx=2 expect=2 -> ok=1 exp_after=2 cur=5
 //CHECK: CAS idx=1 expect=0 -> ok=0 exp_after=1 cur=1
 

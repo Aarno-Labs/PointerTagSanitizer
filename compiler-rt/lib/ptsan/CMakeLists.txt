@@ -15,6 +15,9 @@ endif()
 
 set(PTSAN_RTL_SOURCES
   ptsan_bounds.cpp
+  ptsan_origins.cpp
+  ptsan_random.cpp
+  ptsan_id_cache.cpp
   ptsan_stats.cpp
   ptsan_drift.cpp
   ptsan.cpp
@@ -24,13 +27,14 @@ set(PTSAN_RTL_SOURCES
   ptsan_preinit.cpp
   ptsan_thread.cpp
   interceptors/ptsan_ir_interceptor_helpers.cpp
+  interceptors/ptsan_linux_syscalls.cpp
 )
 
 if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC)
   list(APPEND PTSAN_RTL_SOURCES
+    ptsan_signal.cpp
     ptsan_musl_internal.c
     interceptors/ptsan_musl_interceptors.cpp
-    interceptors/ptsan_musl_syscalls.cpp
   )
 else()
   list(APPEND PTSAN_RTL_SOURCES
@@ -42,24 +46,27 @@ endif()
 set(PTSAN_RTL_HEADERS
   ptsan_constants.h
   ptsan_bounds.h
+  ptsan_origins.h
+  ptsan_random.h
+  ptsan_id_queue.h
+  ptsan_bounds_abi.h
+  ptsan_id_cache.h
   ptsan_stats.h
   ptsan_drift.h
   ptsan_interceptors.h
   ptsan.h
   ptsan_thread.h
+  ptsan_signal.h
   ptsan_ptr_utils.h
   ptsan_musl_interception.h
   ptsan_musl_internal.h
   interceptors/ptsan_common_interceptors.inc
+  interceptors/ptsan_linux_syscalls.h
   interceptors/ptsan_libc.inc
   musl_overlay/syscall.h
 )
 
 set(PTSAN_COMMON_CFLAGS ${SANITIZER_COMMON_CFLAGS} -g )
-append_list_if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC
-  -DPTSAN_INSTRUMENTED_LIBC PTSAN_COMMON_CFLAGS)
-# This runtime currently uses musl's static linker-wrapped API boundaries.
-# Keep that mechanism separate from instrumented-libc initialization policy.
 append_list_if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC
   -DPTSAN_MUSL_INTERCEPTION PTSAN_COMMON_CFLAGS)
 append_rtti_flag(OFF PTSAN_COMMON_CFLAGS)
@@ -107,12 +114,22 @@ function(ptsan_add_interceptor_obj variant arch rel_src)
   get_filename_component(name_we "${rel_src}" NAME_WE)
   set(obj "${CMAKE_CURRENT_BINARY_DIR}/${name_we}_${variant}_${arch}.o")
 
+  # Custom commands do not inherit the compiler flags or target from CMake.
+  separate_arguments(compiler_flags NATIVE_COMMAND "${CMAKE_C_FLAGS}")
+  if(CMAKE_C_COMPILER_TARGET)
+    list(APPEND compiler_flags "--target=${CMAKE_C_COMPILER_TARGET}")
+  endif()
+  if(CMAKE_SYSROOT)
+    list(APPEND compiler_flags "--sysroot=${CMAKE_SYSROOT}")
+  endif()
+
   # Normalize depfile paths for this subdirectory's custom command.
   cmake_policy(PUSH)
   cmake_policy(SET CMP0116 NEW)
   add_custom_command(
     OUTPUT  "${obj}"
     COMMAND "${PROJECT_CLANG}"
+            ${compiler_flags}
             ${PAIO_CFLAGS}
             ${EXTRA_INCLUDE_FLAGS}
             ${PAIO_PASS}
@@ -145,6 +162,10 @@ endfunction()
 
 function(ptsan_add_runtime_variant runtime_name arch)
   set(PTSAN_CFLAGS ${PTSAN_COMMON_CFLAGS} ${ARGN})
+  set(PTSAN_STRIP_FLAGS -mllvm -ptsan-strip-ids)
+  if(runtime_name MATCHES "^ptsan_32bit")
+    list(APPEND PTSAN_STRIP_FLAGS -fsanitize-ptsan-32-bit-ids)
+  endif()
   if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC)
     if(NOT EXISTS
        "${COMPILER_RT_PTSAN_MUSL_SOURCE_DIR}/arch/${arch}/syscall_arch.h")
@@ -163,7 +184,7 @@ function(ptsan_add_runtime_variant runtime_name arch)
       ${arch}
       interceptors/ptsan_interceptors.cpp
       CFLAGS ${PTSAN_CFLAGS}
-      PASS -mllvm -ptsan-strip-ids
+      PASS ${PTSAN_STRIP_FLAGS}
     )
 
     # va_arg loads through backing pointers that may carry IDs. Let the
@@ -173,7 +194,7 @@ function(ptsan_add_runtime_variant runtime_name arch)
       ${arch}
       interceptors/ptsan_interceptors_format.cpp
       CFLAGS ${PTSAN_CFLAGS}
-      PASS -mllvm -ptsan-strip-ids
+      PASS ${PTSAN_STRIP_FLAGS}
     )
 
     set(PTSAN_INTERCEPTOR_SRCS
@@ -190,7 +211,7 @@ function(ptsan_add_runtime_variant runtime_name arch)
         ${arch}
         ${src}
         CFLAGS ${PTSAN_CFLAGS}
-        PASS -mllvm -ptsan-strip-ids
+        PASS ${PTSAN_STRIP_FLAGS}
       )
     endforeach()
   endif()
@@ -236,6 +257,15 @@ foreach(arch ${PTSAN_SUPPORTED_ARCH})
 
   ptsan_add_runtime_variant(ptsan ${arch})
   ptsan_add_runtime_variant(ptsan_validate ${arch} -DPTSAN_VALIDATE)
+  ptsan_add_runtime_variant(ptsan_32bit ${arch} -DPTSAN_32_BIT_IDS)
+  ptsan_add_runtime_variant(ptsan_32bit_validate ${arch}
+    -DPTSAN_32_BIT_IDS -DPTSAN_VALIDATE)
+  if(COMPILER_RT_PTSAN_USE_INSTRUMENTED_LIBC)
+    ptsan_add_runtime_variant(ptsan_32bit_strict ${arch}
+      -DPTSAN_32_BIT_IDS -DPTSAN_STRICT_32_BIT_IDS)
+    ptsan_add_runtime_variant(ptsan_32bit_strict_validate ${arch}
+      -DPTSAN_32_BIT_IDS -DPTSAN_STRICT_32_BIT_IDS -DPTSAN_VALIDATE)
+  endif()
   # AArch64 uses software masking; LAM is an x86-64 hardware feature.
   if(arch STREQUAL "x86_64")
     ptsan_add_runtime_variant(ptsan_lam ${arch} -DPTSAN_LAM)

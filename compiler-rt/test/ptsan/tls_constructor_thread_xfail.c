@@ -7,7 +7,7 @@
 // REQUIRES: x86_64-target-arch
 // RUN: split-file %s %t
 // RUN: %clang_raw -O2 -fPIC -shared %t/early.c -o %t/libearly.so
-// RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error %t/main.c -pthread -rdynamic -L%t -Wl,-rpath,%t -Wl,--no-as-needed -learly -o %t/test
+// RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error -I%S %t/main.c -pthread -rdynamic -L%t -Wl,-rpath,%t -Wl,--no-as-needed -learly -o %t/test
 // RUN: %t/test
 
 // A startup dependency's constructor runs before the executable's constructors.
@@ -29,6 +29,8 @@ __attribute__((constructor)) static void initialize(void) {
 #include <pthread.h>
 #include <stdint.h>
 
+#include "Inputs/ptsan_test_interface.h"
+
 _Thread_local int value = 7;
 static pthread_t thread;
 static pthread_barrier_t ready, release;
@@ -41,8 +43,8 @@ __attribute__((disable_sanitizer_instrumentation))
 static void *worker(void *arg) {
   pthread_barrier_wait(&ready);
   pthread_barrier_wait(&release);
-  unsigned id = (uintptr_t)get_value() >> 48;
-  assert(id && id != 0xffff);
+  unsigned id = get_id(get_value());
+  assert(id && id != ptsan_default_id());
   return 0;
 }
 
@@ -56,8 +58,8 @@ void start_thread(void) {
 
 __attribute__((disable_sanitizer_instrumentation))
 int main(void) {
-  unsigned id = (uintptr_t)get_value() >> 48;
-  assert(id && id != 0xffff);
+  unsigned id = get_id(get_value());
+  assert(id && id != ptsan_default_id());
   pthread_barrier_wait(&release);
   assert(pthread_join(thread, 0) == 0);
   assert(pthread_barrier_destroy(&ready) == 0);

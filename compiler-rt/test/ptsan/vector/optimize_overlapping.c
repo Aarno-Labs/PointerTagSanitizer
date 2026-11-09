@@ -18,7 +18,7 @@
 // RUN:   %clang_ptsan -O2 -march=x86-64 -Xclang -disable-llvm-passes -x ir -o %exe -
 // RUN: ./%exe 127 2>good.txt
 // RUN: FileCheck %s --check-prefix=GOOD < good.txt
-// RUN: ./%exe 128 2>bad.txt
+// RUN: not ./%exe 128 2>bad.txt
 // RUN: FileCheck %s --check-prefix=BAD < bad.txt
 
 // This is a naturally vectorized counterpart of optimize_overlapping.c. Each

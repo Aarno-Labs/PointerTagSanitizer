@@ -1,10 +1,12 @@
-// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s
-// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | FileCheck %s --check-prefix=SUMMARY
+// RUN: %clang_ptsan_plain -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_ptsan_plain -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | FileCheck %s --check-prefix=SUMMARY
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-abort-on-error=0 -o %exe %s
+// RUN: %clang_ptsan_plain -O2 -g -fno-discard-value-names -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats -o %exe %s
 // RUN: ./%exe 4 2> good.err && FileCheck %s --check-prefixes=GOOD,STATS < good.err
-// RUN: ./%exe 5 2> bad.err && FileCheck %s --check-prefixes=BAD,STATS < bad.err
-// RUN: ./%exe 8 2> bad_large.err && FileCheck %s --check-prefixes=BAD,STATS < bad_large.err
+// RUN: not ./%exe 5 2> bad.err
+// RUN: FileCheck %s --check-prefix=BAD < bad.err
+// RUN: not ./%exe 8 2> bad_large.err
+// RUN: FileCheck %s --check-prefix=BAD < bad_large.err
 
 // A single access inside nested loops can be covered by both loops when the
 // pointer varies only with the outer induction variable. Prefer the outer

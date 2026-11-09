@@ -825,7 +825,7 @@ int __ptsan_vfprintf(FILE *stream, const char *format, va_list ap) {
 
   CHECK(ret < 4096);
 
-  size_t written = REAL(fwrite)(str, 1, ret, stream);
+  size_t written = REAL(fwrite)(str, 1, ret, clear_id(stream));
 
   CHECK((size_t)ret == written);
   return ret;

@@ -4,9 +4,9 @@
 // preanalysis code; exact capture and safe fallback are both valid.
 //
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O3 -g -fno-discard-value-names \
 // RUN:   -mllvm -ptsan-reoptimize \
-// RUN:   -mllvm -ptsan-runtime-validate \
+// RUN:   -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-abort-on-error \
 // RUN:   -mllvm -ptsan-stack-temporal-safety=0 \
 // RUN:   -o %exe %s

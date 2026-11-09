@@ -3,6 +3,8 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// This exhausts the ID16 namespace with 70,000 live allocations; it is not
+// an ID32 exhaustion test.
 // After ID exhaustion, mremap must preserve the default ID so that a later
 // munmap (including one inside musl free) still accepts the mapping.
 //
@@ -59,10 +61,11 @@ static void testMapping(bool use_syscall, size_t page_size) {
   assert(get_id(shrunk) == ptsan_default_id());
   assert(shrunk[0] == 42);
 
-  // Occupy the released page to make growth fail without MAYMOVE and force
-  // relocation with it. The address was reserved by our original mapping.
+  // Occupy the page released by the shrink to make growth fail without MAYMOVE
+  // and force relocation with it. The page should be free, so this setup does
+  // not need MAP_FIXED's replacement semantics.
   void *blocker = mmap((char *)raw + 2 * page_size, page_size, PROT_NONE,
-                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+                       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
   assert(blocker != MAP_FAILED);
   errno = 0;
   result = remap(use_syscall, shrunk, 2 * page_size, 3 * page_size, 0);

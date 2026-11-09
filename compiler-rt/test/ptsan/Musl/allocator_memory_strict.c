@@ -6,6 +6,22 @@
 // RUN: %ptsan_musl_strict -fno-builtin -o %t %s
 // RUN: %run %t
 // RUN: not %run %t bad 2>&1 | FileCheck %s
+
+// The same allocator boundary preserves IDs through realloc/free in every mode.
+// RUN: %ptsan_musl_nonstrict -fno-builtin %s -o %t.nonstrict
+// RUN: %run %t.nonstrict
+// RUN: not %run %t.nonstrict bad 2>&1 | FileCheck %s
+
+// Check calloc, moving realloc, and checked memory calls with translated pointers.
+// RUN: %ptsan_musl_id32_nonstrict -fno-builtin %s -o %t.id32
+// RUN: %run %t.id32
+// RUN: not %run %t.id32 bad 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict -fno-builtin %s -o %t.id32.strict
+// RUN: %run %t.id32.strict
+// RUN: not %run %t.id32.strict bad 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict_indicator -fno-builtin %s -o %t.id32.indicator
+// RUN: %run %t.id32.indicator
+// RUN: not %run %t.id32.indicator bad 2>&1 | FileCheck %s
 // CHECK: Found bad write access: #0. Function ID: 0xdeadbeef
 
 // Exercise the instrumented allocator, including first-use secret setup,
@@ -39,10 +55,10 @@ int main(int argc, char **argv) {
   }
 
   // A tiny slot cannot accommodate this growth in place.
-  uintptr_t old_address = (uintptr_t)p & ((UINT64_C(1) << 48) - 1);
+  uintptr_t old_address = ptsan_get_address(p);
   p = realloc(p, 65536);
   if (!p || !get_id(p) || get_id(p) == ptsan_default_id() ||
-      ((uintptr_t)p & ((UINT64_C(1) << 48) - 1)) == old_address) {
+      ptsan_get_address(p) == old_address) {
     _Exit(5);
   }
   for (int i = 0; i < 16; ++i) {

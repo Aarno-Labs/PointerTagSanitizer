@@ -1,6 +1,7 @@
 // REQUIRES: x86_64-target-arch
+// LAM and the 32-bit encoding are mutually exclusive.
 // RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NORMAL
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-lam -S -emit-llvm -o - %s | FileCheck %s --check-prefix=LAM --implicit-check-not='asm "andq'
+// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -fsanitize-ptsan-lam -S -emit-llvm -o - %s | FileCheck %s --check-prefix=LAM --implicit-check-not='asm "andq'
 
 #include <stdatomic.h>
 

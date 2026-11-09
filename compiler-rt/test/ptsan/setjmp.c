@@ -1,6 +1,7 @@
+// This test longjmps after a complaint. setjmp_cleanup.c covers valid longjmps.
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 
-// RUN: %clang_ptsan -g -O2 -o %exe %s
+// RUN: %clang_ptsan -g -O2 -mllvm -ptsan-abort-on-error=0 -o %exe %s
 // RUN: ./%exe 23 2> err.txt
 // RUN: cat err.txt | FileCheck %s
 

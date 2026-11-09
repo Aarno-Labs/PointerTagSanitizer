@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "Inputs/ptsan_test_interface.h"
 
 extern char **environ;
 
@@ -65,9 +66,9 @@ __attribute__((noinline)) static void tag_environ(void) {
   environ = e;
 }
 
-// True if p carries a ptsan id in its high 16 bits.
+// True if p carries an allocation ID in the selected encoding.
 __attribute__((noinline)) static int tagged(const void *p) {
-  return p && ((uintptr_t)p >> 48) != 0;
+  return p && get_id(p) != 0;
 }
 
 int main(void) {

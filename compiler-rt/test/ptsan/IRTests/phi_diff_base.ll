@@ -1,14 +1,21 @@
 ; RUN: rm -rf %t && mkdir -p %t && cd %t
 ; RUN: %opt_ptsan %s -ptsan-add-overflow-checks=0 -S > out.ll
-; RUN: cat out.ll | FileCheck %s
+; RUN: cat out.ll | FileCheck %s --check-prefixes=CHECK,DEFAULT
+
+; RUN: %opt_ptsan -ptsan-32-bit-ids %s -ptsan-add-overflow-checks=0 -S > out.ll
+; RUN: cat out.ll | FileCheck %s --check-prefixes=CHECK,ID32
 
 ;CHECK: if.end:                                           ; preds = %if.else, %if.then
-;CHECK-DAG:   {{%.*}} = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64 %ptr.0.id{{[0-9]*}}.pre-phi, i32 0
-;CHECK-DAG:   {{%.*}} = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64 %ptr.0.id{{[0-9]*}}.pre-phi, i32 1
+;DEFAULT: [[ID:%.*]] = phi i64 [ %call1.id, %if.else ], [ %call.id, %if.then ]
+;ID32: [[ID:%.*]] = phi i64 [ %call.id, %if.then ], [ %call1.id, %if.else ]
+;ID32: %ptr.0 = phi ptr {{.*}}, !ptsan.stripped
+;CHECK-DAG:   {{%.*}} = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 0
+;CHECK-DAG:   {{%.*}} = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 1
 ;CHECK-DAG:   {{%.*}} = load i64, ptr {{%.*}}, align 8
 ;CHECK-DAG:   {{%.*}} = load i64, ptr {{%.*}}, align 8
 ;CHECK-DAG:   %ptr.0.inRange.not =
-;CHECK:  load i32, ptr %ptr.0
+;DEFAULT: load i32, ptr %ptr.0
+;ID32: load i32, ptr %ptr.0,
 
 ; ModuleID = '../hoisting.c'
 source_filename = "../hoisting.c"

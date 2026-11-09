@@ -3,6 +3,10 @@
 // RUN: ./%exe 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
 
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
+
 // BAD: Found bad
 // GOOD-NOT: Found bad
 // Don't care exaclty how many here, but it should be small
@@ -16,10 +20,11 @@
 #include <stdio.h>
 
 static const size_t REPS = 1;
-static const unsigned N    = 120000u;
+// Exercise the quadratic recurrence without requiring an object above 2 GiB.
+static const unsigned N    = 10000u;
 
-// Triangular size for indices up to (and including) N: N*(N+1)/2
-static const size_t TSIZE = ((size_t)N * ((size_t)N + 1u)) / 2u;
+// Include triangular(N), read by the final scatter/gather iteration.
+static const size_t TSIZE = ((size_t)N * ((size_t)N + 1u)) / 2u + 1;
 
 static int sink;
 
@@ -62,6 +67,8 @@ int main(void) {
   }
 
   tri_fill(A, N);
+  // tri_fill stops at triangular(N - 1).
+  A[TSIZE - 1] = 0;
   for (int i = 0; i < REPS; i++) {
     int s1 = tri_sum(A, N);
     int s2 = tri_scatter_gather(A, N);

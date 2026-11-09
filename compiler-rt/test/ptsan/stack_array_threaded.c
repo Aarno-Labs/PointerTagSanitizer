@@ -1,99 +1,108 @@
-// Make sure IDs are right threaded. The first 12 threads (including main,
-// so 11 extra) use stack ID caches. The rest don't. The stack ID caches
-// are multiples of 0x200 (512). Uncached stack allocations follow the permanent
-// global IDs and the ID for `ths`. Cached stack IDs should be reused; uncached
-// IDs should advance through the free list instead.
+// The first 12 threads (including main) use reserved stack-ID buckets of
+// 512 slots each, with ID zero reserved. Additional threads use runtime IDs
+// from the shared cache.
+// Check bucket reuse and slow-path allocation without assuming runtime ID order.
 
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_ptsan -g -O2 -o %exe %s
+// RUN: %clang_ptsan -g -O2 -mllvm -ptsan-randomize-ids=0 -mllvm -ptsan-id-bucket-size=512 -mllvm -ptsan-stack-id-thread-buckets=12 -o %exe %s
 
 // only main thread
 // RUN: ./%exe 0 0 2> main.err
 // RUN: cat main.err | FileCheck %s --check-prefix=MAIN
 
-// MAIN-DAG: buf.id = 0x200
+// MAIN-DAG: buf.id = 0x1ff
 // MAIN: Max used stack IDs at once: 0 (0x0)
 
 // One pthread, executed twice
 // RUN: ./%exe 1 2 2> one.err
 // RUN: cat one.err | FileCheck %s --check-prefix=ONE
 
-// ONE-DAG: buf.id = 0x200
-// ONE-DAG: buf.id = 0x400
-// ONE-DAG: buf.id = 0x400
+// ONE-DAG: buf.id = 0x1ff
+// ONE-DAG: buf.id = 0x3ff
+// ONE-DAG: buf.id = 0x3ff
 // ONE: Max used stack IDs at once: 0 (0x0)
 
 // Eleven pthreads, executed twice
 // RUN: ./%exe 11 2 2> eleven.err
 // RUN: cat eleven.err | FileCheck %s --check-prefix=ELEVEN
 
-// ELEVEN-DAG: buf.id = 0x200
-// ELEVEN-DAG: buf.id = 0x400
-// ELEVEN-DAG: buf.id = 0x800
-// ELEVEN-DAG: buf.id = 0xa00
-// ELEVEN-DAG: buf.id = 0x600
-// ELEVEN-DAG: buf.id = 0xc00
-// ELEVEN-DAG: buf.id = 0xe00
-// ELEVEN-DAG: buf.id = 0x1000
-// ELEVEN-DAG: buf.id = 0x1200
-// ELEVEN-DAG: buf.id = 0x1400
-// ELEVEN-DAG: buf.id = 0x1600
-// ELEVEN-DAG: buf.id = 0x1800
-// ELEVEN-DAG: buf.id = 0x800
-// ELEVEN-DAG: buf.id = 0x600
-// ELEVEN-DAG: buf.id = 0xa00
-// ELEVEN-DAG: buf.id = 0xc00
-// ELEVEN-DAG: buf.id = 0x400
-// ELEVEN-DAG: buf.id = 0xe00
-// ELEVEN-DAG: buf.id = 0x1200
-// ELEVEN-DAG: buf.id = 0x1400
-// ELEVEN-DAG: buf.id = 0x1000
-// ELEVEN-DAG: buf.id = 0x1600
-// ELEVEN-DAG: buf.id = 0x1800
+// ELEVEN-DAG: buf.id = 0x1ff
+// ELEVEN-DAG: buf.id = 0x3ff
+// ELEVEN-DAG: buf.id = 0x7ff
+// ELEVEN-DAG: buf.id = 0x9ff
+// ELEVEN-DAG: buf.id = 0x5ff
+// ELEVEN-DAG: buf.id = 0xbff
+// ELEVEN-DAG: buf.id = 0xdff
+// ELEVEN-DAG: buf.id = 0xfff
+// ELEVEN-DAG: buf.id = 0x11ff
+// ELEVEN-DAG: buf.id = 0x13ff
+// ELEVEN-DAG: buf.id = 0x15ff
+// ELEVEN-DAG: buf.id = 0x17ff
+// ELEVEN-DAG: buf.id = 0x7ff
+// ELEVEN-DAG: buf.id = 0x5ff
+// ELEVEN-DAG: buf.id = 0x9ff
+// ELEVEN-DAG: buf.id = 0xbff
+// ELEVEN-DAG: buf.id = 0x3ff
+// ELEVEN-DAG: buf.id = 0xdff
+// ELEVEN-DAG: buf.id = 0x11ff
+// ELEVEN-DAG: buf.id = 0x13ff
+// ELEVEN-DAG: buf.id = 0xfff
+// ELEVEN-DAG: buf.id = 0x15ff
+// ELEVEN-DAG: buf.id = 0x17ff
 // ELEVEN: Max used stack IDs at once: 0 (0x0)
 
 // Twelve pthreads, executed three times
 // RUN: ./%exe 12 3 2> twelve.err
 // RUN: cat twelve.err | FileCheck %s --check-prefix=TWELVE
 
+// RUN: %clang_ptsan_id32 -g -O2 -mllvm -ptsan-randomize-ids=0 -mllvm -ptsan-id-bucket-size=512 -mllvm -ptsan-stack-id-thread-buckets=12 -mllvm -ptsan-stack-temporal-safety=0 -o %exe %s
+// RUN: ./%exe 0 0 2> main.err
+// RUN: cat main.err | FileCheck %s --check-prefix=MAIN
+// RUN: ./%exe 1 2 2> one.err
+// RUN: cat one.err | FileCheck %s --check-prefix=ONE
+// RUN: ./%exe 11 2 2> eleven.err
+// RUN: cat eleven.err | FileCheck %s --check-prefix=ELEVEN
+// RUN: ./%exe 12 3 2> twelve.err
+// RUN: cat twelve.err | FileCheck %s --check-prefix=TWELVE
+
 // TWELVE: Global IDs: [[#GLOBALS:]]
-// TWELVE-DAG: buf.id = 0x200
-// TWELVE-DAG: buf.id = 0x600
-// TWELVE-DAG: buf.id = 0x400
-// TWELVE-DAG: buf.id = 0xc00
-// TWELVE-DAG: buf.id = 0xa00
-// TWELVE-DAG: buf.id = 0x800
-// TWELVE-DAG: buf.id = 0xe00
-// TWELVE-DAG: buf.id = 0x1200
-// TWELVE-DAG: buf.id = 0x1400
-// TWELVE-DAG: buf.id = 0x1000
-// TWELVE-DAG: buf.id = 0x1600
-// TWELVE-DAG: buf.id = 0x1800
-// TWELVE-DAG: buf.id = 0x[[#%x,0x1a01 + GLOBALS]]
-// TWELVE-DAG: buf.id = 0x400
-// TWELVE-DAG: buf.id = 0xa00
-// TWELVE-DAG: buf.id = 0xc00
-// TWELVE-DAG: buf.id = 0xe00
-// TWELVE-DAG: buf.id = 0x1200
-// TWELVE-DAG: buf.id = 0x600
-// TWELVE-DAG: buf.id = 0x800
-// TWELVE-DAG: buf.id = 0x1000
-// TWELVE-DAG: buf.id = 0x1600
-// TWELVE-DAG: buf.id = 0x1800
-// TWELVE-DAG: buf.id = 0x[[#%x,0x1c01 + GLOBALS]]
-// TWELVE-DAG: buf.id = 0x1400
-// TWELVE-DAG: buf.id = 0x600
-// TWELVE-DAG: buf.id = 0xa00
-// TWELVE-DAG: buf.id = 0xc00
-// TWELVE-DAG: buf.id = 0x800
-// TWELVE-DAG: buf.id = 0x1000
-// TWELVE-DAG: buf.id = 0x1200
-// TWELVE-DAG: buf.id = 0x1600
-// TWELVE-DAG: buf.id = 0xe00
-// TWELVE-DAG: buf.id = 0x400
-// TWELVE-DAG: buf.id = 0x1400
-// TWELVE-DAG: buf.id = 0x[[#%x,0x1e01 + GLOBALS]]
-// TWELVE-DAG: buf.id = 0x1800
+// TWELVE-DAG: buf.id = 0x1ff
+// TWELVE-DAG: buf.id = 0x5ff
+// TWELVE-DAG: buf.id = 0x3ff
+// TWELVE-DAG: buf.id = 0xbff
+// TWELVE-DAG: buf.id = 0x9ff
+// TWELVE-DAG: buf.id = 0x7ff
+// TWELVE-DAG: buf.id = 0xdff
+// TWELVE-DAG: buf.id = 0x11ff
+// TWELVE-DAG: buf.id = 0x13ff
+// TWELVE-DAG: buf.id = 0xfff
+// TWELVE-DAG: buf.id = 0x15ff
+// TWELVE-DAG: buf.id = 0x17ff
+// TWELVE-DAG: buf.id = slow
+// TWELVE-DAG: buf.id = 0x3ff
+// TWELVE-DAG: buf.id = 0x9ff
+// TWELVE-DAG: buf.id = 0xbff
+// TWELVE-DAG: buf.id = 0xdff
+// TWELVE-DAG: buf.id = 0x11ff
+// TWELVE-DAG: buf.id = 0x5ff
+// TWELVE-DAG: buf.id = 0x7ff
+// TWELVE-DAG: buf.id = 0xfff
+// TWELVE-DAG: buf.id = 0x15ff
+// TWELVE-DAG: buf.id = 0x17ff
+// TWELVE-DAG: buf.id = slow
+// TWELVE-DAG: buf.id = 0x13ff
+// TWELVE-DAG: buf.id = 0x5ff
+// TWELVE-DAG: buf.id = 0x9ff
+// TWELVE-DAG: buf.id = 0xbff
+// TWELVE-DAG: buf.id = 0x7ff
+// TWELVE-DAG: buf.id = 0xfff
+// TWELVE-DAG: buf.id = 0x11ff
+// TWELVE-DAG: buf.id = 0x15ff
+// TWELVE-DAG: buf.id = 0xdff
+// TWELVE-DAG: buf.id = 0x3ff
+// TWELVE-DAG: buf.id = 0x13ff
+// TWELVE-DAG: buf.id = slow
+// TWELVE-DAG: buf.id = 0x17ff
 // TWELVE: Max used stack IDs at once: 512 (0x200)
 
 #include <stdio.h>
@@ -101,13 +110,25 @@
 #include <pthread.h>
 #include <stdint.h>
 #include <assert.h>
+#include "Inputs/ptsan_test_interface.h"
 #include<unistd.h>
 
 extern volatile uint64_t __ptsan_used_global_ids;
 
 __attribute__((noinline))
 void inner(char *buf) {
-  fprintf(stderr, "buf.id = 0x%lx\n", (uint64_t)buf >> 48);
+  PTSanID id = get_id(buf);
+  assert(id != 0 && id != ptsan_default_id());
+#ifdef PTSAN_TEST_32_BIT_IDS
+  // Check bucket spacing relative to the high-half namespace used by ID32.
+  assert(id > UINT32_C(0x80000000));
+  id -= UINT32_C(0x80000000);
+#endif
+  if (id >= 0x1800) {
+    fprintf(stderr, "buf.id = slow\n");
+  } else {
+    fprintf(stderr, "buf.id = 0x%x\n", id);
+  }
 }
 
 __attribute__((noinline))
@@ -147,7 +168,8 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  outer(511);
+  // Main consumes one ID; the first ID16 bucket also excludes zero.
+  outer(ptsan_id_bits() == 32 ? 511 : 510);
 
   pthread_t *ths = (pthread_t *)malloc(sizeof(pthread_t) * (size_t)N);
 

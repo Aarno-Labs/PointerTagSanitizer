@@ -44,6 +44,16 @@
 // RUN: FileCheck %s < %t.strncmp-left
 // RUN: not %run %t bad-strncmp-right 2> %t.strncmp-right
 // RUN: FileCheck %s < %t.strncmp-right
+
+// ID32 scanning wrappers must preserve interior-pointer metadata and check bounds.
+// RUN: %ptsan_musl_id32_nonstrict -fno-builtin %s -o %t.id32
+// RUN: %run %t.id32 good
+// RUN: not %run %t.id32 bad-strlen 2>&1 | FileCheck %s
+// RUN: not %run %t.id32 bad-strcpy-dest 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict -fno-builtin %s -o %t.id32.strict
+// RUN: %run %t.id32.strict good
+// RUN: not %run %t.id32.strict bad-strlen 2>&1 | FileCheck %s
+// RUN: not %run %t.id32.strict bad-strcpy-dest 2>&1 | FileCheck %s
 //
 //
 // CHECK: Found bad

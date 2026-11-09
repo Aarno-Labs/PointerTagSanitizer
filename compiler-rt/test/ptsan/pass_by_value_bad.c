@@ -3,13 +3,21 @@
 
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -o %exe %s
-// RUN: ./%exe 2> err.txt
+// RUN: not ./%exe -1 2> err.txt
+// RUN: FileCheck %s --check-prefix=BAD < err.txt
+// RUN: not ./%exe 2048 2> err.txt
+// RUN: FileCheck %s --check-prefix=BAD < err.txt
+
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: not ./%exe -1 2> err.txt
+// RUN: FileCheck %s --check-prefix=BAD < err.txt
+// RUN: not ./%exe 2048 2> err.txt
 // RUN: FileCheck %s --check-prefix=BAD < err.txt
 
 // BAD: Found bad POINT access
-// BAD: Found bad POINT access
 
 #include <stdio.h>
+#include <stdlib.h>
 
 typedef struct {
   char payload[2048];
@@ -20,13 +28,12 @@ unsigned char read_blob(large_blob_t blob, int index) {
   return blob.payload[index];
 }
 
-int main(void) {
+int main(int argc, char **argv) {
   large_blob_t blob;
   for (size_t i = 0; i < sizeof(blob.payload); ++i)
     blob.payload[i] = (char)i;
 
-  volatile unsigned char value = read_blob(blob, -1);
-  value ^= read_blob(blob, 2048);
+  volatile unsigned char value = read_blob(blob, atoi(argv[1]));
   printf("value = %u\n", value);
   return 0;
 }

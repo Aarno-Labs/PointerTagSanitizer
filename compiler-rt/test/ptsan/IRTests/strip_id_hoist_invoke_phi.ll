@@ -1,5 +1,9 @@
-; RUN: %opt_ptsan -ptsan-nochecks -ptsan-stop-after=lowering %s -S | FileCheck %s
+; RUN: %opt_ptsan -ptsan-nochecks -ptsan-stop-after=late-optimization %s | FileCheck %s
+; RUN: %opt_ptsan -ptsan-32-bit-ids -ptsan-nochecks -ptsan-stop-after=late-optimization %s | FileCheck %s
+; RUN: %opt_ptsan -ptsan-nochecks %s -o /dev/null
+; RUN: %opt_ptsan -ptsan-32-bit-ids -ptsan-nochecks %s -o /dev/null
 
+; Check legal anchor placement, then run through lowering to verify the result.
 ; This models a Bullet build failure where an invoke result feeds a PHI in the
 ; invoke's normal destination. PTSan cannot insert strip/tag/ID materialization
 ; on that invoke-result edge without splitting it, so the PHI must stay tagged.
@@ -8,7 +12,6 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:
 target triple = "x86_64-unknown-linux-gnu"
 
 declare ptr @may_throw()
-declare ptr @__ptsan_strip(ptr)
 declare i32 @__gxx_personality_v0(...)
 
 define void @invoke_result_phi_needs_legal_retag_id(ptr %other, ptr %slot,
@@ -18,15 +21,14 @@ define void @invoke_result_phi_needs_legal_retag_id(ptr %other, ptr %slot,
 ; CHECK: invoke.pred:
 ; CHECK-NEXT: %p = invoke ptr @may_throw()
 ; CHECK: join:
-; CHECK-NEXT: %phi = phi ptr [ %p, %invoke.pred ], [ %other, %null.pred ], !ptsan.tagged {{![0-9]+}}
-; CHECK-NEXT: [[PHI_INT:%.*]] = ptrtoint ptr %phi to i64
-; CHECK-NEXT: [[PHI_BITS:%.*]] = call i64 asm "andq $2, $0", "=r,0,r,~{flags}"(i64 [[PHI_INT]], i64 281474976710655)
-; CHECK-NEXT: [[PHI_TRUE:%.*]] = inttoptr i64 [[PHI_BITS]] to ptr
-; CHECK-NEXT: store ptr %phi, ptr {{%.*}}
+; CHECK-NEXT: %phi = phi ptr [ %p, %invoke.pred ], [ %other, %null.pred ]
+; CHECK-DAG: [[PHI_STRIP:%.*]] = call ptr @__ptsan_strip{{(_id32)?}}(ptr %phi
+; CHECK-DAG: [[TAGGED:%.*]] = call ptr @__ptsan_tagged(ptr {{.*}}%phi)
+; CHECK-DAG: store ptr [[TAGGED]]
 ; CHECK: loop:
-; CHECK: %g0 = getelementptr i8, ptr [[PHI_TRUE]], i64 %iv, !ptsan.stripped {{![0-9]+}}
+; CHECK: %g0 = getelementptr inbounds i8, ptr [[PHI_STRIP]], i64 %iv
 ; CHECK-NEXT: load volatile i8, ptr %g0
-; CHECK: %g1 = getelementptr i8, ptr [[PHI_TRUE]], i64 1, !ptsan.stripped {{![0-9]+}}
+; CHECK: %g1 = getelementptr inbounds i8, ptr [[PHI_STRIP]], i64 1
 ; CHECK-NEXT: load volatile i8, ptr %g1
 entry:
   br i1 %cond, label %invoke.pred, label %null.pred
@@ -51,12 +53,10 @@ join:
 
 loop:
   %iv = phi i64 [ 0, %join ], [ %next, %loop ]
-  %g0 = getelementptr i8, ptr %phi, i64 %iv
-  %s0 = call ptr @__ptsan_strip(ptr %g0)
-  %v0 = load volatile i8, ptr %s0, align 1
-  %g1 = getelementptr i8, ptr %phi, i64 1
-  %s1 = call ptr @__ptsan_strip(ptr %g1)
-  %v1 = load volatile i8, ptr %s1, align 1
+  %g0 = getelementptr inbounds i8, ptr %phi, i64 %iv
+  %v0 = load volatile i8, ptr %g0, align 1
+  %g1 = getelementptr inbounds i8, ptr %phi, i64 1
+  %v1 = load volatile i8, ptr %g1, align 1
   %next = add nuw i64 %iv, 1
   %done = icmp eq i64 %next, 4
   br i1 %done, label %exit, label %loop

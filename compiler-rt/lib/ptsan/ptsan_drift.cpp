@@ -26,7 +26,7 @@ void __sanitizer::BufferedStackTrace::UnwindImpl(uptr pc, uptr bp,
                                                  void *context,
                                                  bool request_fast,
                                                  u32 max_depth) {
-#ifdef PTSAN_INSTRUMENTED_LIBC
+#ifdef PTSAN_MUSL_INTERCEPTION
   // The initial static instrumented-libc runtime deliberately omits the
   // symbolizer and platform unwinder.  PTSan does not currently report this
   // trace, but sanitizer_common still requires an UnwindImpl definition.

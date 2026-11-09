@@ -7,7 +7,7 @@
 // REQUIRES: x86_64-target-arch
 // RUN: split-file %S/dlopen_tls_initialization.c %t
 // RUN: %clang_ptsan -O2 -fPIC -shared %t/library.c -o %t/library.so
-// RUN: %clang_ptsan -O2 -DCHECK_TLS_IDS -mllvm -ptsan-abort-on-error %t/main.c -pthread -ldl -o %t/test
+// RUN: %clang_ptsan -O2 -DCHECK_TLS_IDS -I%S -mllvm -ptsan-abort-on-error %t/main.c -pthread -ldl -o %t/test
 // RUN: %t/test %t/library.so
 
 // Every thread must get a stable, nonzero, nondefault ID for its own instance

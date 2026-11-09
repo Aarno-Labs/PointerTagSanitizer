@@ -6,7 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "PTSanPhases.h"
+#include "PTSanDiscoveryInternal.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Transforms/Utils/EscapeEnumerator.h"
 
@@ -14,36 +14,6 @@ namespace llvm::ptsan {
 
 
 static bool shouldClearIDForUse(const PtrOp &Op);
-
-class PTSanDiscoverer : public InstVisitor<PTSanDiscoverer> {
-private:
-  PTSanAnalysisState &PTA;
-  Function &F;
-  PointerTagSanitizer &DS;
-  DominatorTree &DT;
-  PostDominatorTree &PDT;
-  LoopInfo &LI;
-
-  // Helpers
-  void addPtrSink(const PtrOp &Op);
-  void IRStripFn(CallBase &CB);
-  void IRStripSpecialFn(CallBase &CB);
-  void discoverFunctionExits();
-
-public:
-  PTSanDiscoverer(PTSanAnalysisState &PTA)
-      : PTA(PTA), F(PTA.F), DS(PTA.DS), DT(PTA.DT), PDT(PTA.PDT), LI(PTA.LI) {}
-
-  void run();
-  // Visitors
-  void visitAllocaInst(AllocaInst &I);
-  void visitCallBase(CallBase &CB);
-  void visitGetElementPtrInst(GetElementPtrInst &I);
-  void visitCmpInst(CmpInst &CI);
-  void visitBinaryOperator(BinaryOperator &I);
-
-  void handleMainIfMain();
-};
 
 bool PTSanDiscoveryPass::run(PTSanAnalysisState &PTA) {
   DBG(errs() << "\n\n-----------------------------------------\n");
@@ -76,12 +46,46 @@ static bool isProgramMain(Function &F) {
   return true;
 }
 
+void PTSanDiscoverer::discoverVarargCall(PointerTagSanitizer &DS, CallBase &CB) {
+  // Variadic intrinsics (e.g. stackmap) do not use the C varargs ABI.
+  if (!CB.getFunctionType()->isVarArg() ||
+      CB.getIntrinsicID() != Intrinsic::not_intrinsic) {
+    return;
+  }
+  // The sentinel uses C ABI stack placement and cannot be appended to
+  // musttail's forwarded argument list.
+  if (CB.getCallingConv() != CallingConv::C || CB.isMustTailCall()) {
+    report_fatal_error(
+        "PTSan varargs require the C calling convention without musttail");
+  }
+  VarargCallAnchor::create(DS, &CB);
+}
+
+StripAnchor PTSanDiscoverer::createStripWithDependencies(
+    PTSanAnalysisState &PTA, Instruction *IP, Value *Ptr, Value *Mask) {
+  PointerTagSanitizer &DS = PTA.DS;
+  // ID16 strips are just masks; ID32 strips also need the allocation's decode base.
+  if (Cl32BitIDs) {
+    Value *Base = Ptr;
+    if (Ptr->getType()->isPtrOrPtrVectorTy()) {
+      Base = findPTSanBasePointer(Ptr, PTA.PTU);
+    }
+    Value *ID = GetIDAnchor::create(DS, IP, Base).Call;
+    Value *BoundsMask = ID->getType()->isVectorTy() ? Mask : nullptr;
+    auto Bias = LoadBoundAnchor::createBase(DS, IP, ID, BoundsMask);
+    return ID32StripAnchor::create(DS, IP, Ptr, ID, Bias);
+  } else {
+    return ID16StripAnchor::create(DS, IP, Ptr);
+  }
+}
+
 void PTSanDiscoverer::addPtrSink(const PtrOp &Op) {
   Instruction *UserI = cast<Instruction>(Op.U->getUser());
   Value *Ptr = Op.U->get();
 
   if (shouldClearIDForUse(Op) && !DS.getAsAnchor<StripAnchor>(Ptr)) {
-    StripAnchor Strip = StripAnchor::create(DS, UserI, Ptr);
+    Value *Mask = Cl32BitIDs && Ptr->getType()->isVectorTy() ? Op.Mask : nullptr;
+    StripAnchor Strip = createStripWithDependencies(PTA, UserI, Ptr, Mask);
     Op.U->set(Strip.Call);
   }
 
@@ -94,9 +98,13 @@ void PTSanDiscoverer::addPtrSink(const PtrOp &Op) {
   Value *Base = findPTSanBasePointer(Ptr, PTA.PTU);
   auto ID = GetIDAnchor::create(DS, UserI, Base);
   Value *BoundsMask = ID.Call->getType()->isVectorTy() ? Op.Mask : nullptr;
-  auto BaseBound = LoadBoundAnchor::createBase(DS, UserI, ID, BoundsMask);
-  auto SpanBound = LoadBoundAnchor::createSpan(DS, UserI, ID, BoundsMask);
-  AccessAnchor::create(DS, UserI, Op, ID, BaseBound, SpanBound);
+  auto BaseBound = LoadBoundAnchor::createBase(DS, UserI, ID.Call, BoundsMask);
+  auto SpanBound = LoadBoundAnchor::createSpan(DS, UserI, ID.Call, BoundsMask);
+  optional<LoadBoundAnchor> Origin;
+  if (Cl32BitIDs) {
+    Origin = LoadBoundAnchor::createOrigin(DS, UserI, ID.Call, BoundsMask);
+  }
+  AccessAnchor::create(DS, UserI, Op, ID, BaseBound, SpanBound, Origin);
 }
 
 void PTSanDiscoverer::handleMainIfMain() {
@@ -114,7 +122,7 @@ void PTSanDiscoverer::handleMainIfMain() {
   assert(ArgC->getType() == DS.U32Ty);
   assert(ArgV->getType() == DS.PtrTy);
 
-  SourceAnchor::create(DS, PTA.PTU, ArgV);
+  SourceAnchor::create(DS, &*F.getEntryBlock().getFirstInsertionPt(), ArgV);
 }
 
 void PTSanDiscoverer::run() {
@@ -126,8 +134,9 @@ void PTSanDiscoverer::run() {
   // Treat that copy like a stack allocation so it receives fresh bounds and a
   // fresh ID for this invocation.
   for (Argument &Arg : F.args()) {
-    if (Arg.hasByValAttr())
-      SourceAnchor::create(DS, PTA.PTU, &Arg);
+    if (Arg.hasByValAttr()) {
+      SourceAnchor::create(DS, &*F.getEntryBlock().getFirstInsertionPt(), &Arg);
+    }
   }
 
   SmallVector<PtrOp, 4> MemOps;
@@ -183,7 +192,7 @@ void PTSanDiscoverer::visitAllocaInst(AllocaInst &I) {
   assert((!Size || *Size < 0xFFFFFFFFULL) &&
          "PTSan source alloca is too large");
 
-  SourceAnchor::create(DS, PTA.PTU, &I);
+  SourceAnchor::create(DS, I.getNextNode(), &I);
 }
 
 void PTSanDiscoverer::discoverFunctionExits() {
@@ -194,13 +203,10 @@ void PTSanDiscoverer::discoverFunctionExits() {
         return Source.needsFrameID();
       });
 
-  bool HasVAStart = llvm::any_of(instructions(F), [](Instruction &I) {
-    auto *II = dyn_cast<IntrinsicInst>(&I);
-    return II && II->getIntrinsicID() == Intrinsic::vastart;
-  });
+  bool HasVAStart = !DS.collectAnchors<VAStartAnchor>(F).empty();
 
-  // Finish visiting calls before replacing them with invokes. Anchors remain
-  // before their instructions; later phases see the final call/exit topology.
+  // Finish visiting calls before replacing them with invokes. The conversion
+  // preserves target metadata, so anchors still identify their instructions.
   // Always enumerate existing returns/resumes; create unwind paths for
   // throwing calls only when frame-owned IDs may need cleanup.
   EscapeEnumerator EE(F, "ptsan.cleanup",
@@ -223,21 +229,29 @@ void PTSanDiscoverer::visitGetElementPtrInst(GetElementPtrInst &I) {
   // I.setIsInBounds(false);
 }
 
-// If we're dealing with c++, we can't garantee that pointers
-// will have the same ID -- one could be tagged and one
-// could be untagged
 void PTSanDiscoverer::visitCmpInst(CmpInst &CI) {
   Type *Ty = CI.getOperand(0)->getType();
   assert(Ty == CI.getOperand(1)->getType());
 
   Value *Op0 = CI.getOperand(0);
   Value *Op1 = CI.getOperand(1);
+  // Strip before numeric casts lose bits or change the interpretation of an ID.
+  auto findPtrToInt = [](Value *V) -> PtrToIntInst * {
+    while (auto *Cast = dyn_cast<CastInst>(V)) {
+      if (auto *PtrToInt = dyn_cast<PtrToIntInst>(Cast)) {
+        return PtrToInt;
+      }
+      V = Cast->getOperand(0);
+    }
+    return nullptr;
+  };
   // Stripping ids off of cmps is a bit sus, since sometimes (mmap failure
   // which returns -1), for example, we do actually want the orignal value.
   // What seems to work *pretty* reliably is to only strip pointer ids
   // if both of them aren't provably constant.
-  if(isUntaggedConstantPtr(Op0) ||
-     isUntaggedConstantPtr(Op1)) {
+  if (isUntaggedConstantPtr(Op0) || isUntaggedConstantPtr(Op1)) {
+    // LLVM also folds integer sign tests into pointer comparisons against -1.
+    // Keep those tests consistent with the pointer bits used by integer code.
     return;
   }
 
@@ -246,52 +260,112 @@ void PTSanDiscoverer::visitCmpInst(CmpInst &CI) {
     addPtrSink(PtrOp(&CI, 1));
   }
 
-  if (!(Ty->isPtrOrPtrVectorTy() ||
-        (isa<PtrToIntInst>(Op0) && isa<PtrToIntInst>(Op1)))) {
+  PtrToIntInst *PtrToInt0 = findPtrToInt(Op0);
+  PtrToIntInst *PtrToInt1 = findPtrToInt(Op1);
+  if (!(Ty->isPtrOrPtrVectorTy() || (PtrToInt0 && PtrToInt1))) {
     return;
   }
 
-  if (ClClearIdsOnCmp) {
-    addPtrSink(PtrOp(&CI, 0));
-    addPtrSink(PtrOp(&CI, 1));
+  // Validate the pointers, not potentially narrowed or floating-point casts.
+  // Capture them before inserting strips for the comparison.
+  if (ClValidateArith && ClValidate && !Ty->isVectorTy()) {
+    ValidateArithAnchor::create(
+        DS, &CI, PtrToInt0 ? PtrToInt0->getPointerOperand() : Op0,
+        PtrToInt1 ? PtrToInt1->getPointerOperand() : Op1);
   }
 
-  // The runtime arithmetic validator accepts scalar pointer values. Vector
-  // comparisons are still stripped above, but cannot use that scalar-only
-  // diagnostic interface.
-  if (ClValidateArith && ClValidate && !Ty->isVectorTy()) {
-    ValidateArithAnchor::create(DS, &CI, Op0, Op1);
+  if (PTA.ClearIDsOnCmp) {
+    if (Ty->isPtrOrPtrVectorTy()) {
+      addPtrSink(PtrOp(&CI, 0));
+      addPtrSink(PtrOp(&CI, 1));
+    } else {
+      addPtrSink(PtrOp(PtrToInt0, 0));
+      addPtrSink(PtrOp(PtrToInt1, 0));
+    }
   }
+
 }
 
-// If we're dealing with c++, we can't garantee that pointers
-// will have the same ID -- one could be tagged and one
-// could be untagged
+static bool shouldStripPointerBitTwiddle(unsigned Opcode,
+                                         const ConstantInt &Mask) {
+  if (Opcode == Instruction::Xor && Mask.isMinusOne()) {
+    // LLVM represents X - Y - 1 as X + ~Y. Keep Y tagged so matching pointer
+    // IDs still cancel in the surrounding arithmetic.
+    return false;
+  }
+
+  APInt TouchedBits = Mask.getValue();
+  if (Opcode == Instruction::And) {
+    TouchedBits.flipAllBits();
+  }
+
+  // Keep page-offset bits available for alignment and pointer flags. Masks
+  // that reach beyond them are observations of the numeric address.
+  unsigned PointerFlagBits = ClStripPointerBitTwiddles;
+  return TouchedBits.getActiveBits() > PointerFlagBits;
+}
+
 void PTSanDiscoverer::visitBinaryOperator(BinaryOperator &I) {
-  if (I.getOpcode() != Instruction::Sub ||
-      !I.getType()->isIntegerTy()) {
+  if (!I.getType()->isIntegerTy()) {
     return;
   }
 
   Value *Op0 = I.getOperand(0);
   Value *Op1 = I.getOperand(1);
-  // Ptr-ptr subtraction is represented in IR as int-int
-  assert(!(Op0->getType()->isPointerTy() &&
-           Op0->getType()->isPointerTy()));
 
-  if (!isa<PtrToIntInst>(Op0) || !isa<PtrToIntInst>(Op1)) {
+  // If we're dealing with c++, we can't garantee that pointers
+  // will have the same ID -- one could be tagged and one
+  // could be untagged
+  bool IsPointerSubtraction = I.getOpcode() == Instruction::Sub &&
+                              isa<PtrToIntInst>(Op0) &&
+                              isa<PtrToIntInst>(Op1);
+
+  if (IsPointerSubtraction && ClValidateArith && ClValidate) {
+    ValidateArithAnchor::create(DS, &I, Op0, Op1);
+  }
+
+  if (IsPointerSubtraction) {
+    // Ptrtoint stripping already makes both operands raw addresses.
+    if (PTA.ClearIDsOnArith && !PTA.StripPtrToInt) {
+      DBG(errs() << "Stripping ids for pointer subtraction " << I << "\n");
+      addPtrSink(PtrOp(&I, 0));
+      addPtrSink(PtrOp(&I, 1));
+    }
     return;
   }
 
-  // Strip ids before subtracting pointers
-  if (ClClearIdsOnArith) {
-    DBG(errs() << "Stripping ids for pointer subtraction " << I << "\n");
-    addPtrSink(PtrOp(&I, 0));
-    addPtrSink(PtrOp(&I, 1));
+  if (ClStripPointerBitTwiddles < 0) {
+    return;
   }
 
-  if (ClValidateArith && ClValidate) {
-    ValidateArithAnchor::create(DS, &I, Op0, Op1);
+  if (I.getOpcode() == Instruction::AShr ||
+      I.getOpcode() == Instruction::LShr) {
+    if (isa<PtrToIntInst>(Op0)) {
+      StripAnchor Strip = createStripWithDependencies(PTA, &I, Op0);
+      I.setOperand(0, Strip.Call);
+    }
+  } else if (I.isBitwiseLogicOp()) {
+    // Some programs (gcc!) use the high bits of pointers as
+    // hash keys. We should preserve their operation
+    if (isa<PtrToIntInst>(Op0)) {
+      auto *Mask = dyn_cast<ConstantInt>(Op1);
+      if (Mask && shouldStripPointerBitTwiddle(I.getOpcode(), *Mask)) {
+        StripAnchor Strip = createStripWithDependencies(PTA, &I, Op0);
+        I.setOperand(0, Strip.Call);
+      }
+    } else if (isa<PtrToIntInst>(Op1)) {
+      auto *Mask = dyn_cast<ConstantInt>(Op0);
+      if (Mask && shouldStripPointerBitTwiddle(I.getOpcode(), *Mask)) {
+        StripAnchor Strip = createStripWithDependencies(PTA, &I, Op1);
+        I.setOperand(1, Strip.Call);
+      }
+    }
+  }
+}
+
+void PTSanDiscoverer::visitPtrToIntInst(PtrToIntInst &I) {
+  if (PTA.StripPtrToInt) {
+    addPtrSink(PtrOp(&I, 0));
   }
 }
 
@@ -380,6 +454,8 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
     return;
   }
 
+  discoverVarargCall(DS, CB);
+
   // We need to strip ID on any pass-by-value pointer, since
   // it devolves to a memcpy. I (think) we can assume the bounds
   // are right
@@ -410,11 +486,23 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
   assert(PtrOps.empty());
   if (CB.isInlineAsm()) {
     DBG(errs() << "Found inline ASM " << CB << "\n");
-    for (unsigned ArgIdx = 0; ArgIdx < CB.arg_size(); ++ArgIdx) {
-      llvm::Value *Arg = CB.getArgOperand(ArgIdx);
+    auto *Asm = cast<InlineAsm>(CB.getCalledOperand());
+    auto Constraints = Asm->ParseConstraints();
+    unsigned ArgIdx = 0;
+    for (const auto &Constraint : Constraints) {
+      if (!Constraint.hasArg()) {
+        continue;
+      }
+      unsigned Operand = ArgIdx++;
+      // Empty asm does not consume direct operands as addresses. Indirect
+      // memory operands still need raw addresses, even with an empty template.
+      if (Asm->getAsmString().empty() && !Constraint.isIndirect) {
+        continue;
+      }
+      llvm::Value *Arg = CB.getArgOperand(Operand);
       if (Arg->getType()->isPtrOrPtrVectorTy() || isa<PtrToIntInst>(Arg)) {
-        DBG(errs() << "\tStripping ptr from arg " << ArgIdx << "\n");
-        addPtrSink(PtrOp(&CB, ArgIdx));
+        DBG(errs() << "\tStripping ptr from arg " << Operand << "\n");
+        addPtrSink(PtrOp(&CB, Operand));
       }
     }
 
@@ -471,6 +559,8 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
       addPtrSink(PtrOp(&CB, 0));
       return;
     case Intrinsic::vastart:
+      VAStartAnchor::create(DS, II);
+      [[fallthrough]];
     case Intrinsic::vaend:
     case Intrinsic::vacopy:
       for (unsigned ArgIdx = 0; ArgIdx < CB.arg_size(); ++ArgIdx) {
@@ -502,7 +592,7 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
       // PTSanLateOptimization
       // Preserve the raw per-thread address. A tagged use requests its TLS ID.
       if (DS.TLSIDs.contains(cast<GlobalValue>(CB.getArgOperand(0)))) {
-        SourceAnchor::create(DS, PTA.PTU, &CB);
+        SourceAnchor::create(DS, CB.getNextNode(), &CB);
       }
       return;
     // Handled in FindMemAccess
@@ -510,8 +600,11 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
     case Intrinsic::masked_store:
     case Intrinsic::masked_gather:
     case Intrinsic::masked_scatter:
+    case Intrinsic::x86_sse3_ldu_dq:
+    case Intrinsic::x86_avx_ldu_dq_256:
     case Intrinsic::x86_sse_ldmxcsr:
     case Intrinsic::x86_sse_stmxcsr:
+    case Intrinsic::x86_sse2_clflush:
     case Intrinsic::x86_umonitor:
       return;
     default:

@@ -5,7 +5,7 @@
 //
 // REQUIRES: x86_64-target-arch
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -O2 -mavx2 \
+// RUN: %clang_ptsan_plain -O2 -mavx2 \
 // RUN:   -fno-discard-value-names -mllvm -force-vector-width=4 \
 // RUN:   -mllvm -force-vector-interleave=1 -mllvm -ptsan-nochecks \
 // RUN:   -mllvm -ptsan-stop-after=late-optimization -S -emit-llvm \
@@ -25,6 +25,15 @@
 // RUN: FileCheck %s --check-prefix=BAD < guarded-bad-err.txt
 // RUN: not ./%exe nullable-bad > nullable-bad-out.txt 2> nullable-bad-err.txt
 // RUN: FileCheck %s --check-prefix=BAD < nullable-bad-err.txt
+// RUN: %clang_ptsan_id32 -O2 -mavx2 -mllvm -force-vector-width=4 \
+// RUN:   -mllvm -force-vector-interleave=1 -o %exe.id32 %s
+// RUN: ./%exe.id32 > id32.out 2> id32.err
+// RUN: FileCheck %s --check-prefix=OUT < id32.out
+// RUN: FileCheck %s --check-prefix=ERR < id32.err
+// RUN: not ./%exe.id32 select-bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: not ./%exe.id32 recurrence-bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: not ./%exe.id32 guarded-bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: not ./%exe.id32 nullable-bad 2>&1 | FileCheck %s --check-prefix=BAD
 
 // These source-level cases pin naturally generated pointer-vector shapes and
 // their runtime semantics. The current global-hoisting cost model keeps the
@@ -36,28 +45,28 @@
 // LATE: [[BASES:%.*]] = load <4 x ptr>,
 // LATE: [[MIXED:%.*]] = getelementptr inbounds i32, <4 x ptr> [[BASES]], <4 x i64>
 // LATE: [[SELECTED:%.*]] = select <4 x i1> {{%.*}}, <4 x ptr> [[MIXED]], <4 x ptr> [[COMMON]]
-// LATE: [[RAW_SELECTED:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[SELECTED]])
+// LATE: [[RAW_SELECTED:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[SELECTED]]
 // LATE: icmp eq <4 x ptr> [[RAW_SELECTED]],
-// LATE: [[TAGGED_SELECTED:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> [[SELECTED]])
+// LATE: [[TAGGED_SELECTED:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}[[SELECTED]])
 // LATE: store <4 x ptr> [[TAGGED_SELECTED]],
 
 // LATE-LABEL: define {{.*}} @mixed_recurrence(
 // LATE: [[RECURRENCE:%.*]] = phi <4 x ptr>
 // LATE: [[BASES:%.*]] = load <4 x ptr>,
 // LATE: [[CURRENT:%.*]] = getelementptr inbounds i32, <4 x ptr> [[BASES]], <4 x i64>
-// LATE: [[RAW_CURRENT:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[CURRENT]])
+// LATE: [[RAW_CURRENT:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[CURRENT]]
 // LATE: shufflevector <4 x ptr> {{%.*}}, <4 x ptr> [[CURRENT]],
 // LATE: icmp eq <4 x ptr> [[RAW_CURRENT]],
 
 // LATE-LABEL: define {{.*}} @guarded_store(
 // LATE: [[POINTERS:%.*]] = getelementptr inbounds i32, ptr %base, <4 x i64>
-// LATE: [[TAGGED_POINTERS:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> [[POINTERS]])
+// LATE: [[TAGGED_POINTERS:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}[[POINTERS]])
 // LATE: {{.*}}call void @llvm.masked.store.v4p0.p0(<4 x ptr> [[TAGGED_POINTERS]],
 
 // LATE-LABEL: define {{.*}} @nullable_load(
-// LATE: [[NULLS:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> zeroinitializer)
+// LATE: [[NULLS:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}zeroinitializer)
 // LATE: [[LOADED:%.*]] = {{.*}}call <4 x ptr> @llvm.masked.load.v4p0.p0(ptr {{%.*}}, i32 8, <4 x i1> {{%.*}}, <4 x ptr> [[NULLS]])
-// LATE: [[TAGGED_LOADED:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> [[LOADED]])
+// LATE: [[TAGGED_LOADED:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}[[LOADED]])
 // LATE: store <4 x ptr> [[TAGGED_LOADED]],
 
 // OUT: pointer-vector-edge-cases-ok

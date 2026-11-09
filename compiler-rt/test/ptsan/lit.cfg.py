@@ -14,13 +14,13 @@ config.scripts_root = os.path.join(config.test_source_root, "../../lib/ptsan/scr
 
 
 # Setup default compiler flags used with -fsanitize=ptsan option.
-# Keep reporting tests running; tests for termination override this explicitly.
 clang_ptsan_cflags = [
-    "-fsanitize=ptsan", "-g", "-mllvm", "-ptsan-runtime-validate",
-    "-mllvm", "-ptsan-abort-on-error=0",
+    "-fsanitize=ptsan", "-g", "-fsanitize-ptsan-runtime-validate",
     "-fno-discard-value-names", "-mllvm", "-ptsan-print-stats"] + [config.target_cflags]
 
+# Unsuffixed commands always use ID16; ID32 runs opt in by name.
 clang_ptsan_cxxflags = config.cxx_mode_flags + clang_ptsan_cflags
+id32_flags = ["-fsanitize-ptsan-32-bit-ids", "-DPTSAN_TEST_32_BIT_IDS"]
 
 
 def build_invocation(compile_flags):
@@ -28,14 +28,23 @@ def build_invocation(compile_flags):
 
 config.substitutions.append(("%clang_raw ", config.clang))
 config.substitutions.append(("%clangxx_raw ", build_invocation(config.cxx_mode_flags)))
+plain_flags = ["-fsanitize=ptsan"]
+config.substitutions.append(("%clang_ptsan_plain ", build_invocation(plain_flags)))
+config.substitutions.append(("%clangxx_ptsan_plain ",
+                             build_invocation(config.cxx_mode_flags + plain_flags)))
+strip_flags = ["-mllvm", "-ptsan-strip-ids"]
+config.substitutions.append(("%clang_strip ", build_invocation(strip_flags)))
 config.substitutions.append(("%clang_ptsan ", build_invocation(clang_ptsan_cflags)))
 config.substitutions.append(("%clangxx_ptsan ", build_invocation(clang_ptsan_cxxflags)))
+config.substitutions.append(("%clang_ptsan_id32 ",
+                             build_invocation(clang_ptsan_cflags + id32_flags)))
+config.substitutions.append(("%clangxx_ptsan_id32 ",
+                             build_invocation(clang_ptsan_cxxflags + id32_flags)))
 config.substitutions.append(
     ("%opt ", " -O2 "))
 config.substitutions.append(("%exe", "a.out"))
 config.substitutions.append(("%ptsan_patcher", os.path.join(config.scripts_root, "ptsan_patcher.py")))
-config.substitutions.append(("%opt_ptsan ",
-                             "opt -passes='ptsan' -S "))
+config.substitutions.append(("%opt_ptsan ", "opt -passes='ptsan' -S "))
 config.substitutions.append(("%llc", "llc "))
 config.substitutions.append(("%ptsan_target_triple", config.target_triple))
 

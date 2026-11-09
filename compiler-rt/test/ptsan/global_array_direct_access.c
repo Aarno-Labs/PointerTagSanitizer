@@ -6,7 +6,7 @@
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
 // RUN: ./%exe 127 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
-// RUN: ./%exe 128 2> out.txt
+// RUN: not ./%exe 128 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 
 // BAD: Found bad POINT access

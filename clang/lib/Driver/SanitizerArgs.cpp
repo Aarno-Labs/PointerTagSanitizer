@@ -912,6 +912,25 @@ SanitizerArgs::SanitizerArgs(const ToolChain &TC,
         DiagnoseErrors);
   }
 
+  PTSan32BitIDs = Args.hasFlag(options::OPT_fsanitize_ptsan_32_bit_ids,
+                             options::OPT_fno_sanitize_ptsan_32_bit_ids, false);
+  PTSanStrictMode = Args.hasFlag(options::OPT_fsanitize_ptsan_strict_mode,
+                               options::OPT_fno_sanitize_ptsan_strict_mode, false);
+  PTSanLAM = Args.hasFlag(options::OPT_fsanitize_ptsan_lam,
+                         options::OPT_fno_sanitize_ptsan_lam, false);
+  PTSanRuntimeValidate =
+      Args.hasFlag(options::OPT_fsanitize_ptsan_runtime_validate,
+                   options::OPT_fno_sanitize_ptsan_runtime_validate, false);
+
+  if (DiagnoseErrors) {
+    if (PTSanLAM && TC.getTriple().getArch() != llvm::Triple::x86_64)
+      D.Diag(diag::err_drv_unsupported_opt_for_target)
+          << "-fsanitize-ptsan-lam" << TC.getTripleString();
+    if (PTSan32BitIDs && PTSanLAM)
+      D.Diag(diag::err_drv_argument_not_allowed_with)
+          << "-fsanitize-ptsan-32-bit-ids" << "-fsanitize-ptsan-lam";
+  }
+
   SharedRuntime =
       Args.hasFlag(options::OPT_shared_libsan, options::OPT_static_libsan,
                    TC.getTriple().isAndroid() || TC.getTriple().isOSFuchsia() ||
@@ -1222,6 +1241,24 @@ void SanitizerArgs::addArgs(const ToolChain &TC, const llvm::opt::ArgList &Args,
     CmdArgs.push_back(Args.MakeArgString(
         "--dependent-lib=" + TC.getCompilerRTBasename(Args, "stats")));
     addIncludeLinkerOption(TC, Args, CmdArgs, "__sanitizer_stats_register");
+  }
+
+  // Strip-only instrumentation also needs the selected pointer representation.
+  if (PTSan32BitIDs) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-ptsan-32-bit-ids");
+  }
+  if (PTSanStrictMode) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-ptsan-strict-mode");
+  }
+  if (PTSanLAM) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-ptsan-lam");
+  }
+  if (PTSanRuntimeValidate) {
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-ptsan-runtime-validate");
   }
 
   if (Sanitizers.empty())

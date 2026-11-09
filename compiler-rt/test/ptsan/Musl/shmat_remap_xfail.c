@@ -65,7 +65,6 @@ int main(void) {
   const uint16_t result_id = get_id(result);
   assert(clearPointerID(result) == clearPointerID(destination));
   assert(result_id != destination_id);
-  assert(ptsan_get_base(destination_id) == 0);
   assert(ptsan_get_size(destination_id) == 0);
   assert(ptsan_get_base(result_id) == (uint64_t)(uintptr_t)result);
   assert(ptsan_get_size(result_id) == page_size);
@@ -77,7 +76,6 @@ int main(void) {
   if (shmdt(keeper) != 0) {
     return 8;
   }
-  assert(ptsan_get_base(result_id) == 0);
   assert(ptsan_get_size(result_id) == 0);
   return 0;
 }

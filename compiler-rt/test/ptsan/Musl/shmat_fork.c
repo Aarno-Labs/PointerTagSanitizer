@@ -9,6 +9,9 @@
 //
 // RUN: %ptsan_musl_strict -Wall -Wextra -Werror -o %t %s
 // RUN: %run %t
+//
+// RUN: %ptsan_musl_id32_strict -Wall -Wextra -Werror -o %t.id32 %s
+// RUN: %run %t.id32
 
 #define _GNU_SOURCE
 
@@ -22,9 +25,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static int childProcess(char *mapping, uint16_t mapping_id, size_t size) {
+static int childProcess(char *mapping, PTSanID mapping_id, size_t size) {
   assert(get_id(mapping) == mapping_id);
+#ifdef PTSAN_TEST_32_BIT_IDS
+  assert(ptsan_get_base(mapping_id) == ptsan_get_address(mapping));
+#else
   assert(ptsan_get_base(mapping_id) == (uint64_t)(uintptr_t)mapping);
+#endif
   assert(ptsan_get_size(mapping_id) == size);
   if (mapping[0] != 42) {
     return 1;
@@ -34,7 +41,6 @@ static int childProcess(char *mapping, uint16_t mapping_id, size_t size) {
   if (shmdt(mapping) != 0) {
     return 2;
   }
-  assert(ptsan_get_base(mapping_id) == 0);
   assert(ptsan_get_size(mapping_id) == 0);
   return 0;
 }
@@ -59,8 +65,12 @@ int main(void) {
     return 4;
   }
 
-  const uint16_t mapping_id = get_id(mapping);
+  const PTSanID mapping_id = get_id(mapping);
+#ifdef PTSAN_TEST_32_BIT_IDS
+  assert(ptsan_get_base(mapping_id) == ptsan_get_address(mapping));
+#else
   assert(ptsan_get_base(mapping_id) == (uint64_t)(uintptr_t)mapping);
+#endif
   assert(ptsan_get_size(mapping_id) == page_size);
   mapping[0] = 42;
 
@@ -79,12 +89,15 @@ int main(void) {
   }
 
   assert(mapping[0] == 7);
+#ifdef PTSAN_TEST_32_BIT_IDS
+  assert(ptsan_get_base(mapping_id) == ptsan_get_address(mapping));
+#else
   assert(ptsan_get_base(mapping_id) == (uint64_t)(uintptr_t)mapping);
+#endif
   assert(ptsan_get_size(mapping_id) == page_size);
   if (shmdt(mapping) != 0) {
     return 7;
   }
-  assert(ptsan_get_base(mapping_id) == 0);
   assert(ptsan_get_size(mapping_id) == 0);
   return 0;
 }

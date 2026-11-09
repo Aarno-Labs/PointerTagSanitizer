@@ -2946,10 +2946,9 @@ BasicBlock *llvm::changeToInvokeAndSplitBasicBlock(CallInst *CI,
   InvokeInst *II =
       InvokeInst::Create(CI->getFunctionType(), CI->getCalledOperand(), Split,
                          UnwindEdge, InvokeArgs, OpBundles, CI->getName(), BB);
-  II->setDebugLoc(CI->getDebugLoc());
+  II->copyMetadata(*CI);
   II->setCallingConv(CI->getCallingConv());
   II->setAttributes(CI->getAttributes());
-  II->setMetadata(LLVMContext::MD_prof, CI->getMetadata(LLVMContext::MD_prof));
 
   if (DTU)
     DTU->applyUpdates({{DominatorTree::Insert, BB, UnwindEdge}});

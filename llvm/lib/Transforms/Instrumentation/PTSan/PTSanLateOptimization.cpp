@@ -80,17 +80,9 @@ void PTSanLateOptimizer::insertTaggedUseAnchors() {
   };
 
   for (Instruction &I : instructions(F)) {
-    if (auto ID = DS.getAsAnchor<GetIDAnchor>(&I)) {
-      // A source ID is assigned by lowering, not extracted from pointer bits.
-      if (!DS.getAsAnchor<SourceAnchor>(ID->getBase())) {
-        Uses.push_back(&ID->Call->getOperandUse(0));
-      }
-      continue;
-    }
-
     if (auto Check = DS.getAsAnchor<CheckAnchor>(&I)) {
       assert(Check->hasMaterializedRange());
-      Uses.push_back(&Check->Call->getOperandUse(CheckAnchor::RangeMinIndex));
+      // Min-cut chooses the check operand's polarity using its check cost.
       continue;
     }
 
@@ -134,7 +126,10 @@ void PTSanLateOptimizer::insertTaggedUseAnchors() {
   }
 
   for (Use *U : Uses) {
-    if (DS.getAsAnchor<StripAnchor>(U->get())) {
+    // Static-bound folding can already have marked a loop range's pointer as
+    // tagged. Its existing anchor also constrains the polarity solver.
+    if (DS.getAsAnchor<StripAnchor>(U->get()) ||
+        DS.getAsAnchor<TaggedAnchor>(U->get())) {
       continue;
     }
 
@@ -145,36 +140,18 @@ void PTSanLateOptimizer::insertTaggedUseAnchors() {
 }
 
 void PTSanLateOptimizer::materializeGlobalConstants() {
+  for (GlobalVariable &GV : F.getParent()->globals()) {
+    materializeConstantUsersOfGlobal(F, &GV);
+  }
+  for (GlobalAlias &GA : F.getParent()->aliases()) {
+    materializeConstantUsersOfGlobal(F, &GA);
+  }
   PTU.KnownBases.clear();
-
-  bool MaterializedGlobalConstants = false;
-  for (auto &GI : DS.GlobalVariableProxies) {
-    MaterializedGlobalConstants |=
-        materializeConstantUsersOfGlobal(F, GI.first);
-  }
-  for (auto &GA : DS.GlobalAliasProxies) {
-    MaterializedGlobalConstants |=
-        materializeConstantUsersOfGlobal(F, GA.first);
-  }
-
-  for (StripAnchor StripID : DS.collectAnchors<StripAnchor>(F)) {
-    if (!StripID.isPointerStrip()) {
-      continue;
-    }
-
-    for (Value *Base : PTU.findBasePointers(StripID.getValue())) {
-      if (auto *GV = dyn_cast<GlobalValue>(Base)) {
-        MaterializedGlobalConstants |= materializeConstantUsersOfGlobal(F, GV);
-      }
-    }
-  }
-
-  if (MaterializedGlobalConstants) {
-    PTU.KnownBases.clear();
-  }
 }
 
-static bool validatePolarities(PointerTagSanitizer &DS, Function &F) {
+static bool validatePolarities(PTSanAnalysisState &PTA) {
+  PointerTagSanitizer &DS = PTA.DS;
+  Function &F = PTA.F;
   PTSanPolarityReader Polarities(DS, F);
 
   auto haveSamePolarity = [&](Value *A, Value *B) {
@@ -195,6 +172,14 @@ static bool validatePolarities(PointerTagSanitizer &DS, Function &F) {
 
   bool Valid = true;
   for (Instruction &I : instructions(F)) {
+    if (auto ID = DS.getAsAnchor<GetIDAnchor>(&I)) {
+      Value *Base = ID->getBase();
+      if (Base->getType()->isPtrOrPtrVectorTy())
+        Valid &= DS.getAsAnchor<SourceAnchor>(Base).has_value() ||
+                 Polarities.getPolarity(Base) == Polarity::Tagged;
+      continue;
+    }
+
     if (I.getType()->isPtrOrPtrVectorTy()) {
       if (auto Required = getRequiredPolarity(DS, &I)) {
         Valid &= Polarities.getPolarity(&I) == *Required;
@@ -206,7 +191,7 @@ static bool validatePolarities(PointerTagSanitizer &DS, Function &F) {
       continue;
     }
 
-    if (!ClClearIdsOnArith) {
+    if (!PTA.ClearIDsOnArith) {
       if (auto *Sub = dyn_cast<BinaryOperator>(&I)) {
         if (Sub->getOpcode() == Instruction::Sub) {
           auto *Left = dyn_cast<PtrToIntInst>(Sub->getOperand(0));
@@ -289,17 +274,14 @@ void PTSanLateOptimizer::run() {
   Anchors.mergeStripAnchors();
 
   runMinCutStripIDHoisting(PTA);
-  Anchors.foldRedundantStripAnchors();
 
-  Anchors.foldStripOfTagAnchors();
-  Anchors.foldTagOfStripAnchors();
-  Anchors.foldGetIDOfTagAnchors();
-  Anchors.hoistGetIDAnchors();
-  Anchors.mergeGetIDAnchors();
-  Anchors.hoistStripAnchors();
-  Anchors.mergeStripAnchors();
-  Anchors.eraseUnusedDependencyAnchors();
-  assert(validatePolarities(DS, F) &&
+  if (Cl32BitIDs) {
+    optimizeLoadBoundAnchors(PTA);
+    Anchors.eraseUnusedDependencyAnchors();
+    Anchors.sinkStripAnchors();
+    Anchors.sinkLoadBoundAnchors();
+  }
+  assert(validatePolarities(PTA) &&
          "min-cut polarity metadata must match rewritten IR");
 }
 

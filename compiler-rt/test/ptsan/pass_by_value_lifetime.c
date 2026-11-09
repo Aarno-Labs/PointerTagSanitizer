@@ -10,8 +10,10 @@
 //
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -o %exe %s
-// RUN: ./%exe 2> err.txt
+// RUN: not ./%exe 2> err.txt
 // RUN: FileCheck %s < err.txt
+// RUN: %clang_ptsan_id32 -O2 -o %exe.id32 %s
+// RUN: not ./%exe.id32 2>&1 | FileCheck %s
 
 // CHECK: Found bad POINT access
 

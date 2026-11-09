@@ -9,6 +9,12 @@
 // RUN: %ptsan_musl_strict -o %t %s
 // RUN: %run %t | FileCheck %s
 
+// Buffered stdio must decode ID32 pointers inside libc-created iovecs.
+// RUN: %ptsan_musl_id32_nonstrict %s -o %t.id32
+// RUN: %run %t.id32 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32.strict
+// RUN: %run %t.id32.strict | FileCheck %s
+
 // CHECK: buffered stdio works
 
 #include <stdio.h>

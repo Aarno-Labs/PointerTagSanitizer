@@ -4,6 +4,11 @@
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 // RUN: cat out.txt | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe 2> err.txt 1> out.txt
+// RUN: cat err.txt | FileCheck %s --check-prefix=ERR
+// RUN: cat out.txt | FileCheck %s
+
 // Regression test (minimized from 531.deepsjeng_r utils.cpp: myprintf).
 //
 // A variadic wrapper forwards its tagged va_list to the uninstrumented vprintf

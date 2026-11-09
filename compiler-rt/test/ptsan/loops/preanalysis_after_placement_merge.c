@@ -1,10 +1,11 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O2 -g -fno-discard-value-names \
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
-// RUN:   -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats \
-// RUN:   -mllvm -ptsan-abort-on-error=0 -o %exe %s
+// RUN:   -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats \
+// RUN:   -o %exe %s
 // RUN: ./%exe 4 2> good.err && FileCheck %s --check-prefixes=GOOD,STATS < good.err
-// RUN: ./%exe 5 2> bad.err && FileCheck %s --check-prefixes=BAD,STATS < bad.err
+// RUN: not ./%exe 5 2> bad.err
+// RUN: FileCheck %s --check-prefix=BAD < bad.err
 
 // Regression coverage for delayed preanalysis elision: access checks are first
 // placed normally, then removed from the explicit check plan when covered by a

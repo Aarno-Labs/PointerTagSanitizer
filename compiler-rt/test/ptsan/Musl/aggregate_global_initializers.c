@@ -4,9 +4,9 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // RUN: split-file %s %t
-// RUN: %ptsan_musl_strict -O2 -mllvm -ptsan-abort-on-error %t/owners.c %t/main.c -o %t/test
+// RUN: %ptsan_musl_strict -I%S/.. -O2 -mllvm -ptsan-abort-on-error %t/owners.c %t/main.c -o %t/test
 // RUN: %t/test
-// RUN: %ptsan_musl_strict -O2 -mllvm -ptsan-abort-on-error -mllvm -ptsan-no-opts %t/owners.c %t/main.c -o %t/noopts
+// RUN: %ptsan_musl_strict -I%S/.. -O2 -mllvm -ptsan-abort-on-error -mllvm -ptsan-no-opts %t/owners.c %t/main.c -o %t/noopts
 // RUN: %t/noopts
 
 // Keep the targets in the same module as their initializers, but read them
@@ -22,6 +22,7 @@ const struct Table tables[] = {
 //--- main.c
 #include <assert.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 
 extern int values[4];
 extern int *pointers[];
@@ -29,17 +30,17 @@ struct Table { int *elements[2]; const char *name; };
 extern const struct Table tables[];
 
 int main(void) {
-  uintptr_t id = (uintptr_t)values >> 48;
-  assert(id && id != 0xffff);
+  uintptr_t id = get_id(values);
+  assert(id && id != ptsan_default_id());
   for (int i = 0; i < 2; ++i) {
-    assert((uintptr_t)pointers[i] >> 48 == id);
+    assert(get_id(pointers[i]) == id);
     assert(*pointers[i] == values[i]);
     for (int j = 0; j < 2; ++j) {
-      assert((uintptr_t)tables[i].elements[j] >> 48 == id);
+      assert(get_id(tables[i].elements[j]) == id);
       assert(*tables[i].elements[j] == values[i + 2 * j]);
     }
-    uintptr_t name_id = (uintptr_t)tables[i].name >> 48;
-    assert(name_id && name_id != 0xffff);
+    uintptr_t name_id = get_id(tables[i].name);
+    assert(name_id && name_id != ptsan_default_id());
     assert(tables[i].name[0] == (i ? 's' : 'f'));
   }
   return 0;

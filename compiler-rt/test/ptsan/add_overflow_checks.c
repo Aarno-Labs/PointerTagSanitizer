@@ -1,6 +1,6 @@
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-add-overflow-checks=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=DEFAULT
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-add-overflow-checks -S -emit-llvm -o - %s | FileCheck %s --check-prefix=OVERFLOW
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-no-opts -mllvm -ptsan-add-overflow-checks -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOOPTS
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-add-overflow-checks=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=DEFAULT
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-add-overflow-checks -S -emit-llvm -o - %s | FileCheck %s --check-prefix=OVERFLOW
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-no-opts -mllvm -ptsan-add-overflow-checks -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOOPTS
 
 volatile char Sink;
 

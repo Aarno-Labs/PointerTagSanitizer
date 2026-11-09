@@ -65,6 +65,10 @@ class SanitizerArgs {
   bool ImplicitCfiRuntime = false;
   bool NeedsMemProfRt = false;
   bool HwasanUseAliases = false;
+  bool PTSan32BitIDs = false;
+  bool PTSanStrictMode = false;
+  bool PTSanLAM = false;
+  bool PTSanRuntimeValidate = false;
   llvm::AsanDetectStackUseAfterReturnMode AsanUseAfterReturn =
       llvm::AsanDetectStackUseAfterReturnMode::Invalid;
 
@@ -99,6 +103,10 @@ public:
   bool requiresMinimalRuntime() const { return MinimalRuntime; }
   bool needsDfsanRt() const { return Sanitizers.has(SanitizerKind::DataFlow); }
   bool needsPTSanRt() const { return Sanitizers.has(SanitizerKind::PTSan); }
+  bool usesPTSan32BitIDs() const { return PTSan32BitIDs; }
+  bool usesPTSanStrictMode() const { return PTSanStrictMode; }
+  bool usesPTSanLAM() const { return PTSanLAM; }
+  bool needsPTSanValidationRt() const { return PTSanRuntimeValidate; }
   bool needsSafeStackRt() const { return SafeStackRuntime; }
   bool needsCfiRt() const;
   bool needsCfiDiagRt() const;

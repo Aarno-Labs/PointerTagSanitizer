@@ -4,12 +4,12 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // REQUIRES: x86_64-target-arch
-// RUN: %clang_raw -fsanitize=ptsan -O2 -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O2 -fno-discard-value-names \
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
 // RUN:   -mllvm -ptsan-disable \
 // RUN:   -S -emit-llvm -o - %s | FileCheck %s \
 // RUN:   --implicit-check-not=ptsan.value.id
-// RUN: %clang_raw -fsanitize=ptsan -O3 -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O3 -fno-discard-value-names \
 // RUN:   -mllvm -ptsan-stop-after=optimization \
 // RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefix=PLACEMENT
 //

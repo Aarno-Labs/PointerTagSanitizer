@@ -3,13 +3,13 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// RUN: %clang_raw -fsanitize=ptsan -O3 -fno-vectorize -fno-slp-vectorize \
+// RUN: %clang_ptsan_plain -O3 -fno-vectorize -fno-slp-vectorize \
 // RUN:   -fno-discard-value-names -mllvm -ptsan-stop-after=optimization \
 // RUN:   -S -emit-llvm -o %t.ll %s
 // RUN: FileCheck %s < %t.ll
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-vectorize -fno-slp-vectorize \
-// RUN:   -mllvm -ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
+// RUN: %clang_ptsan_plain -g -O3 -fno-vectorize -fno-slp-vectorize \
+// RUN:   -fsanitize-ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
 // RUN:   -mllvm -ptsan-stack-temporal-safety=0 -o test %s
 // RUN: ./test 2> good.txt
 // RUN: FileCheck %s --check-prefix=GOOD --allow-empty < good.txt

@@ -1,3 +1,4 @@
+// Exercises the 16-bit specialized stack callbacks.
 // Forces the slow-path stack ID cases and checks that all stack ID helpers
 // write id-tagged bases, so in-bounds accesses do not get reported as bad.
 
@@ -22,8 +23,8 @@
 
 typedef uint16_t u16;
 
-extern u16 ptsan_next_stack_id;
-extern u16 ptsan_stack_id_limit;
+extern __thread uint64_t ptsan_next_stack_id;
+extern __thread uint64_t ptsan_stack_id_limit;
 
 __attribute__((noinline))
 static void init(char *ptr) {

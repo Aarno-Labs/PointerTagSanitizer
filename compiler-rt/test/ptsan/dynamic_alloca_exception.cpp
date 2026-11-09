@@ -8,6 +8,12 @@
 // RUN: %clangxx_ptsan -O2 -mllvm -ptsan-stack-temporal-safety=0 \
 // RUN:   -mllvm -ptsan-no-stack-id-fast-path -o %t.slow %s
 // RUN: %t.slow 2>&1 | FileCheck %s
+
+// RUN: %clangxx_ptsan_id32 -O2 -mllvm -ptsan-stack-temporal-safety=0 -o %t %s
+// RUN: %t 2>&1 | FileCheck %s
+// RUN: %clangxx_ptsan_id32 -O2 -mllvm -ptsan-stack-temporal-safety=0 \
+// RUN:   -mllvm -ptsan-no-stack-id-fast-path -o %t.slow %s
+// RUN: %t.slow 2>&1 | FileCheck %s
 // CHECK-NOT: Found bad
 // CHECK: exception-cleanup-ok
 // CHECK-NOT: Found bad

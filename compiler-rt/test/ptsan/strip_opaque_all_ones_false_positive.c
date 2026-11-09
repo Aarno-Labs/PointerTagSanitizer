@@ -1,14 +1,14 @@
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names \
-// RUN:   -mllvm -ptsan-reoptimize=0 -o %exe %s
-// RUN: %run %exe | FileCheck %s
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names \
+// RUN:   -mllvm -ptsan-reoptimize=0 -o %t %s
+// RUN: %run %t
 // XFAIL: *
 //
-// This documents an unsupported false-positive shape. Once the all-ones
-// sentinel is hidden behind opaque runtime values, strip lowering deliberately
-// does not add dynamic checks to preserve it.
+// 16-bit stripping loses the high bits of an opaque all-ones sentinel,
+// making it equal to the address mask. 32-bit stripping preserves this
+// particular sentinel; arbitrary integer sentinels remain unsupported.
 
+#include <assert.h>
 #include <stdint.h>
-#include <stdio.h>
 
 static void *volatile Sentinel = (void *)(uintptr_t)-1;
 static void *volatile AddrMaskValue =
@@ -24,13 +24,6 @@ int main(void) {
   void *a = Sentinel;
   void *b = AddrMaskValue;
 
-  if (same_address_bits(a, b)) {
-    puts("bad");
-    return 1;
-  }
-
-  puts("ok");
+  assert(!same_address_bits(a, b));
   return 0;
 }
-
-// CHECK: ok

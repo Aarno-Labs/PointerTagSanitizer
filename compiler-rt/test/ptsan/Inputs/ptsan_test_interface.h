@@ -12,7 +12,13 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define get_id(ptr) ((uint16_t)((uintptr_t)(ptr) >> 48))
+#ifdef PTSAN_TEST_32_BIT_IDS
+typedef uint32_t PTSanID;
+#else
+typedef uint16_t PTSanID;
+#endif
+
+#define get_id(ptr) ptsan_get_id((const void *)(uintptr_t)(ptr))
 #define print_id(ptr)                                                          \
   do {                                                                         \
     printf(#ptr " id: 0x%x\n", get_id(ptr));                                   \
@@ -22,9 +28,23 @@
 extern "C" {
 #endif
 
-uint64_t ptsan_get_bound(uint16_t id);
-uint64_t ptsan_get_base(uint16_t id);
-uint64_t ptsan_get_size(uint16_t id);
+// Runtime TLS layout: checkpoints read the cursor in the first word.
+extern __thread struct {
+  uintptr_t cursor;
+  PTSanID *ids;
+} ptsan_stack_id_log;
+
+PTSanID ptsan_get_id(const void *ptr);
+uint64_t ptsan_get_stack_cursor(void);
+uint64_t ptsan_get_stack_limit(void);
+uint64_t ptsan_get_address(const void *ptr);
+uint64_t ptsan_get_bound(PTSanID id);
+uint64_t ptsan_get_base(PTSanID id);
+uint64_t ptsan_get_size(PTSanID id);
+#ifdef PTSAN_TEST_32_BIT_IDS
+uint32_t ptsan_get_origin(PTSanID id);
+#endif
+uint32_t ptsan_get_payload(const void *ptr);
 uint32_t ptsan_id_bits(void);
 
 #ifdef __cplusplus

@@ -53,8 +53,8 @@ int main(void) {
   assert(clearPointerID(result) == clearPointerID(destination));
   assert(get_id(result) != source_id);
   assert(get_id(result) != destination_id);
-  assert(ptsan_get_base(source_id) == 0);
-  assert(ptsan_get_base(destination_id) == 0);
+  assert(ptsan_get_size(source_id) == 0);
+  assert(ptsan_get_size(destination_id) == 0);
   assert(ptsan_get_base(get_id(result)) == (uint64_t)(uintptr_t)result);
   assert(ptsan_get_size(get_id(result)) == page_size);
   return munmap(result, page_size) != 0;

@@ -26,7 +26,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-extern __thread uint16_t ptsan_next_stack_id, ptsan_stack_id_limit;
+extern __thread uint64_t ptsan_next_stack_id, ptsan_stack_id_limit;
 extern __thread uint16_t ptsan_pending_stack_ids;
 extern volatile uint64_t __ptsan_used_stack_ids;
 

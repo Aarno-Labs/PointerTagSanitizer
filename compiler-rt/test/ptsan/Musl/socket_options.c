@@ -13,11 +13,24 @@
 // RUN: FileCheck %s < %t.get
 // RUN: not %run %t bad-get-length 2> %t.length
 // RUN: FileCheck %s < %t.length
+
+// ID32 socket-option pointers need decoding and size checks in both directions.
+// RUN: %ptsan_musl_id32_nonstrict %s -o %t.id32
+// RUN: %run %t.id32 good
+// RUN: not %run %t.id32 bad-set-value 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32.strict
+// RUN: %run %t.id32.strict good
+// RUN: not %run %t.id32.strict bad-get-value 2>&1 | FileCheck %s
+// RUN: not %run %t.id32.strict bad-get-length 2>&1 | FileCheck %s
+// RUN: not %run %t bad-packet-value 2> %t.packet
+// RUN: FileCheck %s < %t.packet
 //
 // CHECK: Found bad
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netpacket/packet.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -34,6 +47,39 @@ static int testGood(void) {
                  sizeof(enabled)) != 0) {
     return 2;
   }
+
+  (void)setsockopt(-1, SOL_SOCKET, SO_TIMESTAMPNS, &enabled, sizeof(enabled));
+  (void)setsockopt(-1, SOL_SOCKET, SO_DETACH_FILTER, &enabled,
+                   sizeof(enabled));
+
+  int bpf_extensions = 0;
+  socklen_t bpf_extensions_size = sizeof(bpf_extensions);
+  (void)getsockopt(-1, SOL_SOCKET, SO_BPF_EXTENSIONS, &bpf_extensions,
+                   &bpf_extensions_size);
+
+  struct packet_mreq membership;
+  memset(&membership, 0, sizeof(membership));
+  (void)setsockopt(-1, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &membership,
+                   sizeof(membership));
+  (void)setsockopt(-1, SOL_PACKET, PACKET_AUXDATA, &enabled, sizeof(enabled));
+  (void)setsockopt(-1, SOL_PACKET, PACKET_VERSION, &enabled, sizeof(enabled));
+  (void)setsockopt(-1, SOL_PACKET, PACKET_RESERVE, &enabled, sizeof(enabled));
+  (void)setsockopt(-1, SOL_PACKET, PACKET_TIMESTAMP, &enabled,
+                   sizeof(enabled));
+
+  uint32_t ring_request[7] = {0};
+  (void)setsockopt(-1, SOL_PACKET, PACKET_RX_RING, ring_request,
+                   sizeof(ring_request));
+
+  int packet_header_length = 0;
+  socklen_t packet_header_length_size = sizeof(packet_header_length);
+  (void)getsockopt(-1, SOL_PACKET, PACKET_HDRLEN, &packet_header_length,
+                   &packet_header_length_size);
+
+  uint32_t packet_statistics[3] = {0};
+  socklen_t packet_statistics_size = sizeof(packet_statistics);
+  (void)getsockopt(-1, SOL_PACKET, PACKET_STATISTICS, packet_statistics,
+                   &packet_statistics_size);
 
   int socket_type = 0;
   socklen_t size = sizeof(socket_type);
@@ -140,6 +186,15 @@ static int testBadGetLength(void) {
   return 0;
 }
 
+static int testBadPacketValue(void) {
+  void *value = malloc(sizeof(int) - 1);
+  if (!value) {
+    return 1;
+  }
+  (void)setsockopt(-1, SOL_PACKET, PACKET_TIMESTAMP, value, sizeof(int));
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     return 1;
@@ -155,6 +210,9 @@ int main(int argc, char **argv) {
   }
   if (!strcmp(argv[1], "bad-get-length")) {
     return testBadGetLength();
+  }
+  if (!strcmp(argv[1], "bad-packet-value")) {
+    return testBadPacketValue();
   }
   return 3;
 }

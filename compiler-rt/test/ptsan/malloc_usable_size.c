@@ -1,6 +1,6 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -o %exe %s
-// RUN: ./%exe 2> err.txt
+// RUN: not ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s --check-prefix=NORMAL
 
 // RUN: %clang_ptsan -g -O2 -mllvm -ptsan-use-returned-malloc-size -o %exe %s

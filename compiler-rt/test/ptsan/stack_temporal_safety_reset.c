@@ -1,3 +1,4 @@
+// Checks the 16-bit deferred inline cleanup, not the generic stack callbacks.
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -o strong %s
 // RUN: ./strong > strong.out 2> strong.err
@@ -14,7 +15,7 @@
 
 typedef uint16_t u16;
 
-extern u16 ptsan_next_stack_id;
+extern __thread uint64_t ptsan_next_stack_id;
 extern __thread u16 ptsan_pending_stack_ids;
 
 static volatile char Sink;
@@ -33,13 +34,13 @@ static void one_stack_id(void) {
 
 int main(void) {
   ptsan_pending_stack_ids = 0;
-  u16 before = ptsan_next_stack_id;
+  uint64_t before = ptsan_next_stack_id;
 
   one_stack_id();
 
-  u16 after = ptsan_next_stack_id;
+  uint64_t after = ptsan_next_stack_id;
   printf("delta=%u pending=%u\n",
-         (unsigned)((u16)(after - before)),
+         (unsigned)(after - before),
          (unsigned)ptsan_pending_stack_ids);
   return Sink == 'x' ? 0 : 1;
 }

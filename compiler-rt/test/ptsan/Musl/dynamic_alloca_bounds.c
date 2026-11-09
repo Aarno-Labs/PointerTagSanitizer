@@ -14,6 +14,12 @@
 // RUN: not %t.noopts before 2>&1 | FileCheck %s
 // RUN: not %t.noopts after end 2>&1 | FileCheck %s
 
+// ID32 dynamic bounds must reject both underflow and overflow.
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32
+// RUN: %run %t.id32
+// RUN: not %run %t.id32 before 2>&1 | FileCheck %s
+// RUN: not %run %t.id32 after end 2>&1 | FileCheck %s
+
 // CHECK: Found bad
 
 // Bounds must use the runtime element count times the element size, rather

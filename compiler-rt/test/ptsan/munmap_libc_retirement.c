@@ -3,10 +3,13 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// Preserve the existing non-musl interceptor semantics during its move:
-// munmap retires the whole ID before the syscall, even for a prefix unmap or
-// a rejected request. This is not a claim of partial-unmap metadata support.
+// glibc munmap retires the whole ID after a successful syscall, even for a
+// prefix unmap. A rejected request must leave the allocation live.
+// This is not a claim of partial-unmap metadata support.
 // RUN: %clang_ptsan -O2 -Wall -Wextra -Werror -o %t %s
+// RUN: %run %t
+
+// RUN: %clang_ptsan_id32 -O2 -Wall -Wextra -Werror -o %t %s
 // RUN: %run %t
 
 #include "Inputs/ptsan_test_interface.h"
@@ -15,9 +18,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-static void checkRetired(uint16_t id) {
+static void checkRetired(PTSanID id) {
   assert(id != 0);
-  assert(ptsan_get_base(id) == 0);
   assert(ptsan_get_size(id) == 0);
 }
 
@@ -30,26 +32,30 @@ int main(void) {
     char *p = mmap(NULL, size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     assert(p != MAP_FAILED);
-    uint16_t id = get_id(p);
+    PTSanID id = get_id(p);
     assert(id != 0);
-    assert(ptsan_get_base(id) == (uintptr_t)p);
+    assert(ptsan_get_address((void *)ptsan_get_base(id)) == ptsan_get_address(p));
     assert(ptsan_get_size(id) == size);
     p[page_size] = 42;
 
     // Retaining a raw address lets us clean up the surviving kernel mapping
     // without using the ID which the interceptor deliberately retires.
-    char *raw = (char *)((uintptr_t)p & ((UINT64_C(1) << 48) - 1));
+    char *raw = (char *)ptsan_get_address(p);
     size_t unmap_size = operation == 0 ? size : operation == 1 ? page_size : 0;
     int result = munmap(p, unmap_size);
     if (operation == 2) {
       assert(result == -1);
       assert(errno == EINVAL);
+      assert(ptsan_get_size(id) == size);
+      assert(p[page_size] == 42);
+      assert(munmap(p, size) == 0);
+      checkRetired(id);
     } else {
       assert(result == 0);
+      checkRetired(id);
     }
-    checkRetired(id);
 
-    if (operation != 0) {
+    if (operation == 1) {
       assert(((volatile char *)raw)[page_size] == 42);
       assert(munmap(raw, size) == 0);
     }

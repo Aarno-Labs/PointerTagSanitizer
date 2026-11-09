@@ -11,6 +11,14 @@
 // RUN: %t.noopts 2>&1 | FileCheck %s --check-prefix=GOOD
 // RUN: not %t.noopts bad 2>&1 | FileCheck %s --check-prefix=BAD
 
+// RUN: %clang_ptsan_id32 -O2 -mllvm -ptsan-abort-on-error -o %t %s
+// RUN: %t 2>&1 | FileCheck %s --check-prefix=GOOD
+// RUN: not %t bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: %clang_ptsan_id32 -O2 -mllvm -ptsan-no-opts \
+// RUN:   -mllvm -ptsan-abort-on-error -o %t.noopts %s
+// RUN: %t.noopts 2>&1 | FileCheck %s --check-prefix=GOOD
+// RUN: not %t.noopts bad 2>&1 | FileCheck %s --check-prefix=BAD
+
 // GOOD-NOT: Found bad
 // GOOD: global-source-ids-ok
 // GOOD-NOT: Found bad
@@ -21,6 +29,7 @@
 // data alias. Scalars and each thread's TLS objects also receive IDs.
 #include <assert.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 #include <stdio.h>
 
 char bytes[16];
@@ -31,7 +40,7 @@ _Thread_local char tls_bytes[16];
 static volatile unsigned choice;
 
 __attribute__((noinline)) static unsigned id_of(const void *p) {
-  return (uintptr_t)p >> 48;
+  return get_id(p);
 }
 
 __attribute__((noinline)) static char *select_global(unsigned which) {

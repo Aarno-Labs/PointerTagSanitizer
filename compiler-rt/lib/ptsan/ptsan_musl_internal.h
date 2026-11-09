@@ -21,8 +21,9 @@ void *ptsan_musl_self(void);
 size_t ptsan_musl_thread_size(void);
 void ptsan_musl_init_main_thread(void *tagged);
 void ptsan_musl_init_child_thread(void *raw, void *tagged);
-void ptsan_musl_thread_stack(void **top, size_t *size);
 int ptsan_musl_is_c11_thread(const void *attr);
+int ptsan_musl_is_threaded(void);
+void ptsan_musl_set_current_tsd(void *tsd);
 
 #ifdef __cplusplus
 }

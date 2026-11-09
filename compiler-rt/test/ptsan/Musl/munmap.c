@@ -14,7 +14,12 @@
 // RUN: FileCheck %s --check-prefix=INVALID-FREE < %t.invalid-free
 // RUN: %run %t libc-failed
 // RUN: %run %t syscall-failed
-// RUN: %run %t syscall-repeated
+// RUN: not %run %t syscall-repeated 2> %t.syscall-repeated
+// RUN: FileCheck %s --check-prefix=FAIL-CLOSED < %t.syscall-repeated
+// RUN: not %run %t syscall-partial 2> %t.syscall-partial
+// RUN: FileCheck %s --check-prefix=FAIL-CLOSED < %t.syscall-partial
+// RUN: not %run %t syscall-tagless 2> %t.syscall-tagless
+// RUN: FileCheck %s --check-prefix=FAIL-CLOSED < %t.syscall-tagless
 //
 // RUN: not %run %t libc-whole 2> %t.libc-whole
 // RUN: FileCheck %s --check-prefix=STALE < %t.libc-whole
@@ -26,6 +31,24 @@
 // INVALID-FREE: {{PT[Ss]an found .*free}}
 // STALE: STALE-READY
 // STALE: Found bad
+// FAIL-CLOSED: PTSan rejected successful unsupported munmap
+//
+// RUN: %ptsan_musl_id32_strict -Wall -Wextra -Werror -o %t.id32 %s
+// RUN: %run %t.id32 valid-free
+// RUN: not %run %t.id32 invalid-free 2> %t.id32.invalid-free
+// RUN: FileCheck %s --check-prefix=INVALID-FREE < %t.id32.invalid-free
+// RUN: %run %t.id32 libc-failed
+// RUN: %run %t.id32 syscall-failed
+// RUN: not %run %t.id32 syscall-repeated 2> %t.id32.syscall-repeated
+// RUN: FileCheck %s --check-prefix=FAIL-CLOSED < %t.id32.syscall-repeated
+// RUN: not %run %t.id32 syscall-partial 2> %t.id32.syscall-partial
+// RUN: FileCheck %s --check-prefix=FAIL-CLOSED < %t.id32.syscall-partial
+// RUN: not %run %t.id32 syscall-tagless 2> %t.id32.syscall-tagless
+// RUN: FileCheck %s --check-prefix=FAIL-CLOSED < %t.id32.syscall-tagless
+// RUN: not %run %t.id32 libc-whole 2> %t.id32.libc-whole
+// RUN: FileCheck %s --check-prefix=STALE < %t.id32.libc-whole
+// RUN: not %run %t.id32 syscall-whole 2> %t.id32.syscall-whole
+// RUN: FileCheck %s --check-prefix=STALE < %t.id32.syscall-whole
 
 #define _GNU_SOURCE
 
@@ -43,15 +66,18 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-static void checkLiveBounds(uint16_t id, const void *base, size_t size) {
+static void checkLiveBounds(PTSanID id, const void *base, size_t size) {
   assert(id != 0);
+#ifdef PTSAN_TEST_32_BIT_IDS
+  assert(ptsan_get_base(id) == ptsan_get_address(base));
+#else
   assert(ptsan_get_base(id) == (uint64_t)(uintptr_t)base);
+#endif
   assert(ptsan_get_size(id) == size);
 }
 
-static void checkRetiredBounds(uint16_t id) {
+static void checkRetiredBounds(PTSanID id) {
   assert(id != 0);
-  assert(ptsan_get_base(id) == 0);
   assert(ptsan_get_size(id) == 0);
 }
 
@@ -93,7 +119,7 @@ static int testValidFree(void) {
     return 1;
   }
 
-  const uint16_t allocation_id = get_id(allocation);
+  const PTSanID allocation_id = get_id(allocation);
   checkLiveBounds(allocation_id, (const void *)allocation, allocation_size);
 
   allocation[0] = 1;
@@ -132,7 +158,7 @@ static int testFailedUnmaps(bool use_syscall) {
     return 2;
   }
 
-  const uint16_t mapping_id = get_id(mapping);
+  const PTSanID mapping_id = get_id(mapping);
   checkLiveBounds(mapping_id, (const void *)mapping, mapping_size);
 
   mapping[0] = 1;
@@ -147,8 +173,18 @@ static int testFailedUnmaps(bool use_syscall) {
   checkLiveBounds(mapping_id, (const void *)mapping, mapping_size);
   mapping[0] = 3;
 
-  if (unmapMemory(use_syscall, (void *)mapping, mapping_size) != 0) {
+  // An unsupported pointer shape must still reach Linux when the request is
+  // invalid. In particular, do not replace EINVAL with a PTSan termination.
+  errno = 0;
+  if (unmapMemory(use_syscall, (char *)mapping + 1, page_size) != -1 ||
+      errno != EINVAL) {
     return 4;
+  }
+  checkLiveBounds(mapping_id, (const void *)mapping, mapping_size);
+  mapping[0] = 4;
+
+  if (unmapMemory(use_syscall, (void *)mapping, mapping_size) != 0) {
+    return 5;
   }
   checkRetiredBounds(mapping_id);
   return 0;
@@ -166,7 +202,7 @@ static int testSuccessfulUnmap(bool use_syscall) {
     return 2;
   }
 
-  const uint16_t mapping_id = get_id(mapping);
+  const PTSanID mapping_id = get_id(mapping);
   checkLiveBounds(mapping_id, mapping, mapping_size);
 
   volatile char *stale_pointer = mapping;
@@ -177,11 +213,12 @@ static int testSuccessfulUnmap(bool use_syscall) {
 
   checkRetiredBounds(mapping_id);
 
-  char *replacement = mapMemory(mapping, mapping_size, MAP_FIXED);
+  char *replacement =
+      mapMemory(mapping, mapping_size, MAP_FIXED_NOREPLACE);
   if (replacement == NULL) {
     return 4;
   }
-  const uint16_t replacement_id = get_id(replacement);
+  const PTSanID replacement_id = get_id(replacement);
   assert(replacement_id != mapping_id);
   checkLiveBounds(replacement_id, replacement, mapping_size);
   checkRetiredBounds(mapping_id);
@@ -206,7 +243,7 @@ static int testRepeatedDirectUnmap(void) {
     return 2;
   }
 
-  const uint16_t mapping_id = get_id(mapping);
+  const PTSanID mapping_id = get_id(mapping);
   checkLiveBounds(mapping_id, mapping, page_size);
 
   if (unmapMemory(true, mapping, page_size) != 0) {
@@ -214,13 +251,37 @@ static int testRepeatedDirectUnmap(void) {
   }
   checkRetiredBounds(mapping_id);
 
-  // Linux accepts a range that is already unmapped. The raw handler must
-  // preserve the retired metadata while allowing the syscall to proceed.
+  // Linux accepts a range that is already unmapped, but PTSan no longer has a
+  // live mapping ID proving that this raw range is the complete allocation.
+  // Strict mode rejects the operation after Linux accepts it.
   if (unmapMemory(true, mapping, page_size) != 0) {
     return 4;
   }
   checkRetiredBounds(mapping_id);
   return 0;
+}
+
+static int testUnsupportedDirectUnmap(bool tagless) {
+  const size_t page_size = pageSize();
+  if (page_size == 0) {
+    return 1;
+  }
+
+  char *mapping = mapMemory(NULL, 2 * page_size, 0);
+  if (mapping == NULL) {
+    return 2;
+  }
+
+  void *address = mapping;
+  size_t size = page_size;
+  if (tagless) {
+    address = (void *)(uintptr_t)ptsan_get_address(mapping);
+    size = 2 * page_size;
+  }
+
+  // Neither a partial tagged range nor a complete tagless range proves which
+  // tracked mapping IDs the kernel operation would invalidate.
+  return unmapMemory(true, address, size) == 0 ? 3 : 4;
 }
 
 static int testNamedUnmap(const char *mode) {
@@ -251,6 +312,12 @@ int main(int argc, char **argv) {
   }
   if (!strcmp(argv[1], "syscall-repeated")) {
     return testRepeatedDirectUnmap();
+  }
+  if (!strcmp(argv[1], "syscall-partial")) {
+    return testUnsupportedDirectUnmap(false);
+  }
+  if (!strcmp(argv[1], "syscall-tagless")) {
+    return testUnsupportedDirectUnmap(true);
   }
   return testNamedUnmap(argv[1]);
 }

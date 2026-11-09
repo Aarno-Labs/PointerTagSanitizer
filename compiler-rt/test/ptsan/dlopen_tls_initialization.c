@@ -52,11 +52,13 @@ static int (*read_value)(int *);
 static void (*write_value)(int *, int);
 
 #ifdef CHECK_TLS_IDS
+#include "Inputs/ptsan_test_interface.h"
+
 __attribute__((disable_sanitizer_instrumentation))
 static unsigned check_tls_id(int *value) {
-  unsigned id = (uintptr_t)value >> 48;
-  assert(id && id != 0xffff);
-  assert(((uintptr_t)get_value() >> 48) == id);
+  unsigned id = get_id(value);
+  assert(id && id != ptsan_default_id());
+  assert(get_id(get_value()) == id);
   return id;
 }
 #endif
@@ -116,8 +118,8 @@ int main(int argc, char **argv) {
   assert(existing_value != subsequent_value);
   assert(existing_value != loading_value && subsequent_value != loading_value);
 #ifdef CHECK_TLS_IDS
-  unsigned existing_id = (uintptr_t)existing_value >> 48;
-  unsigned subsequent_id = (uintptr_t)subsequent_value >> 48;
+  unsigned existing_id = get_id(existing_value);
+  unsigned subsequent_id = get_id(subsequent_value);
   assert(existing_id != subsequent_id);
   assert(existing_id != loading_id && subsequent_id != loading_id);
 #endif

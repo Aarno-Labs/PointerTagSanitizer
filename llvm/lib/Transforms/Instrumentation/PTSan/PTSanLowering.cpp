@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "PTSanPhases.h"
+#include "llvm/ADT/PostOrderIterator.h"
 #include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -20,48 +21,53 @@ private:
   Function &F;
   PointerTagSanitizer &DS;
   PTSanAnalysisState &PTA;
+  PTSanPolarityReader Polarities;
   bool UseInlineStrip;
 
   uint32_t NextCheckID;
 
   // Number of allocated stack IDs to retire at each function exit.
   size_t NumAllocatedSourceIDs;
-  // Did we use a special-case function?
-  // 1-4 are special-cases, 0 is n
-  uint16_t StackIDCase;
 
   // These values are actually added to the function
   // and must be referenced across calls
 
-  // Alloca for storing ids in the non-special case
+  // Slow-path IDs retained until function exit.
   AllocaInst *IDsAlloc;
-  // Return value (single u64) used in the special case
-  Instruction *IDsRet;
 
   Value *HasStackIDRoom;
   Value *StartingStackID;
-  Value *RepeatableAllocaIDs = nullptr;
+  Value *StackIDCursor = nullptr;
+  Value *FrameSalt = nullptr;
+  bool UseFastStackIDs = !isStackIDFastPathDisabled();
+  bool UseFrameSalt = false;
+  bool HasRepeatableAllocas = false;
+  SmallVector<Value *, 3> VAListIDs;
 
   ConstantInt *FunctionID;
 
   // Lowering entry points
-  DenseMap<Value *, Value *> lowerSources();
+  void prepareSources();
   // Allocate NumSourceIDs IDs and initialize bounds for the supplied sources.
   // Their IDs come first; the remaining IDs have bounds initialized later.
   SmallVector<Value *, 8> allocateSourceIDs(size_t NumSourceIDs,
                                          ArrayRef<SourceAnchor> PtrSrcs);
-  void writeSourceBounds(PTSanIRB &IRB, Value *Source, Value *Size, Value *ID,
-                         bool IsNotDefault = false);
+  void writeSourceBounds(PTSanIRB &IRB, Value *Source, Value *Size, Value *ID);
+  uint64_t getSourceOriginQuantum(Value *Source);
+  Value *takeFrameSalt(PTSanIRB &IRB);
+  Value *materializeAsInt(PTSanIRB &IRB, Value *V, const Twine &Name = "");
   Value *lowerGetID(GetIDAnchor IDAnchor);
   Value *lowerBound(BoundAnchor Bounds);
-  Value *lowerStrip(StripAnchor Strip);
+  Value *lowerID16Strip(ID16StripAnchor Strip);
+  Value *lowerID32Strip(ID32StripAnchor Strip);
   Value *lowerTagged(TaggedAnchor Tagged);
-  Value *lowerTag(TagAnchor Tag);
+  Value *lowerID16Tag(ID16TagAnchor Tag);
+  Value *lowerID32Tag(ID32TagAnchor Tag);
   optional<RangeCheckInfo> addPtrCheck(const PlaceablePtrCheck &Op);
   void lowerFunctionExit(Instruction *I);
   void releaseFastStackIDs(PTSanIRB &IRB);
-  void releaseSlowStackIDs(PTSanIRB &IRB);
-  void lowerSetjmps(Instruction *FrameSetupEnd);
+  void lowerSetjmp(CallBase *CB);
+  void lowerVAStart(IntrinsicInst *Start);
   void lowerArithmeticValidation(ValidateArithAnchor Op);
   void lowerSpecialStripCall(CallBase *CB);
   void actuallyAddCheck(const RangeCheckInfo &CI);
@@ -98,7 +104,8 @@ static uint64_t getFunctionGUID(const llvm::Function &F) {
 
 PTSanLowerer::PTSanLowerer(Function &F, PointerTagSanitizer &DS,
                                      PTSanAnalysisState &PTA)
-    : F(F), DS(DS), PTA(PTA), UseInlineStrip(DS.shouldUseInlineStrip()),
+    : F(F), DS(DS), PTA(PTA), Polarities(DS, F),
+      UseInlineStrip(DS.shouldUseInlineStrip()),
       NextCheckID(0) {
   FunctionID = ConstantInt::get(DS.U64Ty, getFunctionGUID(F));
 }
@@ -107,11 +114,6 @@ bool PTSanLoweringPass::run(PTSanAnalysisState &PTA,
                            FunctionAnalysisManager &FAM) {
   Function &F = PTA.F;
   PointerTagSanitizer &DS = PTA.DS;
-
-  if (ClValidate) {
-    PTSanIRB IRB(DS, &*F.getEntryBlock().getFirstInsertionPt());
-    IRB.CreateCall(DS.ValidateFunctionStart);
-  }
 
   DBG(errs() << "\n---------Now lowering PTSan ops----------------\n\n");
 
@@ -135,19 +137,14 @@ bool PTSanLoweringPass::run(PTSanAnalysisState &PTA,
 }
 
 void PTSanLowerer::lowerFunctionExit(Instruction *I) {
-  if (RepeatableAllocaIDs) {
-    PTSanIRB IRB(DS, I);
-    IRB.CreateCall(DS.FreeRepeatableAllocaIDs, {RepeatableAllocaIDs});
-  }
-  if (NumAllocatedSourceIDs == 0 || ClNoIDs) {
+  // No cursor means source lowering did not allocate any stack IDs.
+  if (!StackIDCursor) {
     return;
   }
 
   PTSanIRB IRB(DS, I);
-
-  if (isStackIDFastPathDisabled()) {
-    assert(StackIDCase == 0);
-    releaseSlowStackIDs(IRB);
+  if (NumAllocatedSourceIDs == 0 || !UseFastStackIDs) {
+    IRB.CreateCall(DS.FreeStackIDs, {StackIDCursor});
     return;
   }
 
@@ -157,23 +154,44 @@ void PTSanLowerer::lowerFunctionExit(Instruction *I) {
   SplitBlockAndInsertIfThenElse(HasStackIDRoom, IRB.GetInsertPoint(),
                                 &FastPath, &SlowPath,
                                 BW, &PTA.DTU, &PTA.LI);
+
+  // Fast fixed IDs use their bucket; repeatable allocas still use the log.
   IRB.SetInsertPoint(FastPath);
+  if (HasRepeatableAllocas) {
+    IRB.CreateCall(DS.FreeStackIDs, {StackIDCursor});
+  }
   releaseFastStackIDs(IRB);
+
+  // Slow fixed IDs and repeatable allocas share one cursor and one cleanup.
   IRB.SetInsertPoint(SlowPath);
-  releaseSlowStackIDs(IRB);
+  IRB.CreateCall(DS.FreeStackIDs, {StackIDCursor});
 }
 
 void PTSanLowerer::releaseFastStackIDs(PTSanIRB &IRB) {
-  // In fast path, choose between delaying stack ID reuse for temporal safety or
-  // immediately recycling IDs for speed.
-  if (ClStackTemporalSafety) {
+  if (!ClStackTemporalSafety) {
+    IRB.CreateStore(StartingStackID, DS.NextStackIDPtr);
+    return;
+  }
+
+  if (Cl32BitIDs) {
+    // Keep the decode bias and origin: stale pointers must still decode to
+    // their original address until reuse. A fresh salt protects the next frame,
+    // so ID32 does not need ID16's delayed-reuse batching.
+    for (size_t I = 0; I < NumAllocatedSourceIDs; ++I) {
+      Value *ID = IRB.CreateAdd(StartingStackID, IRB.getInt64(I));
+      IRB.CreateStore(IRB.getInt64(0), DS.getBoundsPtr(IRB, ID, 1));
+    }
+    IRB.CreateStore(StartingStackID, DS.NextStackIDPtr);
+    return;
+  } else {
     assert(DS.PendingStackIdsPtr &&
            "pending stack IDs only exist with stack temporal safety");
     Value *PendingIDs16 =
-      IRB.CreateLoad(DS.U16Ty, DS.PendingStackIdsPtr, "pending.frees");
-    ConstantInt *Enough = IRB.getInt16(64);
+      IRB.CreateLoad(DS.IDTy, DS.PendingStackIdsPtr, "pending.frees");
+    ConstantInt *Enough = ConstantInt::get(DS.IDTy, 64);
     Value *PendingIdsInc16 = IRB.CreateAdd(
-        PendingIDs16, IRB.getInt16(NumAllocatedSourceIDs), "pending.frees.inc");
+        PendingIDs16, ConstantInt::get(DS.IDTy, NumAllocatedSourceIDs),
+        "pending.frees.inc");
     Value *EnoughPendingIDs = IRB.CreateICmpUGE(PendingIdsInc16, Enough, "enough.pending.ids");
     Instruction *AfterSplit = &*IRB.GetInsertPoint();
     Instruction *EnoughPendingIDsPath, *NotEnoughPendingIDsPath;
@@ -184,7 +202,7 @@ void PTSanLowerer::releaseFastStackIDs(PTSanIRB &IRB) {
     // If we've got a big enough chunk, free ids:
     IRB.SetInsertPoint(EnoughPendingIDsPath);
     IRB.CreateStore(StartingStackID, DS.NextStackIDPtr);
-    IRB.CreateStore(IRB.getInt16(0), DS.PendingStackIdsPtr);
+    IRB.CreateStore(ConstantInt::get(DS.IDTy, 0), DS.PendingStackIdsPtr);
 
     // If we don't have a big enough chunk, just add to pending
     IRB.SetInsertPoint(NotEnoughPendingIDsPath);
@@ -194,7 +212,7 @@ void PTSanLowerer::releaseFastStackIDs(PTSanIRB &IRB) {
     IRB.SetInsertPoint(AfterSplit);
 
     // First ID in the contiguous run is StartingStackID.
-    Value *ID0_64 = IRB.CreateZExt(StartingStackID, DS.U64Ty);
+    Value *ID0_64 = StartingStackID;
 
     // &BoundsArray[0][ID0]
     Value *FirstSlot = IRB.CreateInBoundsGEP(
@@ -213,98 +231,43 @@ void PTSanLowerer::releaseFastStackIDs(PTSanIRB &IRB) {
         IRB.getInt8(0),
         TotalSz,
         A);
-  } else {
-    IRB.CreateStore(StartingStackID, DS.NextStackIDPtr);
   }
 }
 
-void PTSanLowerer::releaseSlowStackIDs(PTSanIRB &IRB) {
-  ConstantInt *UsedIDs = IRB.getInt64(NumAllocatedSourceIDs);
-  // Case 0 means yes IdsAlloc, no IDsRet, while Case > 0 means inverse
-  assert((StackIDCase == 0) == (IDsAlloc != nullptr));
-  assert((StackIDCase == 0) == (IDsRet == nullptr));
-  switch (StackIDCase) {
-    case 0:
-      IRB.CreateCall(DS.FreeStackIDsN, {IDsAlloc, UsedIDs});
-      break;
-    case 1:
-      IRB.CreateCall(DS.FreeStackIDs1, {IDsRet})
-          ->addParamAttr(0, Attribute::ZExt);
-      break;
-    case 2:
-      IRB.CreateCall(DS.FreeStackIDs2, {IDsRet});
-      break;
-    case 3:
-      IRB.CreateCall(DS.FreeStackIDs3, {IDsRet});
-      break;
-    case 4:
-      IRB.CreateCall(DS.FreeStackIDs4, {IDsRet});
-      break;
+// These hooks surround direct libc calls, not uses of a returned pointer.
+// callbr is inline asm and cannot call any of the hooked functions.
+static Instruction *getNormalReturnIP(CallBase *Call) {
+  if (auto *Invoke = dyn_cast<InvokeInst>(Call)) {
+    return &*Invoke->getNormalDest()->getFirstInsertionPt();
   }
+  return cast<CallInst>(Call)->getNextNode();
 }
 
-void PTSanLowerer::lowerSetjmps(Instruction *FrameSetupEnd) {
-  // Discovery marks the setjmp-family calls whose second return needs cleanup.
-  auto Setjmps = DS.collectAnchors<SetjmpAnchor>(F);
-  if (Setjmps.empty()) {
-    return;
-  }
-
-  // Keep the checkpoint on this frame's stack so its storage needs no explicit
-  // cleanup, even if a later longjmp abandons this frame.
-  PTSanIRB EntryIRB(DS, &*F.getEntryBlock().getFirstInsertionPt());
-  Value *Checkpoint = EntryIRB.CreateAlloca(
-      ArrayType::get(DS.U64Ty, 2), nullptr, "ptsan.stack.checkpoint");
-
-  // Save once per invocation, after this frame's fixed IDs and repeatable-
-  // alloca container exist. All setjmps in this frame preserve those resources.
-  PTSanIRB IRB(DS, FrameSetupEnd);
-  IRB.CreateCall(DS.SaveStackIDCheckpoint, {Checkpoint});
-  // Save the fast-track cursor here so we can restore when we jump back
-  auto *NextID = IRB.CreateLoad(DS.U16Ty, DS.NextStackIDPtr, "saved.stack.id");
-  Value *PendingIDs = nullptr;
-  if (ClStackTemporalSafety) {
-    PendingIDs = IRB.CreateLoad(DS.U16Ty, DS.PendingStackIdsPtr,
-                                "saved.pending.ids");
-  }
-
-  for (SetjmpAnchor Anchor : Setjmps) {
-    auto *CB = cast<CallBase>(Anchor.getPositionedInstruction());
-    // Test the result immediately after the call (or on an invoke's normal
-    // edge). Initial setjmp returns zero; returning through longjmp does not.
-    IRB.SetInsertPoint(PTA.PTU.getFirstIPAfter(CB).getIP());
-    Value *ReturnedAgain = IRB.CreateICmpNE(
-        CB, ConstantInt::get(CB->getType(), 0), "setjmp.returned.again");
-    // Put cleanup in the nonzero branch, updating dominator and loop analyses.
-    // Restore is that branch's terminator, so insert cleanup before it.
-    Instruction *Restore = SplitBlockAndInsertIfThen(
-        ReturnedAgain, IRB.GetInsertPoint(), false, nullptr, &PTA.DTU, &PTA.LI);
-    IRB.SetInsertPoint(Restore);
-    // Recycle slow IDs and containers beyond the saved collection depths.
-    // The runtime does not restore the fast-stack state; that is done below.
-    IRB.CreateCall(DS.RestoreStackIDCheckpoint, {Checkpoint});
-
-    if (ClStackTemporalSafety) {
-      // Clear bounds in [saved cursor, current cursor), including IDs whose
-      // normal frame-exit cleanup was skipped by longjmp.
-      Value *CurrentID = IRB.CreateLoad(DS.U16Ty, DS.NextStackIDPtr);
-      Value *Count = IRB.CreateZExt(IRB.CreateSub(CurrentID, NextID), DS.U64Ty);
-      Value *FirstSlot = IRB.CreateInBoundsGEP(
-          DS.BoundsArray->getValueType(), DS.BoundsArray,
-          {IRB.getInt64(0), IRB.CreateZExt(NextID, DS.U64Ty)});
-      uint64_t BoundsSize = DS.DL.getTypeAllocSize(DS.BoundsStructTy);
-      Value *Bytes = IRB.CreateMul(Count, IRB.getInt64(BoundsSize));
-      IRB.CreateMemSet(FirstSlot, IRB.getInt8(0), Bytes,
-                      DS.DL.getABITypeAlign(DS.BoundsStructTy));
-      IRB.CreateStore(PendingIDs, DS.PendingStackIdsPtr);
-    }
-
-    // Rewind the fast-stack allocator in both modes. Temporal mode additionally
-    // cleared bounds above; without it, cursor restoration alone is enough.
-    IRB.CreateStore(NextID, DS.NextStackIDPtr);
-    // Remove the discovery marker, not the original setjmp call.
-    Anchor.erase();
-  }
+// Snapshot immediately before each setjmp, including each loop iteration.
+// A nonzero return retires allocations made since that particular snapshot.
+void PTSanLowerer::lowerSetjmp(CallBase *CB) {
+  // XXX: We should key the cursor off of the actual saved environment, and
+  // not the setjmp; see setjmp_same_site_xfail.c
+  PTSanIRB IRB(DS, CB);
+  Value *Cursor = IRB.CreateLoad(DS.U64Ty, DS.StackIDCursorPtr,
+                                "saved.stack.cursor");
+  Value *NextID = IRB.CreateLoad(DS.U64Ty, DS.NextStackIDPtr, "saved.stack.id");
+  Value *PendingIDs = IRB.CreateLoad(DS.IDTy, DS.PendingStackIdsPtr,
+                                     "saved.pending.ids");
+  Value *InSignalContext = IRB.CreateLoad(
+      DS.U8Ty, DS.InSignalContextPtr, "saved.signal.context");
+  // Test the result immediately after the call (or on an invoke's normal
+  // edge). Initial setjmp returns zero; returning through longjmp does not.
+  IRB.SetInsertPoint(getNormalReturnIP(CB));
+  Value *ReturnedAgain = IRB.CreateICmpNE(
+      CB, ConstantInt::get(CB->getType(), 0), "setjmp.returned.again");
+  // Put cleanup in the nonzero branch, updating dominator and loop analyses.
+  // Restore is that branch's terminator, so insert cleanup before it.
+  Instruction *Restore = SplitBlockAndInsertIfThen(
+      ReturnedAgain, IRB.GetInsertPoint(), false, nullptr, &PTA.DTU, &PTA.LI);
+  IRB.SetInsertPoint(Restore);
+  IRB.CreateCall(DS.RestoreStackIDs,
+                 {Cursor, NextID, PendingIDs, InSignalContext});
 }
 
 static void hoistAllocas(Function &F) {
@@ -319,13 +282,21 @@ static void hoistAllocas(Function &F) {
   for (BasicBlock &BB : F) {
     for (Instruction &I : BB) {
       auto *AI = dyn_cast<AllocaInst>(&I);
-      if (!AI) continue;
+      if (!AI) {
+        continue;
+      }
 
       // Only hoist constant-size allocas in addrspace(0)
-      if (!isa<ConstantInt>(AI->getArraySize())) continue;
-      if (AI->getAddressSpace() != 0) continue;
+      if (!isa<ConstantInt>(AI->getArraySize())) {
+        continue;
+      }
+      if (AI->getAddressSpace() != 0) {
+        continue;
+      }
       // Don't hoist the first instruciton or ??? will happen
-      if (AI == InsertBefore) continue;
+      if (AI == InsertBefore) {
+        continue;
+      }
 
       ToMove.push_back(AI);
     }
@@ -477,7 +448,7 @@ static bool areUsesLocal(Value *Start) {
         }
       }
 
-      if (isa<CallInst>(U) || isa<ReturnInst>(U) || isa<InvokeInst>(U)) {
+      if (isa<CallBase>(U) || isa<ReturnInst>(U)) {
         DBG(errs() << "Leak node " << *U << "\n");
         return false;
       }
@@ -505,19 +476,107 @@ static bool areUsesLocal(Value *Start) {
   return true;
 }
 
+uint64_t PTSanLowerer::getSourceOriginQuantum(Value *Source) {
+  // Preserve the source's existing alignment without changing its layout.
+  uint64_t Alignment = 1;
+  if (auto *AI = dyn_cast<AllocaInst>(Source)) {
+    Alignment = std::max(Alignment, AI->getAlign().value());
+  } else if (auto *Arg = dyn_cast<Argument>(Source)) {
+    // We handle ByVal args
+    if (Arg->hasByValAttr()) {
+      Alignment = std::max(
+          Alignment, DS.DL
+                         .getValueOrABITypeAlignment(Arg->getParamAlign(),
+                                                     Arg->getParamByValType())
+                         .value());
+    } else {
+      // This is only relevant for argv, but we do have to handle it
+      Alignment =
+          std::max(Alignment, Arg->getParamAlign().valueOrOne().value());
+    }
+  }
+  if (Alignment > (1ULL << 31)) {
+    report_fatal_error(
+        "PTSan 32-bit IDs cannot preserve requested alignment above 2 GiB");
+  }
+  uint64_t Quantum = std::max<uint64_t>(ClID32OriginQuantum, Alignment);
+  if (ClStackTemporalSafety && Quantum >= (1ULL << 31))
+    report_fatal_error(
+        "PTSan 32-bit stack origins require alignment below 2 GiB");
+  return Quantum;
+}
+
+Value *PTSanLowerer::takeFrameSalt(PTSanIRB &IRB) {
+  Instruction *Continue = &*IRB.GetInsertPoint();
+  Value *Next =
+      IRB.CreateLoad(DS.PtrTy, DS.StackOriginNextPtr, "frame.origin.next");
+  Value *Salt = IRB.CreateLoad(DS.U32Ty, Next, "frame.salt.cached");
+  // Cached salts are nonzero multiples of 4096; zero marks the end.
+  Value *Usable = IRB.CreateICmpNE(Salt, IRB.getInt32(0));
+  Instruction *Consume, *Refill;
+  SplitBlockAndInsertIfThenElse(
+      Usable, Continue->getIterator(), &Consume, &Refill,
+      MDBuilder(DS.Ctx).createBranchWeights(1000, 1), &PTA.DTU, &PTA.LI);
+  IRB.SetInsertPoint(Consume);
+  IRB.CreateStore(IRB.CreateInBoundsGEP(DS.U32Ty, Next, IRB.getInt64(1)),
+                  DS.StackOriginNextPtr);
+
+  IRB.SetInsertPoint(Refill);
+  Value *Refilled = IRB.CreateCall(DS.RefillStackOrigins);
+  IRB.SetInsertPoint(Continue);
+  PHINode *Selected = IRB.CreatePHI(DS.U32Ty, 2, "frame.salt");
+  Selected->addIncoming(Salt, Consume->getParent());
+  Selected->addIncoming(Refilled, Refill->getParent());
+  return Selected;
+}
+
 void PTSanLowerer::writeSourceBounds(PTSanIRB &IRB, Value *Source, Value *Size,
-                                   Value *ID, bool IsNotDefault) {
-  // Keep the tagged base in sync with static-bounds lowering.
+                                   Value *ID) {
   Value *Base = IRB.CreatePtrToInt(Source, DS.U64Ty);
-  Value *TaggedAddr = IRB.CreateOr(Base, IRB.CreateShl(ID, 48));
+  if (Cl32BitIDs) {
+    uint64_t Quantum = getSourceOriginQuantum(Source);
+    // Non-repeating VLAs and main's argv also reach this writer.
+    auto *ConstantSize = dyn_cast<ConstantInt>(Size);
+    if (ConstantSize && ConstantSize->getZExtValue() >= (1ULL << 31)) {
+      report_fatal_error("PTSan 32-bit IDs cannot represent objects of 2 GiB or larger");
+    }
+    if (!ConstantSize) {
+      Value *DoesNotFit = IRB.CreateICmpUGE(Size, IRB.getInt64(1ULL << 31));
+      Instruction *Continue = &*IRB.GetInsertPoint();
+      Instruction *ThenTerm = SplitBlockAndInsertIfThen(
+          DoesNotFit, Continue->getIterator(), true,
+          MDBuilder(DS.Ctx).createBranchWeights(1, 1000), &PTA.DTU, &PTA.LI);
+      PTSanIRB FailureIRB(DS, ThenTerm);
+      FailureIRB.CreateCall(Intrinsic::getDeclaration(&DS.M, Intrinsic::trap));
+      IRB.SetInsertPoint(Continue);
+    }
+    Value *Salt;
+    if (FrameSalt) {
+      Salt = IRB.CreateZExt(FrameSalt, DS.U64Ty);
+    } else if (ClStackTemporalSafety || !ConstantSize) {
+      Salt = IRB.CreateZExt(
+          IRB.CreateCall(DS.ChooseStackOrigin, {IRB.getInt64(Quantum)}), DS.U64Ty);
+    } else {
+      Salt = IRB.getInt64(Quantum & 0x7fffffff);
+    }
+    // Quantum is a power of two: this mask computes raw_base % Quantum.
+    Value *Remainder = IRB.CreateAnd(Base, IRB.getInt64(Quantum - 1));
+    Value *Origin =
+        IRB.CreateTrunc(IRB.CreateAdd(Salt, Remainder), DS.U32Ty);
+    Value *OriginSlot = DS.getOriginPtr(IRB, ID);
+    IRB.CreateStore(Origin, OriginSlot);
+    Base = IRB.CreateSub(Base, IRB.CreateZExt(Origin, DS.U64Ty));
+  } else {
+    // Default-mode metadata and static bounds both retain the tagged base.
+    Base = IRB.CreateOr(Base, IRB.CreateShl(ID, 48));
+  }
   Value *Bounds = PoisonValue::get(DS.BoundsStructTy);
-  Bounds = IRB.CreateInsertValue(Bounds, TaggedAddr, {0});
+  Bounds = IRB.CreateInsertValue(Bounds, Base, {0});
   Bounds = IRB.CreateInsertValue(Bounds, Size, {1});
-  Value *Slot = IRB.CreateInBoundsGEP(DS.BoundsArray->getValueType(),
-                                   DS.BoundsArray, {IRB.getInt64(0), ID});
-  // Strict-mode allocation terminates on exhaustion. The successful bucket
-  // fast path also cannot produce a default ID, in either mode.
-  if (!ClStrictMode && !IsNotDefault) {
+  Value *Slot = DS.getBoundsPtr(IRB, ID);
+  // Only non-strict ID16 can fall back to a shared default ID on exhaustion.
+  // Redirect these writes so they do not replace that ID's permissive bounds.
+  if (DS.DefaultIDNo) {
     Value *IsDefaultID =
         IRB.CreateICmpEQ(ID, IRB.CreateZExt(DS.DefaultIDNo, DS.U64Ty));
     Slot = IRB.CreateSelect(IsDefaultID, DS.OverflowIDBoundsPtr, Slot);
@@ -532,42 +591,29 @@ PTSanLowerer::allocateSourceIDs(size_t NumSourceIDs,
   assert(NumSourceIDs >= PtrSrcs.size());
   NumAllocatedSourceIDs = NumSourceIDs;
   if (NumSourceIDs == 0) {
+    if (HasRepeatableAllocas) {
+      PTSanIRB IRB(DS, &*F.getEntryBlock().getFirstNonPHIOrDbgOrAlloca());
+      StackIDCursor = IRB.CreateLoad(DS.U64Ty, DS.StackIDCursorPtr);
+    }
     return {};
-  }
-
-  if (ClNoIDs) {
-    return SmallVector<Value *, 8>(NumSourceIDs, ConstantInt::get(DS.U64Ty, 0));
-  }
-  // The stack-ID fast path intentionally uses a u16 add/compare sequence:
-  //
-  //   requested = ptsan_next_stack_id + NumSourceIDs
-  //   requested <= ptsan_stack_id_limit
-  //
-  // Runtime bucket configuration keeps stack_id_limit in the low half of the
-  // u16 space. This compile-time guard handles pathological single functions
-  // without changing that hot path or adding a widened runtime check.
-  if (NumSourceIDs > 0x7fff) {
-    report_fatal_error(
-        "PTSan cannot assign more than 0x7fff stack IDs to one function");
   }
 
   PTSanIRB IRB(DS, &*F.getEntryBlock().getFirstNonPHIOrDbgOrAlloca());
   markIRAsFrom(IRB, "ptsan.ir.lowerPtrSources");
-  auto GetSpanU32 = [&](unsigned i) -> Value * {
+  auto GetSpan = [&](unsigned i) -> Value * {
     Value *Source = PtrSrcs[i].getSource();
     if (auto *AI = dyn_cast<AllocaInst>(Source)) {
       auto Size = AI->getAllocationSize(DS.DL);
       assert(Size && !Size->isScalable() &&
              "PTSan source alloca should have a fixed size");
-      assert(Size->getFixedValue() < 0xFFFFFFFFULL);
-      return IRB.getInt32(Size->getFixedValue());
+      return IRB.getInt64(Size->getFixedValue());
     }
 
     if (F.getName() == "main" && F.arg_size() >= 2 &&
         Source == F.getArg(1)) {
-      Value *ArgC = F.getArg(0);
-      Value *Count = IRB.CreateAdd(ArgC, IRB.getInt32(1));
-      return IRB.CreateMul(Count, IRB.getInt32(DS.DL.getPointerSize()));
+      Value *ArgC = IRB.CreateZExt(F.getArg(0), DS.U64Ty);
+      Value *Count = IRB.CreateAdd(ArgC, IRB.getInt64(1));
+      return IRB.CreateMul(Count, IRB.getInt64(DS.DL.getPointerSize()));
     }
 
     if (auto *Arg = dyn_cast<Argument>(Source)) {
@@ -577,25 +623,22 @@ PTSanLowerer::allocateSourceIDs(size_t NumSourceIDs,
           DS.DL.getTypeAllocSize(Arg->getParamByValType());
       assert(!Size.isScalable() &&
              "PTSan does not support scalable pass-by-value objects");
-      return IRB.getInt32(Size.getFixedValue());
+      return IRB.getInt64(Size.getFixedValue());
     }
 
     errs() << "Unknown PTSan source anchor operand: " << *Source << "\n";
     die();
   };
 
-  auto GetSpanU64 = [&](unsigned i) {
-    return IRB.CreateZExt(GetSpanU32(i), DS.U64Ty, "span.u64");
-  };
-
   auto GetFastCaseIDs = [&](PTSanIRB &IRB, Value *RequestedStackID) {
     SmallVector<Value *, 8> IDs;
     IDs.resize(NumSourceIDs);
+    Value *FirstID = IRB.CreateTrunc(StartingStackID, DS.IDTy);
 
     for (unsigned i = 0; i < NumSourceIDs; i++) {
       Value *ID = (i == 0)
-          ? StartingStackID
-          : IRB.CreateAdd(StartingStackID, IRB.getInt16(i), "next.plus");
+          ? FirstID
+          : IRB.CreateAdd(FirstID, ConstantInt::get(DS.IDTy, i), "next.plus");
       IDs[i] = ID;
     }
 
@@ -605,13 +648,12 @@ PTSanLowerer::allocateSourceIDs(size_t NumSourceIDs,
     return IDs;
   };
 
-  auto WriteBounds = [&](const SmallVector<Value *, 8> &IDs,
-                         bool IsNotDefault = false) {
+  auto WriteBounds = [&](const SmallVector<Value *, 8> &IDs) {
     for (size_t i = 0; i < PtrSrcs.size(); i++) {
       Value *Source = PtrSrcs[i].getSource();
-      Value *Span64 = GetSpanU64(i);
+      Value *Span64 = GetSpan(i);
       Value *ID_64 = IRB.CreateZExt(IDs[i], DS.U64Ty);
-      writeSourceBounds(IRB, Source, Span64, ID_64, IsNotDefault);
+      writeSourceBounds(IRB, Source, Span64, ID_64);
     }
   };
 
@@ -622,61 +664,34 @@ PTSanLowerer::allocateSourceIDs(size_t NumSourceIDs,
     return IDs;
   };
 
-  auto MakeTwoSpans = [&](unsigned i0, unsigned i1) {
-    Value *A64 = GetSpanU64(i0);
-    Value *B64 = GetSpanU64(i1);
-    Value *Sp  = IRB.CreateOr(A64, IRB.CreateShl(B64, IRB.getInt64(32)));
-    return Sp;
-  };
-
   auto GetGenericIDs = [&]() {
-    IRB.CreateCall(DS.GetStackIDsN, {IDsAlloc, IRB.getInt64(NumSourceIDs)});
+    StackIDCursor = IRB.CreateLoad(DS.U64Ty, DS.StackIDCursorPtr);
+    IRB.CreateCall(DS.GetStackIDs, {IDsAlloc, IRB.getInt64(NumSourceIDs)});
     SmallVector<Value *, 8> IDs;
     IDs.resize(NumSourceIDs);
     for (unsigned i = 0; i < NumSourceIDs; i++) {
       Value *IDPtr = IRB.CreateInBoundsGEP(
-          DS.U16Ty, IDsAlloc, {IRB.getInt64(i)});
-      IDs[i] = IRB.CreateLoad(DS.U16Ty, IDPtr);
+          DS.IDTy, IDsAlloc, {IRB.getInt64(i)});
+      IDs[i] = IRB.CreateLoad(DS.IDTy, IDPtr);
     }
     return IDs;
   };
 
-  if (isStackIDFastPathDisabled()) {
-    StackIDCase = 0;
-    IDsRet = nullptr;
-    hoistAllocas(F);
-    IDsAlloc = IRB.CreateAlloca(DS.U16Ty, IRB.getInt64(NumSourceIDs), "stack.ids");
-    HasStackIDRoom = ConstantInt::getFalse(DS.BoolTy);
+  hoistAllocas(F);
+  IDsAlloc = IRB.CreateAlloca(DS.IDTy, IRB.getInt64(NumSourceIDs), "stack.ids");
 
+  if (!UseFastStackIDs) {
+    HasStackIDRoom = ConstantInt::getFalse(DS.BoolTy);
     SmallVector<Value *, 8> IDs = GetGenericIDs();
     WriteBounds(IDs);
     return WidenIDs(std::move(IDs));
   }
 
-  // The small slow-path helpers also initialize every ID's bounds. Use them
-  // only when the whole batch has bounds available at entry. Otherwise the
-  // generic helper allocates IDs without writing bounds.
-  if (NumSourceIDs <= 4 && NumSourceIDs == PtrSrcs.size()) {
-    StackIDCase = NumSourceIDs;
-  } else {
-    StackIDCase = 0;
-  }
-
-  // Set up preamble
-  hoistAllocas(F);
-
-  ConstantInt *UsedIDs = IRB.getInt64(NumSourceIDs);
-
-  StartingStackID = IRB.CreateLoad(DS.U16Ty, DS.NextStackIDPtr);
-  Value *RequestedStackID = IRB.CreateAdd(StartingStackID, IRB.getInt16(NumSourceIDs));
-  Value *StackIDLimit = IRB.CreateLoad(DS.U16Ty, DS.StackIDLimitPtr);
+  StartingStackID = IRB.CreateLoad(DS.U64Ty, DS.NextStackIDPtr);
+  Value *RequestedStackID = IRB.CreateAdd(
+      StartingStackID, IRB.getInt64(NumSourceIDs));
+  Value *StackIDLimit = IRB.CreateLoad(DS.U64Ty, DS.StackIDLimitPtr);
   HasStackIDRoom = IRB.CreateICmpULE(RequestedStackID, StackIDLimit, "has.stack.id.room");
-
-  if (StackIDCase == 0) {
-    IDsAlloc = IRB.CreateAlloca(DS.U16Ty, UsedIDs, "stack.ids");
-  } else {
-    IDsAlloc = nullptr;
-  }
 
   MDBuilder MDB(DS.Ctx);
   MDNode *BW = MDB.createBranchWeights(/*true*/1000, /*false*/1);
@@ -685,108 +700,50 @@ PTSanLowerer::allocateSourceIDs(size_t NumSourceIDs,
                                 &ThenTerm, &ElseTerm,
                                 BW, &PTA.DTU, &PTA.LI);
 
-
-  // THEN path: materialize IDs via post-increment semantics --------------------
+  // The fast path allocates a contiguous range without calling the runtime.
   IRB.SetInsertPoint(ThenTerm);
   SmallVector<Value *, 8> ThenIDs = GetFastCaseIDs(IRB, RequestedStackID);
+  Value *FastSalt = UseFrameSalt ? takeFrameSalt(IRB) : nullptr;
+  // Only repeatable allocas need a log checkpoint on the fast path.
+  // Fixed-only fast frames never use this cursor for cleanup, so use a
+  // constant to avoid a TLS load.
+  Value *FastCursor = HasRepeatableAllocas
+                          ? IRB.CreateLoad(DS.U64Ty, DS.StackIDCursorPtr)
+                          : (Value *)IRB.getInt64(0);
 
-  // In the special case functions, the bounds writing is done in the call, so
-  // we only need to write bounds in the fast case here
-  if (StackIDCase != 0) {
-    WriteBounds(ThenIDs, /*IsNotDefault=*/true);
-  }
-
-  // ELSE path: call helper and read back scalars --------------------------------
   IRB.SetInsertPoint(ElseTerm);
+  SmallVector<Value *, 8> ElseIDs = GetGenericIDs();
+  Value *SlowSalt = UseFrameSalt
+                        ? IRB.CreateCall(DS.ChooseStackOrigin, {IRB.getInt64(4096)})
+                        : nullptr;
 
-  SmallVector<Value *, 8> ElseIDs;
-  ElseIDs.resize(NumSourceIDs);
-
-  Value *IDsRetElse = nullptr;
-
-  switch (StackIDCase) {
-    case 0:
-      ElseIDs = GetGenericIDs();
-      break;
-    case 1:
-      IDsRetElse = IRB.CreateCall(
-          DS.GetStackIDs1, {PtrSrcs[0].getSource(), GetSpanU64(0)});
-      break;
-    case 2: {
-      Value *Sp01 = MakeTwoSpans(0, 1);
-      IDsRetElse = IRB.CreateCall(
-          DS.GetStackIDs2,
-          {PtrSrcs[0].getSource(), PtrSrcs[1].getSource(), Sp01});
-      break;
-    }
-    case 3: {
-      Value *Sp01 = MakeTwoSpans(0, 1);
-      Value *Sp2 = GetSpanU32(2);
-      IDsRetElse = IRB.CreateCall(
-          DS.GetStackIDs3,
-          {PtrSrcs[0].getSource(), PtrSrcs[1].getSource(),
-           PtrSrcs[2].getSource(), Sp01, Sp2});
-      break;
-    }
-    case 4: {
-      Value *Sp01 = MakeTwoSpans(0, 1);
-      Value *Sp23 = MakeTwoSpans(2, 3);
-      IDsRetElse = IRB.CreateCall(
-          DS.GetStackIDs4,
-          {PtrSrcs[0].getSource(), PtrSrcs[1].getSource(),
-           PtrSrcs[2].getSource(), PtrSrcs[3].getSource(), Sp01, Sp23});
-      break;
-    }
-    default:
-      errs() << "Unexpected StackIDCase " << StackIDCase << "\n";
-      die();
-  }
-
-  // Specialized helpers return consecutive 16-bit IDs packed into an integer.
-  if (StackIDCase != 0) {
-    for (unsigned i = 0; i < NumSourceIDs; ++i) {
-      Value *ID = IRB.CreateLShr(IDsRetElse, 16 * i);
-      ElseIDs[i] = IRB.CreateTrunc(ID, DS.U16Ty);
-    }
-  }
-
-  // MERGE: create PHIs named ID_0 .. ID_{N-1} -----------------------------------
+  // Merge fast- and slow-path IDs before initializing bounds.
   BasicBlock *ContBB = ThenTerm->getParent()->getUniqueSuccessor();
   assert(ContBB);
   IRB.SetInsertPoint(&*ContBB->getFirstNonPHI());
+  PHINode *CursorPhi = IRB.CreatePHI(DS.U64Ty, 2, "stack.cursor");
+  CursorPhi->addIncoming(FastCursor, ThenTerm->getParent());
+  CursorPhi->addIncoming(StackIDCursor, ElseTerm->getParent());
+  StackIDCursor = CursorPhi;
+  if (UseFrameSalt) {
+    PHINode *SaltPhi = IRB.CreatePHI(DS.U32Ty, 2, "stack.frame.salt");
+    SaltPhi->addIncoming(FastSalt, ThenTerm->getParent());
+    SaltPhi->addIncoming(SlowSalt, ElseTerm->getParent());
+    FrameSalt = SaltPhi;
+  }
   SmallVector<Value *, 8> StackIDPHIs;
   StackIDPHIs.resize(NumSourceIDs);
 
   for (unsigned i = 0; i < NumSourceIDs; i++) {
-    PHINode *Phi = IRB.CreatePHI(DS.U16Ty, /*NumReservedValues=*/2,
+    PHINode *Phi = IRB.CreatePHI(DS.IDTy, /*NumReservedValues=*/2,
                                       Twine("ID_") + Twine(i));
     Phi->addIncoming(ThenIDs[i], ThenTerm->getParent());
     Phi->addIncoming(ElseIDs[i], ElseTerm->getParent());
-    StackIDPHIs[i] = (Phi);
+    StackIDPHIs[i] = Phi;
   }
 
-  // Merge IDsRet if I have to
-  if (StackIDCase > 0) {
-    assert(IDsRetElse != nullptr);
-    assert(IDsAlloc == nullptr);
-    PHINode *RetPhi = IRB.CreatePHI(IDsRetElse->getType(), 2, "ptsan.ids.ret");
-    Value *Poison = PoisonValue::get(IDsRetElse->getType());
-    RetPhi->addIncoming(Poison, ThenTerm->getParent());
-    RetPhi->addIncoming(IDsRetElse, ElseTerm->getParent());
-    IDsRet = RetPhi;
-  } else {
-    IDsRet = nullptr;
-    assert(IDsRetElse == nullptr);
-    assert(IDsAlloc != nullptr);
-  }
-
-  // Now load/use our merged values ------------------------------------
   IRB.SetInsertPoint(&*ContBB->getFirstInsertionPt());
-  // Non-special-case we write bounds here
-  if (StackIDCase == 0) {
-    WriteBounds(StackIDPHIs);
-  }
-
+  WriteBounds(StackIDPHIs);
   return WidenIDs(std::move(StackIDPHIs));
 }
 
@@ -795,29 +752,12 @@ PTSanLowerer::allocateSourceIDs(size_t NumSourceIDs,
 // The runtime owns the marker contents, shared by the producer and scanner.
 void PTSanLowerer::appendVarargSentinels() {
   Module &M = *PTA.F.getParent();
-  Triple Target(M.getTargetTriple());
-  if ((Target.getArch() != Triple::x86_64 && !Target.isAArch64()) ||
-      !Target.isOSLinux()) {
-    return;
-  }
-  // Find vararg calls
-  SmallVector<CallBase *, 8> Calls;
-  for (Instruction &I : instructions(PTA.F)) {
-    auto *CB = dyn_cast<CallBase>(&I);
-    if (CB && CB->getFunctionType()->isVarArg() && !CB->isInlineAsm() &&
-        !isa<IntrinsicInst>(CB) && !PTA.DS.isInstr(CB->getCalledOperand())) {
-      Calls.push_back(CB);
-    }
-  }
 
   // Append a byval sentinel after the stack arguments. At va_start, the runtime
   // scans to this marker to determine the size without duplicating ABI argument
   // placement rules.
-  for (CallBase *CB : Calls) {
-    if (CB->getCallingConv() != CallingConv::C || CB->isMustTailCall()) {
-      report_fatal_error("PTSan varargs require the C calling convention without musttail");
-    }
-
+  for (VarargCallAnchor Anchor : DS.collectAnchors<VarargCallAnchor>(F)) {
+    auto *CB = cast<CallBase>(Anchor.getTarget());
     SmallVector<Value *, 8> Args(CB->args());
     Args.push_back(DS.PTSanVarargSentinel);
 
@@ -848,18 +788,46 @@ void PTSanLowerer::appendVarargSentinels() {
     CB->replaceAllUsesWith(NewCB);
     NewCB->takeName(CB);
     CB->eraseFromParent();
+    Anchor.erase();
   }
 }
 
+// Convert pointers to integer bits, preserving vector shape; leave integers alone.
+Value *PTSanLowerer::materializeAsInt(PTSanIRB &IRB, Value *V,
+                                    const Twine &Name) {
+  if (V->getType()->isPtrOrPtrVectorTy()) {
+    Type *IntTy = V->getType()->getWithNewType(DS.U64Ty);
+    return IRB.CreatePtrToInt(V, IntTy, Name);
+  }
+  return V;
+}
+
+// Conditional ID32 pseudo-IR (bits are u64; vectors work lane-wise):
+//   candidate = bits >> 32
+//   encoded = signed(bits) < -1
+//   id = select(encoded, candidate, 0)
+// The signed comparison tests the marker bit but excludes the all-ones sentinel.
+// Unconditional strict decoding needs only: id = bits >> 32.
+// ID16 needs only: id = bits >> 48.
 Value *PTSanLowerer::lowerGetID(GetIDAnchor IDAnchor) {
   Value *Ptr = IDAnchor.getBase();
   Type *IDTy = Ptr->getType()->getWithNewType(DS.U64Ty);
 
   PTSanIRB IRB(DS, IDAnchor.Call);
   markIRAsFrom(IRB, "ptsan.ir.getid");
-  Value *BaseInt = IRB.CreatePtrToInt(Ptr, IDTy, Ptr->getName() + ".asint");
-  return IRB.CreateLShr(BaseInt, ConstantInt::get(IDTy, 48),
-                        Ptr->getName() + ".id");
+  Value *BaseInt = materializeAsInt(IRB, Ptr, Ptr->getName() + ".asint");
+  if (Cl32BitIDs) {
+    if (!usesConditionalID32Decode()) {
+      return IRB.CreateLShr(BaseInt, 32, Ptr->getName() + ".id");
+    }
+    Value *ID = IRB.CreateLShr(BaseInt, 32);
+    Value *IsEnriched = IRB.CreateICmpSLT(BaseInt, ConstantInt::getSigned(IDTy, -1));
+    return IRB.CreateSelect(IsEnriched, ID, ConstantInt::get(IDTy, 0),
+                          Ptr->getName() + ".id");
+  } else {
+    return IRB.CreateLShr(BaseInt, ConstantInt::get(IDTy, 48),
+                          Ptr->getName() + ".id");
+  }
 }
 
 Value *PTSanLowerer::lowerBound(BoundAnchor Bounds) {
@@ -870,19 +838,27 @@ Value *PTSanLowerer::lowerBound(BoundAnchor Bounds) {
     PTSanIRB IRB(DS, Bounds.Call);
     markIRAsFrom(IRB, "ptsan.ir.loadbounds");
 
-    Value *GEP = IRB.CreateInBoundsGEP(
-        DS.BoundsArray->getValueType(),
-        DS.BoundsArray,
-        {IRB.getInt64(0), ID, IRB.getInt32(FieldIndex)},
-        ID->getName() + (Bounds.isBase() ? ".baseGep" : ".spanGep"));
+    Value *GEP;
+    if (Bounds.isOrigin()) {
+      GEP = DS.getOriginPtr(IRB, ID);
+    } else {
+      GEP = DS.getBoundsPtr(IRB, ID, FieldIndex);
+    }
+    if (auto *GEPInst = dyn_cast<Instruction>(GEP)) {
+      GEPInst->setName(ID->getName() +
+                       (Bounds.isOrigin() ? ".originGep"
+                                         : Bounds.isBase() ? ".baseGep" : ".spanGep"));
+    }
+    Type *ResultTy = Bounds.Call->getType();
 
     if (LoadBounds->isVector()) {
       return IRB.CreateMaskedGather(
-          ID->getType(), GEP, Align(8), LoadBounds->getMask(), nullptr,
+          ResultTy, GEP, Align(Bounds.isOrigin() ? 4 : 8), LoadBounds->getMask(),
+          Constant::getNullValue(ResultTy),
           ID->getName() + (Bounds.isBase() ? ".base" : ".span"));
     }
 
-    return IRB.CreateLoad(DS.U64Ty, GEP,
+    return IRB.CreateLoad(ResultTy, GEP,
                           ID->getName() +
                               (Bounds.isBase() ? ".base" : ".span"));
   }
@@ -894,6 +870,11 @@ Value *PTSanLowerer::lowerBound(BoundAnchor Bounds) {
     markIRAsFrom(IRB, "ptsan.ir.staticbase");
     Lowered = IRB.CreatePtrToInt(Lowered, DS.U64Ty,
                                  Lowered->getName() + ".static.base");
+    if (Cl32BitIDs) {
+      Lowered = IRB.CreateSub(
+          Lowered, IRB.CreateZExt(StaticBounds.getOrigin(), DS.U64Ty),
+          "ptsan.static.decode.bias");
+    }
   }
 
   return Lowered;
@@ -920,83 +901,103 @@ PTSanLowerer::addPtrCheck(const PlaceablePtrCheck &Check) {
   Value *PtrID = Check.Anchor.getID();
   BoundAnchor BaseBound = Check.Anchor.getBaseBound();
   BoundAnchor SpanBound = Check.Anchor.getSpanBound();
+  optional<LoadBoundAnchor> OriginBound;
+  if (Cl32BitIDs) {
+    OriginBound = Check.Anchor.getOrigin();
+  }
   assert(Check.Anchor.hasMaterializedRange() &&
          "check range metadata should be materialized before lowering");
   assert(BaseBound.isBase() && SpanBound.isSpan() &&
          "check should carry base/span bounds");
+  assert((!Cl32BitIDs || OriginBound->isOrigin()) &&
+         "ID32 check should carry an origin");
   Value *Base = BaseBound.Call;
   Value *Span = SpanBound.Call;
 
   DBG(
-    PTA.SE.verify();
     assert(PTA.DT.verify());
     assert(PTA.PDT.verify());
     PTA.LI.verify(PTA.DT);
   );
 
-  Instruction *CheckIP = Check.getCheckIP(PTA.DT);
+  Instruction *CheckIP = Check.Anchor.Call;
 
   DBG(errs() << "CheckIP: " << *CheckIP << "\n");
   DBG(errs() << "Base bounds IP: " << *BaseBound.getTarget().getIP() << "\n");
   DBG(errs() << "Span bounds IP: " << *SpanBound.getTarget().getIP() << "\n");
+  if (OriginBound) {
+    DBG(errs() << "Origin IP: " << *OriginBound->getTarget().getIP() << "\n");
+  }
 
   DBG(errs() << "Instigating instructions are:\n");
   for (Use *U : Check.InstigatingUses) {
     Instruction *I = cast<Instruction>(U->getUser());
     DBG(errs() << "\t" << *I << "\n");
-    assert(I == CheckIP || PTA.PDT.dominates(I, CheckIP));
     assert(I == CheckIP || PTA.DT.dominates(CheckIP, I));
     assert(PTA.PTU.hoistTargetDominates(BaseBound.getTarget(), CheckIP));
     assert(PTA.PTU.hoistTargetDominates(BaseBound.getTarget(), I));
     assert(PTA.PTU.hoistTargetDominates(SpanBound.getTarget(), CheckIP));
     assert(PTA.PTU.hoistTargetDominates(SpanBound.getTarget(), I));
+    if (OriginBound) {
+      assert(PTA.PTU.hoistTargetDominates(OriginBound->getTarget(), CheckIP));
+      assert(PTA.PTU.hoistTargetDominates(OriginBound->getTarget(), I));
+    }
   }
 
   Value *MinPtr = Check.Anchor.getRangeMinPtr();
   Value *Size = Check.Anchor.getRangeSize();
 
-  Instruction *MinIP = PTA.PTU.getFirstIPAfter(MinPtr).getIP();
-  assert(DS.getAsAnchor<TaggedAnchor>(MinPtr) &&
-         "check range min should be materialized as a tagged value");
+  // Checks are lowered before pointer conversions erase their solved polarity.
+  bool MinIsStripped =
+      Polarities.getPolarity(MinPtr) == Polarity::Stripped;
 
-  PTSanIRB IRB(DS, MinIP);
+  // Range materialization may recover a callbr value from a block-local PHI.
+  // Cast at its checked use, not after a definition with multiple successors.
+  PTSanIRB IRB(DS, CheckIP);
   markIRAsFrom(IRB, "ptsan.ir.ptrcheck.preamble");
   Type *CheckIntTy = MinPtr->getType()->getWithNewType(DS.U64Ty);
-  Value *Min = IRB.CreatePtrToInt(MinPtr, CheckIntTy);
+  Value *MinBits = IRB.CreatePtrToInt(MinPtr, CheckIntTy);
 
-  DBG(errs() << "Min value " << *Min << "\n");
+  DBG(errs() << "Min value " << *MinBits << "\n");
   DBG(errs() << "Size value " << *Size << "\n");
 
   if (Check.Mask) {
-    Base = PTA.PTU.splatToMatchType(Base, CheckIntTy);
-    Span = PTA.PTU.splatToMatchType(Span, CheckIntTy);
+    Base = PTA.PTU.splatToMatchType(Base, CheckIntTy, CheckIP);
+    Span = PTA.PTU.splatToMatchType(Span, CheckIntTy, CheckIP);
   }
 
-  IRB.SetInsertPoint(CheckIP);
-
-  // We insert at CheckIP, but all those values had better be live there.
-  // Check the materialized operands directly instead of using a collapsed
-  // common insertion point: around invoke/unwind edges, the latter can name the
-  // invoke even when the actual operands were created before it.
-  assert(([&]() {
-    SmallVector<Value *> Operands = {Min, Size, Span, Base};
-    if (Check.Mask) {
-      Operands.push_back(Check.Mask);
-    }
-    for (Value *V : Operands) {
-      Instruction *I = dyn_cast<Instruction>(V);
-      if (!I) {
-        continue;
-      }
-      if (I == CheckIP || !PTA.DT.dominates(I, CheckIP)) {
-        return false;
-      }
-    }
-    return true;
-  }()) && "check operands must dominate CheckIP");
-
   // Offset into the buffer
-  Value *Offset = IRB.CreateSub(Min, Base, Name + ".offset");
+  Value *Offset;
+  if (Cl32BitIDs) {
+    Value *Origin = IRB.CreateZExt(
+        OriginBound->Call, PtrID->getType()->getWithNewType(DS.U64Ty));
+    Origin = PTA.PTU.splatToMatchType(Origin, CheckIntTy, CheckIP);
+
+    if (MinIsStripped) {
+      Value *RawBase = IRB.CreateAdd(Base, Origin, Name + ".raw.base");
+      Offset = IRB.CreateSub(MinBits, RawBase, Name + ".offset");
+    } else {
+      Type *PayloadTy = CheckIntTy->getWithNewType(DS.U32Ty);
+      Value *Payload =
+          IRB.CreateZExt(IRB.CreateTrunc(MinBits, PayloadTy), CheckIntTy);
+      Offset = IRB.CreateSub(Payload, Origin);
+      // Tagged polarity can still permit raw pointers under this decode policy.
+      if (usesConditionalID32Decode()) {
+        Value *IsEnriched =
+            IRB.CreateICmpSLT(MinBits, ConstantInt::getSigned(CheckIntTy, -1));
+        Value *RawBase = IRB.CreateAdd(Base, Origin, Name + ".raw.base");
+        Value *RawOffset = IRB.CreateSub(MinBits, RawBase);
+        Offset = IRB.CreateSelect(IsEnriched, Offset, RawOffset, Name + ".offset");
+      }
+    }
+  } else {
+    Value *CheckBase = Base;
+    if (MinIsStripped) {
+      CheckBase = IRB.CreateAnd(
+          Base, PTA.PTU.splatToMatchType(DS.AddrMask, CheckIntTy, CheckIP));
+    }
+    Offset = IRB.CreateSub(MinBits, CheckBase, Name + ".offset");
+  }
 
   Value *OutOfRange = nullptr;
   if (ClAddOverflowChecks) {
@@ -1016,6 +1017,10 @@ PTSanLowerer::addPtrCheck(const PlaceablePtrCheck &Check) {
     Value *InRange = IRB.CreateAnd(CmpLower, CmpSize, Name + ".inRange");
     OutOfRange = IRB.CreateNot(InRange, ".outOfRange");
   }
+
+  // The runtime permits zero-byte accesses, even when the pointer is invalid.
+  OutOfRange = IRB.CreateAnd(
+      OutOfRange, IRB.CreateICmpNE(Size, Constant::getNullValue(Size->getType())));
 
   if (OutOfRange->getType()->isVectorTy()) {
     OutOfRange = IRB.CreateSelect(
@@ -1044,19 +1049,14 @@ PTSanLowerer::addPtrCheck(const PlaceablePtrCheck &Check) {
   for (Use *U : Check.InstigatingUses) {
     Instruction *I = cast<Instruction>(U->getUser());
     assert(PTA.DT.dominates(OORInst, I));
-    assert(PTA.PDT.dominates(I, OORInst));
   }
-  // We need SE info here, so we don't want to actually add the checks (which changes
-  // CFG, which invalidates SE info) until they're all done. So put them here,
-  // and then call actuallyAddCheck later
-
   assert(isa<Instruction>(OORInst));
   return RangeCheckInfo{{OORInst, AFTER},
                         Check.CheckTy,
                         CheckID,
                         PtrID,
                         OORInst,
-                        Min,
+                        MinBits,
                         Size};
 }
 
@@ -1069,7 +1069,7 @@ void PTSanLowerer::lowerLibcCall(Instruction *I) {
   IRB.CreateStore(Inc, DS.PTSanInLibc);
 
   // Restore on normal return, including calls made into invokes by discovery.
-  IRB.SetInsertPoint(PTA.PTU.getFirstIPAfter(I).getIP());
+  IRB.SetInsertPoint(getNormalReturnIP(cast<CallBase>(I)));
 
   // This isn't quite a --, but it should be equivalent and much cleaner
   IRB.CreateStore(Old, DS.PTSanInLibc);
@@ -1079,18 +1079,9 @@ void PTSanLowerer::lowerArithmeticValidation(
     ValidateArithAnchor Anchor) {
   PTSanIRB IRB(DS, Anchor.Call);
 
-  auto materializeAsInt = [&](Value *V) -> Value * {
-    if (V->getType()->isPointerTy()) {
-      TaggedAnchor Tagged = TaggedAnchor::create(DS, Anchor.Call, V);
-      return IRB.CreatePtrToInt(Tagged.Call, DS.U64Ty);
-    }
-
-    return V;
-  };
-
   IRB.CreateCall(DS.ValidateArithmetic,
-                 {materializeAsInt(Anchor.getLHS()),
-                  materializeAsInt(Anchor.getRHS())});
+                 {materializeAsInt(IRB, Anchor.getLHS()),
+                  materializeAsInt(IRB, Anchor.getRHS())});
 }
 
 void PTSanLowerer::lowerSpecialStripCall(CallBase *CB) {
@@ -1113,28 +1104,25 @@ void PTSanLowerer::lowerSpecialStripCall(CallBase *CB) {
   BeforeCall->setCallingConv(Callee->getCallingConv());
   BeforeCall->setDoesNotThrow();
 
-  IRB.SetInsertPoint(PTA.PTU.getFirstIPAfter(CB).getIP());
+  IRB.SetInsertPoint(getNormalReturnIP(CB));
   CallInst *AfterCall = IRB.CreateCall(DS.MakecontextStripAfter, Args);
   AfterCall->setDebugLoc(DL);
   AfterCall->setCallingConv(Callee->getCallingConv());
   AfterCall->setDoesNotThrow();
 }
 
-DenseMap<Value *, Value *> PTSanLowerer::lowerSources() {
-  DenseMap<Value *, Value *> AllocatedSourceIDs;
-  Instruction *FrameSetupEnd =
-      &*F.getEntryBlock().getFirstNonPHIOrDbgOrAlloca();
-
+void PTSanLowerer::prepareSources() {
   auto isDynamicAlloca = [&](SourceAnchor Source) {
     auto *AI = dyn_cast<AllocaInst>(Source.getSource());
     return AI && !AI->getAllocationSize(DS.DL);
   };
 
-  // Mark that Source's id is ID
-  auto recordSourceID = [&](SourceAnchor Source, Value *ID) {
-    for (User *U : Source.Call->users()) {
+  // Resolve source-backed IDs before lowering their consumers.
+  auto resolveSourceID = [&](SourceAnchor Source, Value *ID) {
+    for (User *U : make_early_inc_range(Source.Call->users())) {
       if (auto Request = DS.getAsAnchor<GetIDAnchor>(U)) {
-        AllocatedSourceIDs[Request->Call] = ID;
+        Request->Call->replaceAllUsesWith(ID);
+        Request->erase();
       }
     }
   };
@@ -1158,9 +1146,16 @@ DenseMap<Value *, Value *> PTSanLowerer::lowerSources() {
         TLS && TLS->getIntrinsicID() == Intrinsic::threadlocal_address) {
       auto *Global = cast<GlobalValue>(TLS->getArgOperand(0));
       PTSanIRB IRB(DS, Source.Call);
-      Value *ID = IRB.CreateLoad(DS.U16Ty, DS.TLSIDs.at(Global));
-      recordSourceID(Source, IRB.CreateZExt(ID, DS.U64Ty));
+      Value *ID = IRB.CreateLoad(DS.IDTy, DS.TLSIDs.at(Global));
+      resolveSourceID(Source, IRB.CreateZExt(ID, DS.U64Ty));
       continue;
+    }
+
+    // The inline salt cache has a fixed 4 KiB alignment contract. Keep
+    // unusual alignment/quantum requirements on the existing full slow path.
+    if (Cl32BitIDs && ClStackTemporalSafety &&
+        getSourceOriginQuantum(Source.getSource()) > 4096) {
+      UseFastStackIDs = false;
     }
 
     if (isDynamicAlloca(Source)) {
@@ -1177,28 +1172,15 @@ DenseMap<Value *, Value *> PTSanLowerer::lowerSources() {
     }
   }
 
-  // Gather VA starts
-  SmallVector<IntrinsicInst *, 4> VAStarts;
-  for (Instruction &I : instructions(F)) {
-    auto *II = dyn_cast<IntrinsicInst>(&I);
-    if (II && II->getIntrinsicID() == Intrinsic::vastart) {
-      VAStarts.push_back(II);
-    }
-  }
-  // Only the Linux SysV x86-64 and AAPCS64 layouts are supported.
   Triple Target(DS.M.getTargetTriple());
-  if (VAStarts.size() > 0 &&
-      !((Target.getArch() == Triple::x86_64 || Target.isAArch64()) &&
-        Target.isOSLinux())) {
-    errs() << "PTSan va_list tagging requires x86-64 or AArch64 Linux\n";
-    VAStarts.clear();
-  }
 
   // Allocate IDs for all sources. AllocateSourceIDs will also set bounds
   // for all statically-known buffers. Dynamic remain below
   size_t NumPtrSourceIDs = StaticPtrSrcs.size() + DynamicPtrSrcs.size();
+  UseFrameSalt = Cl32BitIDs && ClStackTemporalSafety && UseFastStackIDs &&
+                 NumPtrSourceIDs != 0;
   unsigned NumVAListIDs = 0;
-  if (!VAStarts.empty()) {
+  if (!DS.collectAnchors<VAStartAnchor>(F).empty()) {
     switch (Target.getArch()) {
     case Triple::x86_64:
       NumVAListIDs = 2;
@@ -1213,16 +1195,21 @@ DenseMap<Value *, Value *> PTSanLowerer::lowerSources() {
     }
   }
   size_t NumSourceIDs = NumPtrSourceIDs + NumVAListIDs;
+  HasRepeatableAllocas = !RepeatablePtrSrcs.empty();
   SmallVector<Value *, 8> IDs = allocateSourceIDs(NumSourceIDs, StaticPtrSrcs);
   assert(IDs.size() == NumSourceIDs);
+  VAListIDs.assign(IDs.begin() + NumPtrSourceIDs, IDs.end());
   for (size_t I = 0; I < StaticPtrSrcs.size(); ++I) {
-    recordSourceID(StaticPtrSrcs[I], IDs[I]);
+    resolveSourceID(StaticPtrSrcs[I], IDs[I]);
   }
 
-  // Handle dynamic allocs
+  // Handle dynamic allocs.
+  // TODO: nonrepeating dynamic allocas still receive IDs at function entry.
+  // If their storage is allocated after setjmp, cursor cleanup cannot retire
+  // that metadata on longjmp. Moving their ID acquisition is a separate change.
   for (size_t I = 0; I < DynamicPtrSrcs.size(); ++I) {
     Value *ID = IDs[StaticPtrSrcs.size() + I];
-    recordSourceID(DynamicPtrSrcs[I], ID);
+    resolveSourceID(DynamicPtrSrcs[I], ID);
     auto *AI = cast<AllocaInst>(DynamicPtrSrcs[I].getSource());
     PTSanIRB IRB(DS, AI->getNextNode());
     Value *Count = IRB.CreateZExtOrTrunc(AI->getArraySize(), DS.U64Ty);
@@ -1232,10 +1219,6 @@ DenseMap<Value *, Value *> PTSanLowerer::lowerSources() {
     writeSourceBounds(IRB, AI, Size, ID);
   }
 
-  if (!RepeatablePtrSrcs.empty()) {
-    PTSanIRB IRB(DS, &*F.getEntryBlock().getFirstInsertionPt());
-    RepeatableAllocaIDs = IRB.CreateCall(DS.GetRepeatableAllocaIDsContainer);
-  }
   for (SourceAnchor Source : RepeatablePtrSrcs) {
     auto *AI = cast<AllocaInst>(Source.getSource());
     PTSanIRB IRB(DS, AI->getNextNode());
@@ -1244,182 +1227,148 @@ DenseMap<Value *, Value *> PTSanLowerer::lowerSources() {
         DS.DL.getTypeAllocSize(AI->getAllocatedType()).getFixedValue();
     Value *Size = IRB.CreateMul(Count, IRB.getInt64(ElementSize));
     Value *ID = IRB.CreateCall(
-        DS.GetRepeatableAllocaID, {RepeatableAllocaIDs, AI, Size});
-    recordSourceID(Source, IRB.CreateZExt(ID, DS.U64Ty));
+        DS.GetRepeatableAllocaID,
+        {AI, Size, IRB.getInt64(AI->getAlign().value())});
+    resolveSourceID(Source, IRB.CreateZExt(ID, DS.U64Ty));
   }
 
   // Log allocated source IDs, including nonrepeating dynamic allocas.
-  if (ClValidate && !ClNoIDs && NumPtrSourceIDs != 0) {
+  if (ClValidate && NumPtrSourceIDs != 0) {
     PTSanIRB IRB(DS, &*F.getEntryBlock().getFirstInsertionPt());
     Value *FnNameCStr = IRB.CreateGlobalStringPtr(F.getName(), F.getName());
     auto logSources = [&](ArrayRef<SourceAnchor> Sources, size_t IDOffset) {
       for (size_t I = 0; I < Sources.size(); ++I) {
         IRB.SetInsertPoint(Sources[I].Call);
-        Value *ID = IRB.CreateTrunc(IDs[IDOffset + I], DS.U16Ty);
+        Value *ID = IRB.CreateTrunc(IDs[IDOffset + I], DS.IDTy);
         bool IsLocal = areUsesLocal(Sources[I].Call);
         ConstantInt *IsLocalVal = ConstantInt::get(DS.BoolTy, IsLocal);
         CallInst *Log = IRB.CreateCall(
             DS.LogAllocaInfo, {FnNameCStr, ID, IsLocalVal, HasStackIDRoom});
-        for (unsigned Arg : {1, 2, 3})
-          Log->addParamAttr(Arg, Attribute::ZExt);
+        // Keep integer-extension attributes in sync with the runtime declaration.
+        Log->setAttributes(Log->getCalledFunction()->getAttributes());
       }
     };
     logSources(StaticPtrSrcs, 0);
     logSources(DynamicPtrSrcs, StaticPtrSrcs.size());
   }
 
-  // Handle VAStart entries
-  if (!VAStarts.empty()) {
-    // va_start and va_copy instances share backing storage for this invocation.
-    // Initialize after each start; retire with the function's other stack IDs.
-    switch (Target.getArch()) {
-    case Triple::aarch64:
-    case Triple::aarch64_be:
-    case Triple::aarch64_32: {
-      // AAPCS64 has separate GP and FP/SIMD save areas, plus stack arguments.
-      // Their sizes are encoded in the initial va_list offsets by the backend.
-      for (IntrinsicInst *Start : VAStarts) {
-        PTSanIRB IRB(DS, Start->getNextNode());
-        IRB.CreateCall(DS.InitVAListAArch64,
-                      {Start->getArgOperand(0), IDs[NumPtrSourceIDs],
-                       IDs[NumPtrSourceIDs + 1], IDs[NumPtrSourceIDs + 2]});
-      }
-      break;
-    }
-    case Triple::x86_64: {
-      Value *RegisterID = IDs[NumPtrSourceIDs];
-      Value *OverflowID = IDs[NumPtrSourceIDs + 1];
-      // SysV x86-64 saves six 8-byte GP argument registers (RDI, RSI, RDX, RCX,
-      // R8, R9) and eight 16-byte XMM argument registers (XMM0-XMM7).
-      constexpr unsigned GPRegisterSaveBytes = 6 * 8;
-      constexpr unsigned XMMRegisterSaveBytes = 8 * 16;
-      // This is a per-function constant: disabling SSE removes the XMM save
-      // slots. The shared runtime cannot infer the caller's target features.
-      unsigned RegisterSize = GPRegisterSaveBytes + XMMRegisterSaveBytes;
-      SmallVector<StringRef, 16> Features;
-      F.getFnAttribute("target-features").getValueAsString().split(Features, ',');
-      if (is_contained(Features, "-sse")) {
-        RegisterSize = GPRegisterSaveBytes;
-      }
-      for (IntrinsicInst *Start : VAStarts) {
-        PTSanIRB IRB(DS, Start->getNextNode());
-        IRB.CreateCall(DS.InitVAListX86_64,
-                       {Start->getArgOperand(0), RegisterID, OverflowID,
-                        IRB.getInt64(RegisterSize)});
-      }
-      break;
-    }
-    default:
-      llvm_unreachable("Unsupported PTSan va_list architecture");
-    }
-  }
+}
 
-  lowerSetjmps(FrameSetupEnd);
-
-  for (SourceAnchor Src : PtrSrcs) {
-    Src.Call->replaceAllUsesWith(Src.getSource());
-    Src.erase();
+void PTSanLowerer::lowerVAStart(IntrinsicInst *Start) {
+  // va_start and va_copy instances share backing storage for this invocation.
+  // Initialize after each start; retire with the function's other stack IDs.
+  PTSanIRB IRB(DS, Start->getNextNode());
+  switch (Triple(DS.M.getTargetTriple()).getArch()) {
+  case Triple::aarch64:
+  case Triple::aarch64_be:
+  case Triple::aarch64_32: {
+    // AAPCS64 has separate GP and FP/SIMD save areas, plus stack arguments.
+    // Their sizes are encoded in the initial va_list offsets by the backend.
+    IRB.CreateCall(DS.InitVAListAArch64,
+                  {Start->getArgOperand(0), VAListIDs[0], VAListIDs[1],
+                   VAListIDs[2]});
+    break;
   }
-  return AllocatedSourceIDs;
+  case Triple::x86_64: {
+    // SysV x86-64 saves six 8-byte GP argument registers (RDI, RSI, RDX, RCX,
+    // R8, R9) and eight 16-byte XMM argument registers (XMM0-XMM7).
+    constexpr unsigned GPRegisterSaveBytes = 6 * 8;
+    constexpr unsigned XMMRegisterSaveBytes = 8 * 16;
+    // This is a per-function constant: disabling SSE removes the XMM save
+    // slots. The shared runtime cannot infer the caller's target features.
+    unsigned RegisterSize = GPRegisterSaveBytes + XMMRegisterSaveBytes;
+    SmallVector<StringRef, 16> Features;
+    F.getFnAttribute("target-features").getValueAsString().split(Features, ',');
+    if (is_contained(Features, "-sse")) {
+      RegisterSize = GPRegisterSaveBytes;
+    }
+    IRB.CreateCall(DS.InitVAListX86_64,
+                  {Start->getArgOperand(0), VAListIDs[0], VAListIDs[1],
+                   IRB.getInt64(RegisterSize)});
+    break;
+  }
+  default:
+    llvm_unreachable("Unsupported PTSan va_list architecture");
+  }
 }
 
 void PTSanLowerer::run() {
-  for (auto ValidationAnchor : DS.collectAnchors<ValidateArithAnchor>(F)) {
-    lowerArithmeticValidation(ValidationAnchor);
-    ValidationAnchor.erase();
-  }
-
-  for (auto Special : DS.collectAnchors<SpecialStripAnchor>(F)) {
-    auto *CB = cast<CallBase>(Special.getPositionedInstruction());
-    lowerSpecialStripCall(CB);
-    Special.erase();
-  }
-
-  for (StripAnchor Strip : DS.collectAnchors<StripAnchor>(F)) {
-    Value *True = lowerStrip(Strip);
-    Strip.Call->replaceAllUsesWith(True);
-    Strip.erase();
-  }
-
-  SmallVector<RangeCheckInfo> RangeChecks;
-  auto lowerCheckAnchor = [&](CheckAnchor CheckAnchor) {
-    PlaceablePtrCheck &Op = PTA.PlaceablePtrChecks.at(CheckAnchor.Call);
-    if (auto Check = addPtrCheck(Op)) {
-      RangeChecks.push_back(*Check);
+#ifndef NDEBUG
+  // Check the original execution paths before lowering adds failure exits.
+  for (const auto &[Call, Check] : PTA.PlaceablePtrChecks) {
+    for (Use *U : Check.InstigatingUses) {
+      assert(PTA.PDT.dominates(cast<Instruction>(U->getUser()), Call));
     }
-    PTA.PlaceablePtrChecks.erase(CheckAnchor.Call);
-    CheckAnchor.erase();
-  };
+  }
+#endif
 
-  for (auto CheckAnchor : DS.collectAnchors<AccessAnchor>(F)) {
-    lowerCheckAnchor(CheckAnchor);
+  prepareSources();
+
+  // Lower consumers before the anchors they depend on, regardless of block
+  // layout. Snapshot the order because lowering can split blocks and update DT.
+  SmallVector<CallInst *, 32> Anchors;
+  for (DomTreeNode *Node : post_order(PTA.DT.getRootNode())) {
+    for (Instruction &I : reverse(*Node->getBlock())) {
+      if (DS.isAnchor(&I)) {
+        Anchors.push_back(cast<CallInst>(&I));
+      }
+    }
   }
 
-  for (auto CheckAnchor : DS.collectAnchors<LoopPreanalysisAnchor>(F)) {
-    lowerCheckAnchor(CheckAnchor);
+  for (CallInst *Call : Anchors) {
+    Value *Lowered = nullptr;
+    if (auto Check = DS.getAsAnchor<CheckAnchor>(Call)) {
+      PlaceablePtrCheck &Op = PTA.PlaceablePtrChecks.at(Call);
+      if (auto RangeCheck = addPtrCheck(Op)) {
+        actuallyAddCheck(*RangeCheck);
+      }
+      PTA.PlaceablePtrChecks.erase(Call);
+    } else if (auto Strip = DS.getAsAnchor<ID16StripAnchor>(Call)) {
+      Lowered = lowerID16Strip(*Strip);
+    } else if (auto Strip = DS.getAsAnchor<ID32StripAnchor>(Call)) {
+      Lowered = lowerID32Strip(*Strip);
+    } else if (auto Tag = DS.getAsAnchor<ID16TagAnchor>(Call)) {
+      Lowered = lowerID16Tag(*Tag);
+    } else if (auto Tag = DS.getAsAnchor<ID32TagAnchor>(Call)) {
+      Lowered = lowerID32Tag(*Tag);
+    } else if (auto Tagged = DS.getAsAnchor<TaggedAnchor>(Call)) {
+      Lowered = lowerTagged(*Tagged);
+    } else if (auto Bounds = DS.getAsAnchor<BoundAnchor>(Call)) {
+      Lowered = lowerBound(*Bounds);
+    } else if (auto ID = DS.getAsAnchor<GetIDAnchor>(Call)) {
+      Lowered = lowerGetID(*ID);
+    } else if (auto Source = DS.getAsAnchor<SourceAnchor>(Call)) {
+      // Check plans can name sources outside SSA; erase them after consumers.
+      Lowered = Source->getSource();
+    } else if (auto Start = DS.getAsAnchor<VAStartAnchor>(Call)) {
+      lowerVAStart(cast<IntrinsicInst>(Start->getTarget()));
+    } else if (auto Setjmp = DS.getAsAnchor<SetjmpAnchor>(Call)) {
+      lowerSetjmp(cast<CallBase>(Setjmp->getTarget()));
+    } else if (auto Exit = DS.getAsAnchor<FunctionExitAnchor>(Call)) {
+      lowerFunctionExit(Exit->getTarget());
+    } else if (auto Validation = DS.getAsAnchor<ValidateArithAnchor>(Call)) {
+      lowerArithmeticValidation(*Validation);
+    } else if (auto Special = DS.getAsAnchor<SpecialStripAnchor>(Call)) {
+      lowerSpecialStripCall(cast<CallBase>(Special->getTarget()));
+    } else if (auto Libc = DS.getAsAnchor<LibcCallAnchor>(Call)) {
+      lowerLibcCall(Libc->getTarget());
+    } else if (DS.getAsAnchor<LoopPreheaderAnchor>(Call)) {
+      // No runtime operation: check anchors already record their placement.
+    } else {
+      continue;
+    }
+    if (Lowered) {
+      Call->replaceAllUsesWith(Lowered);
+    }
+    Anchor(DS, Call).erase();
   }
 
   assert(PTA.PlaceablePtrChecks.empty() &&
          "all optimized check facts should be consumed by lowering");
 
-  // Preheader markers are needed through check lowering because they are the
-  // selected insertion points for loop prechecks.
-  for (auto Marker : DS.collectAnchors<LoopPreheaderAnchor>(F)) {
-    Marker.erase();
-  }
-
-  // Srcs after sinks so the sinks see any writes
-  // Keep source-backed GetID requests alive until queued range checks have
-  // consumed their raw Value pointers. Resolve their IR uses at the end.
-  DenseMap<Value *, Value *> AllocatedSourceIDs = lowerSources();
-
-  for (TaggedAnchor Tagged : DS.collectAnchors<TaggedAnchor>(F)) {
-    Tagged.Call->replaceAllUsesWith(lowerTagged(Tagged));
-    Tagged.erase();
-  }
-
-  for (TagAnchor Tag : DS.collectAnchors<TagAnchor>(F)) {
-    Value *Tagged = lowerTag(Tag);
-    Tag.Call->replaceAllUsesWith(Tagged);
-    Tag.erase();
-  }
-
-  // Function exits need source-lowering state. Lower exits and libc markers
-  // before range-check CFG insertion so actuallyAddCheck is the last CFG
-  // mutation in this pass.
-  for (auto Ret : DS.collectAnchors<FunctionExitAnchor>(F)) {
-    lowerFunctionExit(Ret.getPositionedInstruction());
-    Ret.erase();
-  }
-
-  for (auto Libc : DS.collectAnchors<LibcCallAnchor>(F)) {
-    lowerLibcCall(Libc.getPositionedInstruction());
-    Libc.erase();
-  }
-
-  // Range checks split blocks, so keep them as the final queued
-  // check-lowering step.
-  for (const RangeCheckInfo &Elt : RangeChecks) {
-    actuallyAddCheck(Elt);
-  }
-
-  for (BoundAnchor Bounds : DS.collectAnchors<BoundAnchor>(F)) {
-    Bounds.Call->replaceAllUsesWith(lowerBound(Bounds));
-    Bounds.erase();
-  }
-
-  for (GetIDAnchor ID : DS.collectAnchors<GetIDAnchor>(F)) {
-    Value *ResolvedID;
-    if (AllocatedSourceIDs.contains(ID.Call)) {
-      ResolvedID = AllocatedSourceIDs.at(ID.Call);
-    } else {
-      ResolvedID = lowerGetID(ID);
-    }
-    ID.Call->replaceAllUsesWith(ResolvedID);
-    ID.erase();
-  }
   // Add the ABI-only operand after discovery and boundary rewriting, so it
   // does not affect instrumentation of the original call's arguments.
+  // Strip-only callers also need it when calling an instrumented va_start.
   appendVarargSentinels();
 }
 
@@ -1434,13 +1383,13 @@ void PTSanLowerer::actuallyAddCheck(const RangeCheckInfo &CI) {
   MDNode *BW = MDB.createBranchWeights(1, 1000);
 
   Instruction *ThenTerm =
-      SplitBlockAndInsertIfThen(CI.OutOfRange, CI.IP.getIP(), false, BW, &PTA.DTU, &PTA.LI);
+      SplitBlockAndInsertIfThen(CI.OutOfRange, CI.IP.getIP(), ClAbortOnError,
+                                BW, &PTA.DTU, &PTA.LI);
   PTSanIRB IRB(DS, ThenTerm);
   Value *CheckID = ConstantInt::get(DS.U32Ty, CI.CheckID);
 
   if (CI.Min->getType()->isVectorTy()) {
     IRB.CreateCall(DS.ReportVectorError, {CheckID, FunctionID});
-    return;
   } else {
     std::string Desc = ChkTyToString(CI.Type);
     llvm::Value *DescPtr = IRB.CreateGlobalStringPtr(Desc);
@@ -1458,24 +1407,23 @@ bool isUntaggedConstantPtr(Value *V) {
 }
 
 static bool isUntaggedStripValue(Value *V) {
-  if (isUntaggedConstantPtr(V) || isa<ConstantInt>(V)) {
+  // Preserve explicit code addresses and literals. This does not imply that
+  // stripping an unknown value with the same bits would leave it unchanged.
+  if (isa<Function>(V) || isUntaggedConstantPtr(V) || isa<ConstantInt>(V)) {
     return true;
   }
 
   if (auto *PTI = dyn_cast<PtrToIntOperator>(V)) {
-    return isUntaggedConstantPtr(PTI->getPointerOperand());
+    Value *Pointer = PTI->getPointerOperand();
+    return isa<Function>(Pointer) || isUntaggedConstantPtr(Pointer);
   }
 
   return false;
 }
 
-Value *PTSanLowerer::lowerStrip(StripAnchor Strip) {
+Value *PTSanLowerer::lowerID16Strip(ID16StripAnchor Strip) {
   Value *V = Strip.getValue();
-  if (ClNoStrip) {
-    return V;
-  }
-
-  // PTSan doesn't strip constants (mostly null, but `inttoptr -1` is possible).
+  // Preserve explicit code addresses and literal pointers (including -1).
   if (isUntaggedStripValue(V)) {
     return V;
   }
@@ -1492,7 +1440,7 @@ Value *PTSanLowerer::lowerStrip(StripAnchor Strip) {
     // operand so the backend can share its materialization between strips.
     auto *FT = FunctionType::get(DS.U64Ty, {DS.U64Ty, DS.U64Ty}, false);
     auto *Asm = InlineAsm::get(FT, "andq $2, $0", "=r,0,r,~{flags}", false);
-    Value *Bits = IsScalarPointer ? IRB.CreatePtrToInt(V, DS.U64Ty) : V;
+    Value *Bits = materializeAsInt(IRB, V);
     CallInst *Raw = IRB.CreateCall(Asm, {Bits, DS.AddrMask},
                                   V->getName() + ".true.bits");
     Raw->setDoesNotAccessMemory();
@@ -1510,23 +1458,59 @@ Value *PTSanLowerer::lowerStrip(StripAnchor Strip) {
   assert(Strip.isPointerStrip() && "expected pointer or integer strip anchor");
 
   Type *MaskTy = V->getType()->getWithNewType(DS.U64Ty);
-  Value *Mask = PTA.PTU.splatToMatchType(DS.AddrMask, MaskTy);
+  Value *Mask = PTA.PTU.splatToMatchType(DS.AddrMask, MaskTy, Strip.Call);
 
   Function *PMFn = Intrinsic::getDeclaration(F.getParent(), Intrinsic::ptrmask,
                                              {V->getType(), Mask->getType()});
   return IRB.CreateCall(PMFn, {V, Mask}, V->getName() + ".true");
 }
 
+// Pseudo-IR; bias = object_base - origin comes from the explicit base operand:
+//   bits = ptrtoint(value)
+//   payload = bits & 0xffffffff
+//   decoded = bias + payload
+//   encoded = signed(bits) < -1
+//   result = inttoptr(select(encoded, decoded, bits))
+// Unconditional strict decoding omits the comparison/select and returns decoded.
+// Function symbols and literal pointers are left unchanged.
+// Integer strips omit the pointer casts. Vectors use the same operations
+// lane-wise, splatting a scalar bias when necessary.
+Value *PTSanLowerer::lowerID32Strip(ID32StripAnchor Strip) {
+  Value *V = Strip.getValue();
+  // Preserve explicit code addresses and literal pointers (including -1).
+  if (isUntaggedStripValue(V)) {
+    return V;
+  }
+
+  PTSanIRB IRB(DS, Strip.Call);
+  markIRAsFrom(IRB, "ptsan.ir.lowerStrip");
+
+  Value *Bits = materializeAsInt(IRB, V);
+  Type *IntTy = Bits->getType();
+  // Decoding consumes an explicit anchor operand; it never loads metadata itself.
+  Value *Bias = PTA.PTU.splatToMatchType(Strip.getBaseBound().Call, IntTy,
+                                       Strip.Call);
+  Value *Payload = IRB.CreateZExt(
+      IRB.CreateTrunc(Bits, IntTy->getWithNewType(DS.U32Ty)), IntTy);
+  Value *Raw = IRB.CreateAdd(Bias, Payload);
+  if (usesConditionalID32Decode()) {
+    Value *IsEnriched = IRB.CreateICmpSLT(Bits, ConstantInt::getSigned(IntTy, -1));
+    Raw = IRB.CreateSelect(IsEnriched, Raw, Bits);
+  }
+  return Strip.isPointerStrip() ? IRB.CreateIntToPtr(Raw, V->getType()) : Raw;
+}
+
 Value *PTSanLowerer::lowerTagged(TaggedAnchor Tagged) {
   return Tagged.getValue();
 }
 
-Value *PTSanLowerer::lowerTag(TagAnchor Tag) {
+// Pseudo-IR, with value already stripped and id widened to u64:
+//   bits = ptrtoint(value)
+//   tag = id << 48
+//   result = inttoptr(bits | tag)
+// Vectors use the same operations lane-wise, splatting a scalar ID if needed.
+Value *PTSanLowerer::lowerID16Tag(ID16TagAnchor Tag) {
   Value *V = Tag.getValue();
-  if (ClNoStrip) {
-    return V;
-  }
-
   PTSanIRB IRB(DS, Tag.Call);
   markIRAsFrom(IRB, "ptsan.ir.lowerTag");
 
@@ -1535,13 +1519,58 @@ Value *PTSanLowerer::lowerTag(TagAnchor Tag) {
   Type *IntTy = V->getType()->getWithNewType(DS.U64Ty);
 
   Value *ValueBits = IRB.CreatePtrToInt(V, IntTy, V->getName() + ".asint");
-  Value *ID = PTA.PTU.splatToMatchType(Tag.getID(), IntTy);
+  Value *ID = PTA.PTU.splatToMatchType(Tag.getID(), IntTy, Tag.Call);
   Value *TagBits = IRB.CreateShl(ID, ConstantInt::get(ID->getType(), 48),
                                  V->getName() + ".tagbits");
   Value *TaggedBits =
       IRB.CreateOr(ValueBits, TagBits, V->getName() + ".tagged.asint");
   return IRB.CreateIntToPtr(TaggedBits, V->getType(),
                             V->getName() + ".tagged");
+}
+
+// Pseudo-IR, with value stripped and id/bias supplied by anchor operands:
+//   bits = ptrtoint(value)
+//   payload = bits - bias
+//   tag = id << 32
+//   fits = payload <= 0xffffffff
+//   candidate = tag | payload
+//   packed = select(fits, candidate, fallback)
+//   result = inttoptr(select(id == 0, bits, packed))
+// Arithmetic is u64; fits rejects negative and oversized payloads alike.
+// fallback is zero in strict mode and bits otherwise. The final zero-ID
+// select preserves never-tagged pointers. Vectors work lane-wise, splatting
+// scalar ID/base operands as needed. bias = object_base - origin, so payload
+// includes the allocation's origin.
+// Marked modes allocate high-half IDs, so the tag already contains the marker.
+// Strict mode omits the runtime zero-ID passthrough unless mixed decoding is
+// enabled. This does not change ID zero's empty bounds. Literal pointers are
+// left unchanged.
+Value *PTSanLowerer::lowerID32Tag(ID32TagAnchor Tag) {
+  Value *V = Tag.getValue();
+  // Preserve null and literal sentinels by value, not by allocation ID.
+  if (isUntaggedConstantPtr(V)) {
+    return V;
+  }
+
+  PTSanIRB IRB(DS, Tag.Call);
+  markIRAsFrom(IRB, "ptsan.ir.lowerTag");
+
+  Type *IntTy = V->getType()->getWithNewType(DS.U64Ty);
+  Value *ValueBits = IRB.CreatePtrToInt(V, IntTy, V->getName() + ".asint");
+  Value *ID = PTA.PTU.splatToMatchType(Tag.getID(), IntTy, Tag.Call);
+  Value *Bias = PTA.PTU.splatToMatchType(Tag.getBaseBound().Call, IntTy, Tag.Call);
+  Value *Payload = IRB.CreateSub(ValueBits, Bias);
+  Value *TagBits = IRB.CreateShl(ID, 32);
+  Value *Fits = IRB.CreateICmpULE(Payload, ConstantInt::get(IntTy, UINT32_MAX));
+  Value *Fallback = ClStrictMode ? ConstantInt::get(IntTy, 0) : ValueBits;
+  // A non-fitting payload is discarded, so the candidate needs no payload mask.
+  Value *Packed = IRB.CreateSelect(
+      Fits, IRB.CreateOr(TagBits, Payload), Fallback);
+  if (usesConditionalID32Decode()) {
+    Packed = IRB.CreateSelect(IRB.CreateICmpEQ(ID, ConstantInt::get(IntTy, 0)),
+                              ValueBits, Packed);
+  }
+  return IRB.CreateIntToPtr(Packed, V->getType());
 }
 
 static DIScope *getOrCreateInlinee(DIBuilder &DIB,
@@ -1552,8 +1581,9 @@ static DIScope *getOrCreateInlinee(DIBuilder &DIB,
     for (auto *Op : NM->operands()) {
       auto *T = cast<MDNode>(Op);
       if (auto *S = dyn_cast<MDString>(T->getOperand(0));
-          S && S->getString() == Name)
+          S && S->getString() == Name) {
         return cast<DIScope>(T->getOperand(1));
+      }
     }
   }
 

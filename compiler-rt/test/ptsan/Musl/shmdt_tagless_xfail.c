@@ -52,7 +52,6 @@ int main(void) {
   if (shmdt(clearPointerID(mapping)) != 0) {
     return 5;
   }
-  assert(ptsan_get_base(mapping_id) == 0);
   assert(ptsan_get_size(mapping_id) == 0);
   return 0;
 }

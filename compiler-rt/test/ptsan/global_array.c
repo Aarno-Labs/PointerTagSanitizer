@@ -1,10 +1,20 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -o %exe %s
-// RUN: ./%exe 30 2> out.txt
+// RUN: not ./%exe 30 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 21 2> out.txt
+// RUN: not ./%exe 21 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 20 2> out.txt
+// RUN: not ./%exe 20 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=BAD
+// RUN: ./%exe 19 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
+
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: not ./%exe 30 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=BAD
+// RUN: not ./%exe 21 2> out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=BAD
+// RUN: not ./%exe 20 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 // RUN: ./%exe 19 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD

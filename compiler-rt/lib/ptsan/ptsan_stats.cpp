@@ -26,7 +26,7 @@ volatile u64 ptsan_called_checks[END_TYPE];
 volatile u64 ptsan_n_alloca_fn_calls[5];
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
-void ptsan_log_alloca_info(char *FnName, u16 id, bool IsLocal, bool ShortPath) {
+void ptsan_log_alloca_info(char *FnName, PTSanID id, bool IsLocal, bool ShortPath) {
   // Update starts
   __atomic_fetch_add(&ptsan_total_allocas, 1, __ATOMIC_RELAXED);
   if (IsLocal) {
@@ -55,8 +55,8 @@ void ptsan_log_check_called(u32 CheckType) {
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE NOINLINE __attribute__((optnone))
 void ptsan_validate_arithmetic(u64 A, u64 B) {
-  u16 idA = get_id(A);
-  u16 idB = get_id(B);
+  PTSanID idA = get_id(A);
+  PTSanID idB = get_id(B);
   if (A == 0 || B == 0 || A == (u64)-1 || B == (u64)-1) {
     return;
   }

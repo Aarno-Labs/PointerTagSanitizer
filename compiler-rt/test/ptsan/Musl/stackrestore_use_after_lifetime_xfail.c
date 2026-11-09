@@ -22,6 +22,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "../Inputs/ptsan_test_interface.h"
+
 static volatile unsigned length = 37;
 static volatile uintptr_t escaped;
 
@@ -45,11 +47,11 @@ int main(int argc, char **argv) {
     write_byte(active, 'B');
     uintptr_t old = escaped;
     uintptr_t current = (uintptr_t)active;
-    uintptr_t address_mask = ((uintptr_t)1 << 48) - 1;
-    assert((old & address_mask) == (current & address_mask));
-    assert((old >> 48) != 0 && (old >> 48) != 0xffff);
-    assert((current >> 48) != 0 && (current >> 48) != 0xffff);
-    assert((old >> 48) != (current >> 48));
+    assert(ptsan_get_address((void *)old) ==
+           ptsan_get_address((void *)current));
+    assert(get_id(old) != 0 && get_id(old) != ptsan_default_id());
+    assert(get_id(current) != 0 && get_id(current) != ptsan_default_id());
+    assert(get_id(old) != get_id(current));
     fprintf(stderr, "stack storage reused\n");
     if (argc > 1) {
       write_byte((char *)old, 'X');

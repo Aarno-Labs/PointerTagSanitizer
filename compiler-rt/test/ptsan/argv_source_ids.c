@@ -23,6 +23,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include "Inputs/ptsan_test_interface.h"
 
 __attribute__((noinline)) static uintptr_t pointer_bits(char **p) {
   return (uintptr_t)p;
@@ -30,8 +31,8 @@ __attribute__((noinline)) static uintptr_t pointer_bits(char **p) {
 
 int main(int argc, char **argv) {
   uintptr_t bits = pointer_bits(argv);
-  assert(bits >> 48);
-  assert(pointer_bits(argv + 1) >> 48 == bits >> 48);
+  assert(get_id(bits));
+  assert(get_id(pointer_bits(argv + 1)) == get_id(bits));
   assert(argv[0] != NULL);
   assert(argv[argc] == NULL);
   // A volatile load keeps the access itself, even though only its execution

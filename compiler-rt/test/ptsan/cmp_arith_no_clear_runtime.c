@@ -5,8 +5,8 @@
 // complain if mismatched IDs actually reach pointer subtraction.
 //
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -O2 -g -fno-discard-value-names \
-// RUN:   -mllvm -ptsan-runtime-validate \
+// RUN: %clang_ptsan_plain -O2 -g -fno-discard-value-names \
+// RUN:   -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-runtime-validate-arith \
 // RUN:   -mllvm -ptsan-clear-ids-on-cmp=0 \
 // RUN:   -mllvm -ptsan-clear-ids-on-arith=0 \
@@ -23,6 +23,7 @@
 // DIFF-OUT: different-object done
 // DIFF-ERR: WARNING: Pointer-arith-or-compare pointers with different IDs
 
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +41,13 @@ __attribute__((noinline)) static intptr_t ptr_sub(char *A, char *B) {
   return A - B;
 }
 
+__attribute__((noinline)) static intptr_t adjusted_sub(char *A, char *B,
+                                                     uintptr_t N) {
+  Sink += (unsigned char)*A;
+  Sink += (unsigned char)*B;
+  return (uintptr_t)B - ((uintptr_t)A + N);
+}
+
 __attribute__((noinline)) static void check_same_object(char *Base) {
   int Total = 0;
   for (int I = 0; I < 64; ++I) {
@@ -54,6 +62,7 @@ __attribute__((noinline)) static void check_same_object(char *Base) {
 
     Total += direct_cmp(A, B);
     Total += (int)ptr_sub(B, A);
+    assert(adjusted_sub(Base, Base + 32, I & 15) == 32 - (I & 15));
   }
 
   Sink += Total;

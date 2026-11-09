@@ -12,13 +12,13 @@ target triple = "x86_64-unknown-linux-gnu"
 
 define i1 @direct_pointer_cmp(ptr %p, ptr %q) {
 ; DISCOVERY-NOCLEAR-LABEL: define i1 @direct_pointer_cmp(
-; DISCOVERY-NOCLEAR-DAG: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p)
-; DISCOVERY-NOCLEAR-DAG: [[Q:%.*]] = call ptr @__ptsan_strip(ptr %q)
+; DISCOVERY-NOCLEAR-DAG: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p
+; DISCOVERY-NOCLEAR-DAG: [[Q:%.*]] = call ptr @__ptsan_strip(ptr %q
 ; DISCOVERY-NOCLEAR: icmp ult ptr [[P]], [[Q]]
 ;
 ; DISCOVERY-CLEAR-LABEL: define i1 @direct_pointer_cmp(
-; DISCOVERY-CLEAR-DAG: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p)
-; DISCOVERY-CLEAR-DAG: [[Q:%.*]] = call ptr @__ptsan_strip(ptr %q)
+; DISCOVERY-CLEAR-DAG: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p
+; DISCOVERY-CLEAR-DAG: [[Q:%.*]] = call ptr @__ptsan_strip(ptr %q
 ; DISCOVERY-CLEAR: icmp ult ptr [[P]], [[Q]]
 entry:
   %cmp = icmp ult ptr %p, %q
@@ -31,13 +31,37 @@ define i1 @ptrtoint_cmp(ptr %p, ptr %q) {
 ; DISCOVERY-NOCLEAR: icmp eq i64 %pi, %qi
 ;
 ; DISCOVERY-CLEAR-LABEL: define i1 @ptrtoint_cmp(
-; DISCOVERY-CLEAR-DAG: [[PI:%.*]] = call i64 @__ptsan_strip_i64(i64 %pi), !ptsan.stripped {{![0-9]+}}
-; DISCOVERY-CLEAR-DAG: [[QI:%.*]] = call i64 @__ptsan_strip_i64(i64 %qi), !ptsan.stripped {{![0-9]+}}
-; DISCOVERY-CLEAR: icmp eq i64 [[PI]], [[QI]]
+; DISCOVERY-CLEAR-DAG: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p
+; DISCOVERY-CLEAR-DAG: [[Q:%.*]] = call ptr @__ptsan_strip(ptr %q
+; DISCOVERY-CLEAR-DAG: %pi = ptrtoint ptr [[P]] to i64
+; DISCOVERY-CLEAR-DAG: %qi = ptrtoint ptr [[Q]] to i64
+; DISCOVERY-CLEAR: icmp eq i64 %pi, %qi
 entry:
   %pi = ptrtoint ptr %p to i64
   %qi = ptrtoint ptr %q to i64
   %cmp = icmp eq i64 %pi, %qi
+  ret i1 %cmp
+}
+
+define i1 @ptrtoint_cast_chain_cmp(ptr %p, ptr %q) {
+; DISCOVERY-NOCLEAR-LABEL: define i1 @ptrtoint_cast_chain_cmp(
+; DISCOVERY-NOCLEAR-NOT: call ptr @__ptsan_strip
+; DISCOVERY-NOCLEAR: icmp slt i32 %pi32, %qi32
+;
+; DISCOVERY-CLEAR-LABEL: define i1 @ptrtoint_cast_chain_cmp(
+; DISCOVERY-CLEAR-DAG: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p
+; DISCOVERY-CLEAR-DAG: [[Q:%.*]] = call ptr @__ptsan_strip(ptr %q
+; DISCOVERY-CLEAR-DAG: %pi = ptrtoint ptr [[P]] to i64
+; DISCOVERY-CLEAR-DAG: %qi = ptrtoint ptr [[Q]] to i64
+; DISCOVERY-CLEAR: %pi32 = trunc i64 %pi to i32
+; DISCOVERY-CLEAR: %qi32 = trunc i64 %qi to i32
+; DISCOVERY-CLEAR: icmp slt i32 %pi32, %qi32
+entry:
+  %pi = ptrtoint ptr %p to i64
+  %qi = ptrtoint ptr %q to i64
+  %pi32 = trunc i64 %pi to i32
+  %qi32 = trunc i64 %qi to i32
+  %cmp = icmp slt i32 %pi32, %qi32
   ret i1 %cmp
 }
 
@@ -60,12 +84,13 @@ entry:
 define i1 @late_no_clear_direct_cmp_can_hoist(ptr %base) {
 ; LATE-NOCLEAR-LABEL: define i1 @late_no_clear_direct_cmp_can_hoist(
 ; LATE-NOCLEAR: entry:
-; LATE-NOCLEAR-NEXT: [[BASE_STRIP:%.*]] = call ptr @__ptsan_strip(ptr %base), !ptsan.stripped {{![0-9]+}}
+; LATE-NOCLEAR: [[BASE_STRIP:%.*]] = call ptr @__ptsan_strip(ptr %base
+; LATE-NOCLEAR-SAME: ), !ptsan.stripped {{![0-9]+}}
 ; LATE-NOCLEAR: %lhs = getelementptr i8, ptr [[BASE_STRIP]], i64 8, !ptsan.stripped {{![0-9]+}}
 ; LATE-NOCLEAR: %rhs = getelementptr i8, ptr [[BASE_STRIP]], i64 16, !ptsan.stripped {{![0-9]+}}
 ; LATE-NOCLEAR: %cmp = icmp ult ptr %lhs, %rhs
-; LATE-NOCLEAR-NOT: call ptr @__ptsan_strip(ptr %lhs)
-; LATE-NOCLEAR-NOT: call ptr @__ptsan_strip(ptr %rhs)
+; LATE-NOCLEAR-NOT: call ptr @__ptsan_strip(ptr %lhs
+; LATE-NOCLEAR-NOT: call ptr @__ptsan_strip(ptr %rhs
 entry:
   %lhs = getelementptr i8, ptr %base, i64 8
   %rhs = getelementptr i8, ptr %base, i64 16

@@ -1,7 +1,8 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -O2 -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -o %exe %s
 // RUN: ./%exe 4 2> err && FileCheck %s --check-prefixes=GOOD,STATS < err
-// RUN: ./%exe 5 2> err && FileCheck %s --check-prefixes=BAD,STATS < err
+// RUN: not ./%exe 5 2> err
+// RUN: FileCheck %s --check-prefix=BAD < err
 
 // GOOD-NOT: Found bad
 // BAD: Found bad PREANALYZED_LOOP access

@@ -3,7 +3,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// RUN: %clang_raw -fsanitize=ptsan -O2 -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O2 -fno-discard-value-names \
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
 // RUN:   -mllvm -ptsan-disable \
 // RUN:   -S -emit-llvm -o - %s | FileCheck %s \

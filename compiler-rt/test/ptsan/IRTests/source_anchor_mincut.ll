@@ -69,8 +69,8 @@ entry:
 
 ; LOWER-LABEL: define void @repeated_ids(
 ; LOWER-NOT: lshr
-; LOWER: call i16 @ptsan_get_stack_ids_1(ptr nonnull %buffer, i64 4)
-; LOWER-NOT: call i16 @ptsan_get_stack_ids
+; LOWER: call void @ptsan_get_stack_ids(ptr {{[^,]+}}, i64 1)
+; LOWER-NOT: call {{.*}} @ptsan_get_stack_ids
 ; LOWER-NOT: inttoptr
 ; LOWER-NOT: lshr
 ; LOWER: invoke void @consume_id(i64 [[ID:%.*]])

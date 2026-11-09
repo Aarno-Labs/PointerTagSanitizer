@@ -7,7 +7,7 @@
 // reads and must be captured at the original preheader rather than
 // reconstructed from pointer/type operands.
 //
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O3 -g -fno-discard-value-names \
 // RUN:   -mllvm -ptsan-disable \
 // RUN:   -S -emit-llvm -o - %s | FileCheck %s \
 // RUN:   --implicit-check-not=ptsan.value.id

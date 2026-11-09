@@ -21,7 +21,7 @@
 
 #define NUM_SAVED_IDS 32
 // Saved IDs per function. Index is arg index when relevant.
-thread_local u16 SavedIDs[NUM_SAVED_IDS];
+thread_local PTSanID SavedIDs[NUM_SAVED_IDS];
 
 #define SAVE_AND_CLEAR(elt, idx) \
   CHECK(idx < NUM_SAVED_IDS); \

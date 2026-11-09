@@ -13,7 +13,17 @@
 // RUN: %clang_ptsan -O2 -fno-builtin -mllvm -ptsan-abort-on-error -DZERO_ID %s -o %t.zero
 // RUN: %clang_ptsan -O2 -fno-builtin -mllvm -ptsan-abort-on-error -DDEFAULT_ID %s -o %t.default
 // RUN: args=''; for i in 0 1 2 3 4 5 6 7 8 9 10 11 12; do \
-// RUN:   %run %t.zero $args && %run %t.default $args || exit 1; \
+// RUN:   %run %t.zero $args && %run %t.default $args && \
+// RUN:   true || exit 1; \
+// RUN:   args="$args x"; \
+// RUN: done
+
+// RUN: %clang_ptsan_id32 -O2 -fno-builtin %s -o %t.id32
+// RUN: %clang_ptsan_id32 -O2 -fno-builtin -DBAD_SOURCE %s -o %t.id32.bad
+// RUN: %clang_ptsan_id32 -O2 -fno-builtin -DZERO_ID %s -o %t.id32.zero
+// RUN: args=''; for i in 0 1 2 3 4 5 6 7 8 9 10 11 12; do \
+// RUN:   %run %t.id32 $args && %run %t.id32.zero $args && \
+// RUN:   not %run %t.id32.bad $args 2>&1 | FileCheck %s || exit 1; \
 // RUN:   args="$args x"; \
 // RUN: done
 
@@ -25,6 +35,9 @@
 #define _GNU_SOURCE
 #include "Inputs/ptsan_test_interface.h"
 #include <assert.h>
+#ifdef STRICT_RESERVED_ID
+#include <stdio.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 
@@ -41,7 +54,7 @@ int main(int argc, char **argv) {
 #endif
   char *source = storage;
 #if defined(ZERO_ID) || defined(DEFAULT_ID)
-  uintptr_t address = (uintptr_t)source & ((UINT64_C(1) << 48) - 1);
+  uintptr_t address = ptsan_get_address(source);
 #ifdef DEFAULT_ID
   address |= (uintptr_t)ptsan_default_id() << 48;
 #endif
@@ -58,6 +71,10 @@ int main(int argc, char **argv) {
   assert(strnlen(source, 0) == 0);
   assert(memchr(source, 'z', 0) == NULL);
   assert(strncmp(source, comparison, 0) == 0);
+
+#ifdef STRICT_RESERVED_ID
+  fputs("Checking nonzero string operation\n", stderr);
+#endif
 
   switch (argc - 1) {
   case 0:

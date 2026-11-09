@@ -12,6 +12,8 @@
 
 namespace llvm::ptsan {
 
+// Choose pointer representations, simplify conversions, and complete their
+// ID32 decoding dependencies before returning.
 void runMinCutStripIDHoisting(PTSanAnalysisState &PTA);
 
 } // namespace llvm::ptsan

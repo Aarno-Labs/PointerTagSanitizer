@@ -1,6 +1,7 @@
+// LAM and the 32-bit encoding are mutually exclusive.
 // REQUIRES: ptsan-lam-u48-runtime
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -g -O2 -fno-discard-value-names -mllvm -ptsan-lam -pthread -I%crt_src/include -o %exe %s
+// RUN: %clang_raw -fsanitize=ptsan -g -O2 -fno-discard-value-names -fsanitize-ptsan-lam -pthread -I%crt_src/include -o %exe %s
 // RUN: ./%exe
 
 #include <assert.h>

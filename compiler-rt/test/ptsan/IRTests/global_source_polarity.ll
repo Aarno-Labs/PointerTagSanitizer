@@ -4,11 +4,18 @@
 ; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 ;
 ; RUN: %opt_ptsan -ptsan-nochecks -ptsan-stop-after=lowering %s | \
-; RUN:   FileCheck %s --check-prefixes=CHECK,TLS \
+; RUN:   FileCheck %s --check-prefixes=CHECK,TLS,TLS-DEFAULT \
 ; RUN:   --implicit-check-not=tls_bytes.ptsan.ptr
 ; RUN: %opt_ptsan -ptsan-nochecks -ptsan-no-opts \
 ; RUN:   -ptsan-stop-after=lowering %s | FileCheck %s \
-; RUN:   --check-prefixes=CHECK,TLS --implicit-check-not=tls_bytes.ptsan.ptr
+; RUN:   --check-prefixes=CHECK,TLS,TLS-DEFAULT --implicit-check-not=tls_bytes.ptsan.ptr
+
+; RUN: %opt_ptsan -ptsan-32-bit-ids -ptsan-nochecks -ptsan-stop-after=lowering %s | \
+; RUN:   FileCheck %s --check-prefixes=CHECK,TLS,TLS-ID32 \
+; RUN:   --implicit-check-not=tls_bytes.ptsan.ptr
+; RUN: %opt_ptsan -ptsan-32-bit-ids -ptsan-nochecks -ptsan-no-opts \
+; RUN:   -ptsan-stop-after=lowering %s | FileCheck %s \
+; RUN:   --check-prefixes=CHECK,TLS,TLS-ID32 --implicit-check-not=tls_bytes.ptsan.ptr
 ;
 ; A global has two representations available without a conversion: the raw
 ; GlobalValue is stripped, while its proxy contains the tagged pointer. Global
@@ -91,11 +98,17 @@ entry:
 
 ; TLS-LABEL: define void @tls_tagged(
 ; TLS: [[ADDRESS:%.*]] = call ptr @llvm.threadlocal.address.p0(ptr @tls_bytes)
-; TLS: [[ID:%.*]] = load i16, ptr @tls_bytes.ptsan.id
-; TLS: [[ID64:%.*]] = zext i16 [[ID]] to i64
+; TLS: [[ID:%.*]] = load i{{16|32}}, ptr @tls_bytes.ptsan.id
+; TLS: [[ID64:%.*]] = zext i{{16|32}} [[ID]] to i64
+; TLS-ID32: [[BASE:%.*]] = load i64, ptr
 ; TLS: [[RAW:%.*]] = ptrtoint ptr [[ADDRESS]] to i64
-; TLS: [[TAG:%.*]] = shl i64 [[ID64]], 48
-; TLS: [[TAGGED_INT:%.*]] = or i64 [[RAW]], [[TAG]]
+; TLS-DEFAULT: [[TAG:%.*]] = shl i64 [[ID64]], 48
+; TLS-DEFAULT: [[TAGGED_INT:%.*]] = or i64 [[RAW]], [[TAG]]
+; TLS-ID32: [[PAYLOAD:%.*]] = sub i64 [[RAW]], [[BASE]]
+; TLS-ID32: [[TAG:%.*]] = shl i64 [[ID64]], 32
+; TLS-ID32: or i64 [[TAG]],
+; TLS-ID32: [[ZERO:%.*]] = icmp eq i64 [[ID64]], 0
+; TLS-ID32: [[TAGGED_INT:%.*]] = select i1 [[ZERO]], i64 [[RAW]], i64 {{%.*}}
 ; TLS: [[TAGGED:%.*]] = inttoptr i64 [[TAGGED_INT]] to ptr
 ; TLS: call void @escape(ptr [[TAGGED]])
 ; TLS: ret void

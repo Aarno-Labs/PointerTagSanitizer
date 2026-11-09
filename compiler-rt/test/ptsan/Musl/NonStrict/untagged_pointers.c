@@ -4,8 +4,12 @@
 //
 // RUN: %ptsan_musl_nonstrict -fno-builtin -o %t %s
 // RUN: %run %t
+//
+// RUN: %ptsan_musl_id32_nonstrict -fno-builtin -o %t.id32 %s
+// RUN: %run %t.id32
 
 // Non-strict mode accepts raw pointers both in the application and in libc.
+#include "../../Inputs/ptsan_test_interface.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -14,7 +18,7 @@
 int main(void) {
   char *buffer = malloc(16);
   assert(buffer);
-  char *raw = (char *)((uintptr_t)buffer & UINT64_C(0x0000ffffffffffff));
+  char *raw = (char *)ptsan_get_address(buffer);
   raw[0] = 'x';
   raw[1] = '\0';
   assert(strlen(raw) == 1);

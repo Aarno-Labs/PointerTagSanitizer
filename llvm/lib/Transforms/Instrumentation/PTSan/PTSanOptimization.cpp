@@ -38,6 +38,13 @@ optional<uint64_t> getStaticGlobalSize(const GlobalVariable *GV,
     return nullopt;
   }
 
+  // ELF section boundaries are addresses, not objects of their declared type.
+  // This also applies in TUs that only consume the owning TU's tagged proxies.
+  if (GV->isDeclaration() && (GV->getName().starts_with("__start_") ||
+                              GV->getName().starts_with("__stop_"))) {
+    return nullopt;
+  }
+
   TypeSize Size = DL.getTypeAllocSize(GV->getValueType());
   if (Size.isScalable()) {
     return nullopt;
@@ -130,10 +137,13 @@ bool PTSanOptimizer::isBlockingCall(Instruction &I) {
     return false;
   }
 
-  // Don't break on functions which won't free or won't return
+  // A noreturn call has no continuation here, but a noreturn invoke can
+  // deallocate memory and then unwind into code that uses its stale pointer.
+  // This is not a problem for longjmp because setjmp is a hoist barrier
   Function *Callee = CB->getCalledFunction();
   if (Callee && (Callee->hasFnAttribute(Attribute::NoFree) ||
-                 Callee->hasFnAttribute(Attribute::NoReturn))) {
+                 (Callee->hasFnAttribute(Attribute::NoReturn) &&
+                  !isa<InvokeInst>(CB)))) {
     return false;
   }
 
@@ -165,32 +175,11 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
     return nullptr;
   };
 
-  auto getIPForValue = [&](Value *V, bool deallocatable) -> HoistTarget {
-    if (PHINode *PHI = dyn_cast<PHINode>(V)) {
-      Instruction *IP = DS.getFirstRealInsertionPt(*PHI->getParent());
-      return {IP, deallocatable && isBlockingCall(*IP) ? AFTER : BEFORE};
-    }
-
-    if (InvokeInst *II = dyn_cast<InvokeInst>(V)) {
-      // This is invalid, but we need it for dominace
-      // info anyway
-      return {II, AFTER};
-    }
-
-    if (Instruction *I = dyn_cast<Instruction>(V)) {
-      assert(!I->isTerminator());
-      return {I, AFTER};
-    }
-
-    // Value case
-    Instruction *IP = DS.getFirstRealInsertionPt(
-        Start->getParent()->getParent()->getEntryBlock());
-    return {IP, deallocatable && isBlockingCall(*IP) ? AFTER : BEFORE};
-  };
-
   if (ClNoBoundsLoadHoist || ClNoPTSanOpts) {
     return {Start, BEFORE};
   }
+
+  HoistTarget Target = PTU.getInsertionPointForUse(BasePtr, Start);
 
   // In an ideal world without memory deallocations, we'd like to host this to here:
   DBG(errs() << "\tBase is " << *BasePtr << "\n");
@@ -199,11 +188,8 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
   // go straight to the top
   if (isUnfreeableBase(BasePtr)) {
     DBG(errs() << "Got non-concerning buffer " << *BasePtr << "\n");
-    return getIPForValue(BasePtr, false);
+    return Target;
   }
-
-  HoistTarget Target = getIPForValue(BasePtr, true);
-  bool ValidTarget = !(Target.Instr->isTerminator() && Target.Side == AFTER);
 
   DBG(errs() << "Target hoist point is " << *Target.Instr << "\n");
 
@@ -227,16 +213,14 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
                                      ++BasicBlock::reverse_iterator(Target.Instr));
     // If that call exists, we insert after it
     if (Call) {
-      // Call is in the middle of a block so shouldn't be an invoke
-      assert(!isa<InvokeInst>(Call));
+      // Call is strictly before Start in the same block.
+      assert(!Call->isTerminator());
       DBG(errs() << "Got same-block call\n");
       return {Call, AFTER};
     }
 
     // Otherwise we can host all the way to the target
     DBG(errs() << "Same-block safe\n");
-    assert(ValidTarget &&
-      "Invalid target -> target is terminator -> target cannot dominate and be in same block as start");
     return Target;
   }
 
@@ -245,9 +229,8 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
     Instruction *Call = findLastBlockingCall(++BasicBlock::reverse_iterator(Start),
                                      StartBB->rend());
     if (Call) {
-      // Call is between start of block and start so not a terminator,
-      // so not an invoke
-      assert(!isa<InvokeInst>(Call));
+      // Call is between the start of the block and Start.
+      assert(!Call->isTerminator());
       DBG(errs() << "Can't hoist above start block\n");
       return {Call, AFTER};
     }
@@ -265,7 +248,7 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
   }
 
   // Easy-hard case: If there are no poison blocks, we can hoist the whole way
-  if (ValidTarget && PoisonBlocks.empty()) {
+  if (PoisonBlocks.empty()) {
     DBG(errs() << "No call blocks\n");
     return Target;
   }
@@ -282,18 +265,14 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
                                      // increment the end here
                                      ++BasicBlock::reverse_iterator(Target.Instr));
     DBG(errs() << "\tCall for Target Block: " << Call << "\n");
-    if (ValidTarget) {
-      if (Call) {
-        DBG(errs() << "\t\t" << *Call << "\n");
-        // If target block ends in a (potentially freeing) invoke, we can't hoist to it
-        if (!isa<InvokeInst>(Call)) {
-          InsertPoints.push_back({Call, AFTER});
-        }
-      } else {
-        // A nonblocking invoke can be a legal BEFORE insertion point, for
-        // example when it immediately follows a pointer PHI.
-        InsertPoints.push_back(Target);
+    if (Call) {
+      DBG(errs() << "\t\t" << *Call << "\n");
+      // A potentially freeing invoke or callbr prevents insertion in this block.
+      if (!Call->isTerminator()) {
+        InsertPoints.push_back({Call, AFTER});
       }
+    } else {
+      InsertPoints.push_back(Target);
     }
   }
 
@@ -304,12 +283,12 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
     BasicBlock *BB = Node->getBlock();
     Instruction *Call = findLastBlockingCall(BB->rbegin(), BB->rend());
     if (Call) {
-      // A potentially freeing invoke prevents insertion in this block.
-      if (!isa<InvokeInst>(Call)) {
+      // A potentially freeing invoke or callbr prevents insertion in this block.
+      if (!Call->isTerminator()) {
         InsertPoints.push_back({Call, AFTER});
       }
     } else {
-      InsertPoints.push_back({DS.getFirstRealInsertionPt(*BB), BEFORE});
+      InsertPoints.push_back({&*BB->getFirstInsertionPt(), BEFORE});
     }
   }
 
@@ -339,7 +318,7 @@ HoistTarget PTSanOptimizer::hoistBoundsLoad(Instruction *Start,
 
   // Now! We have our list. We want the highest possible insert point. We
   // know that, at worst, we can hoist to the top of StartBB:
-  HoistTarget FinalIP = {DS.getFirstRealInsertionPt(*StartBB), BEFORE};
+  HoistTarget FinalIP = {&*StartBB->getFirstInsertionPt(), BEFORE};
 
   for (HoistTarget Elt : ValidIPs) {
     if (DT.dominates(Elt.Instr, FinalIP.Instr)) {
@@ -359,7 +338,7 @@ PTSanOptimizer::getValidCheckIPs(HoistTarget MustDominate,
   SmallPtrSet<Instruction *, 32> CheckIPs;
   SmallPtrSet<Instruction *, 8> Deps = Range.getDeps(&PTU);
 
-  auto getFirstIPAfterMustDominateInBlock = [&](BasicBlock *BB) {
+  auto getCheckStartInBlock = [&](BasicBlock *BB) {
     Instruction *Start = &*BB->getFirstInsertionPt();
     Instruction *IP = MustDominate.getIP();
     if (IP->getParent() == BB && Start->comesBefore(IP)) {
@@ -387,7 +366,7 @@ PTSanOptimizer::getValidCheckIPs(HoistTarget MustDominate,
       DBG(errs() << "\tSkipping parent block until later\n");
       continue;
     } else {
-      StartIP = getFirstIPAfterMustDominateInBlock(BB)->getIterator();
+      StartIP = getCheckStartInBlock(BB)->getIterator();
     }
 
     for (Instruction &NewIP : make_range(StartIP, BB->end())) {
@@ -615,7 +594,7 @@ bool PTSanOptimizer::mergeSubsumingChecks() {
   auto Checks = DS.collectAnchors<CheckAnchor>(PTA.F);
 
   // Bound anchors -> checks using those bounds.
-  DenseMap<std::pair<Value *, Value *>, SmallVector<CheckAnchor, 4>> M;
+  DenseMap<std::tuple<Value *, Value *, Value *>, SmallVector<CheckAnchor, 4>> M;
   bool Changed = false;
 
   for (CheckAnchor NewAnchor : Checks) {
@@ -629,7 +608,8 @@ bool PTSanOptimizer::mergeSubsumingChecks() {
 
     Value *NewBaseBound = NewCheck.Anchor.getBaseBound().Call;
     Value *NewSpanBound = NewCheck.Anchor.getSpanBound().Call;
-    auto Key = std::make_pair(NewBaseBound, NewSpanBound);
+    Value *NewOrigin = Cl32BitIDs ? NewCheck.Anchor.getOrigin().Call : nullptr;
+    auto Key = std::make_tuple(NewBaseBound, NewSpanBound, NewOrigin);
 
     if (M.contains(Key)) {
       auto &EstablishedChecks = M.at(Key);
@@ -727,7 +707,7 @@ bool PTSanOptimizer::mergeOrderableChecks() {
   auto Checks = DS.collectAnchors<CheckAnchor>(PTA.F);
 
   // Bound anchors -> checks using those bounds.
-  DenseMap<std::pair<Value *, Value *>, SmallVector<CheckAnchor, 4>> M;
+  DenseMap<std::tuple<Value *, Value *, Value *>, SmallVector<CheckAnchor, 4>> M;
   bool Changed = false;
 
   for (CheckAnchor NewAnchor : Checks) {
@@ -743,7 +723,8 @@ bool PTSanOptimizer::mergeOrderableChecks() {
 
     Value *NewBaseBound = NewCheck.Anchor.getBaseBound().Call;
     Value *NewSpanBound = NewCheck.Anchor.getSpanBound().Call;
-    auto Key = std::make_pair(NewBaseBound, NewSpanBound);
+    Value *NewOrigin = Cl32BitIDs ? NewCheck.Anchor.getOrigin().Call : nullptr;
+    auto Key = std::make_tuple(NewBaseBound, NewSpanBound, NewOrigin);
 
     if (M.contains(Key)) {
       auto &EstablishedChecks = M.at(Key);
@@ -886,42 +867,32 @@ void PTSanOptimizer::eraseCheckAnchor(CheckAnchor Anchor) {
 }
 
 void PTSanOptimizer::hoistLoadBoundAnchors() {
-  // Bounds loads at the same site share a placement query. Only bounds
-  // anchors move here; real instructions and ID sources stay put.
-  DenseMap<std::pair<Instruction *, Value *>, HoistTarget> Targets;
   for (LoadBoundAnchor Bounds : DS.collectAnchors<LoadBoundAnchor>(PTA.F)) {
-    // Load-bound IDs remain GetIDAnchors until late optimization.
-    GetIDAnchor ID = *DS.getAsAnchor<GetIDAnchor>(Bounds.getID());
-    Instruction *Start = DS.getNextRealInstruction(Bounds);
-    auto [It, Inserted] = Targets.try_emplace({Start, ID.getBase()});
-    if (Inserted) {
-      It->second = hoistBoundsLoad(Start, ID.getBase());
+    Value *ID = Bounds.getID();
+    Value *HoistBase = ID;
+    if (auto GetID = DS.getAsAnchor<GetIDAnchor>(ID)) {
+      HoistBase = GetID->getBase();
     }
-    HoistTarget Target = It->second;
+    HoistTarget Target = PTU.getFirstCommonInsertionPoint(
+        {hoistBoundsLoad(Bounds.Call, HoistBase),
+         PTU.getInsertionPointForUse(ID, Bounds.Call)});
     if (Bounds.isVector()) {
       Target = PTU.getFirstCommonInsertionPoint(
-          {Target, PTU.getFirstIPAfter(Bounds.getMask())});
+          {Target, PTU.getInsertionPointForUse(Bounds.getMask(), Bounds.Call)});
     }
 
-    Instruction *IP = Target.getIP();
-    if (ID.Call->getParent() == IP->getParent() &&
-        (IP == ID.Call || IP->comesBefore(ID.Call))) {
-      IP = ID.Call->getNextNode();
-    }
-    Bounds.Call->moveBefore(IP);
+    Bounds.Call->moveBefore(Target.getIP());
   }
 }
 
 void PTSanOptimizer::mergeLoadBoundAnchors() {
-  using BoundsKey = std::tuple<Value *, Value *, Instruction *>;
-  DenseMap<BoundsKey, CallInst *> BaseSurvivors;
-  DenseMap<BoundsKey, CallInst *> SpanSurvivors;
+  using BoundsKey = std::tuple<Value *, Value *, Value *, Instruction *>;
+  DenseMap<BoundsKey, CallInst *> Survivors;
 
   for (LoadBoundAnchor Bounds : DS.collectAnchors<LoadBoundAnchor>(PTA.F)) {
     Value *Mask = Bounds.getMask();
-    BoundsKey Key =
-        {Bounds.getID(), Mask, DS.getNextRealInstruction(Bounds)};
-    auto &Survivors = Bounds.isBase() ? BaseSurvivors : SpanSurvivors;
+    BoundsKey Key = {Bounds.Call->getCalledOperand(), Bounds.getID(), Mask,
+                     DS.getNextRealInstruction(Bounds)};
     if (!Survivors.contains(Key)) {
       Survivors[Key] = Bounds.Call;
       continue;
@@ -935,11 +906,53 @@ void PTSanOptimizer::mergeLoadBoundAnchors() {
   }
 }
 
+void PTSanOptimizer::mergeDominatingConversionBaseAnchors() {
+  // Conversions can reuse older decoding metadata even across a free. Checks
+  // cannot: their bounds must describe the lifetime at the point of the check.
+  auto HasOnlyConversionUsers = [&](LoadBoundAnchor Bounds) {
+    for (User *U : Bounds.Call->users()) {
+      if (!DS.getAsAnchor<StripAnchor>(U) && !DS.getAsAnchor<TagAnchor>(U)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  DenseMap<std::pair<Value *, Value *>, SmallVector<LoadBoundAnchor, 4>>
+      EstablishedBases;
+  for (LoadBoundAnchor New : DS.collectAnchors<LoadBoundAnchor>(PTA.F)) {
+    if (!New.isBase()) {
+      continue;
+    }
+
+    bool Merged = false;
+    auto &Established = EstablishedBases[{New.getID(), New.getMask()}];
+    // Collection visits dominating anchors before the anchors they dominate.
+    for (LoadBoundAnchor Old : Established) {
+      if (DT.dominates(Old.Call, New.Call) && HasOnlyConversionUsers(New)) {
+        New.Call->replaceAllUsesWith(Old.Call);
+        New.erase();
+        Merged = true;
+        break;
+      }
+    }
+
+    if (!Merged) {
+      Established.push_back(New);
+    }
+  }
+}
+
 void PTSanOptimizer::foldStaticBoundAnchors() {
   for (LoadBoundAnchor Bounds : DS.collectAnchors<LoadBoundAnchor>(PTA.F)) {
-    // Static folding runs before IDs can be materialized as scalar SSA values.
-    GetIDAnchor ID = *DS.getAsAnchor<GetIDAnchor>(Bounds.getID());
-    Value *BasePtr = ID.getBase();
+    if (Bounds.isOrigin()) {
+      continue;
+    }
+    auto ID = DS.getAsAnchor<GetIDAnchor>(Bounds.getID());
+    if (!ID) {
+      continue;
+    }
+    Value *BasePtr = ID->getBase();
 
     optional<StaticObjectBounds> StaticBounds = getStaticBounds(BasePtr);
     if (!StaticBounds || !StaticBounds->CanFoldRuntimeBounds) {
@@ -948,10 +961,22 @@ void PTSanOptimizer::foldStaticBoundAnchors() {
 
     optional<BoundAnchor> Static;
     if (Bounds.isBase()) {
-      TaggedAnchor TaggedBase =
-          TaggedAnchor::create(DS, Bounds.Call, StaticBounds->Base);
-      Static = StaticBoundAnchor::createBase(DS, Bounds.Call,
-                                             TaggedBase.Call);
+      if (Cl32BitIDs) {
+        Value *RawBase = StaticBounds->Base;
+        if (auto *LI = dyn_cast<LoadInst>(RawBase)) {
+          auto *Proxy = cast<GlobalValue>(LI->getPointerOperand());
+          RawBase = DS.GlobalProxyTargets.at(Proxy);
+        }
+        LoadBoundAnchor Origin = LoadBoundAnchor::createOrigin(
+            DS, Bounds.Call, Bounds.getID(), Bounds.getMask());
+        Static = StaticBoundAnchor::createBase(DS, Bounds.Call, RawBase,
+                                               Origin.Call);
+      } else {
+        TaggedAnchor TaggedBase =
+            TaggedAnchor::create(DS, Bounds.Call, StaticBounds->Base);
+        Static = StaticBoundAnchor::createBase(DS, Bounds.Call,
+                                               TaggedBase.Call);
+      }
     } else {
       Static = StaticBoundAnchor::createSpan(DS, Bounds.Call,
                                              StaticBounds->Size->getValue());
@@ -964,6 +989,14 @@ void PTSanOptimizer::foldStaticBoundAnchors() {
 void PTSanOptimizer::run() {
   PTSanAnchorOptimizer Anchors(PTA);
   PTSanPreanalysisElider Preanalysis(*this);
+
+  // ID32 strips carry decoding dependencies from discovery. Canonicalize
+  // those operands before comparing strips for merging.
+  if (Cl32BitIDs) {
+    Anchors.hoistGetIDAnchors();
+    Anchors.mergeGetIDAnchors();
+    optimizeLoadBoundAnchors();
+  }
 
   // Strip anchors must be canonical before access analysis snapshots their
   // unstripped uses and SCEVs. Otherwise later strip merging can stale those
@@ -984,9 +1017,7 @@ void PTSanOptimizer::run() {
   // synthetic checks and before placing discovered access checks.
   Anchors.hoistGetIDAnchors();
   Anchors.mergeGetIDAnchors();
-  hoistLoadBoundAnchors();
-  mergeLoadBoundAnchors();
-  foldStaticBoundAnchors();
+  optimizeLoadBoundAnchors();
 
   // Bound-anchor normalization can move dependencies across preanalysis
   // checks, so reposition those checks afterwards.
@@ -1017,6 +1048,25 @@ void PTSanOptimizer::run() {
   } while (ChecksMerged);
 
   Anchors.eraseUnusedDependencyAnchors();
+}
+
+void PTSanOptimizer::optimizeLoadBoundAnchors() {
+  hoistLoadBoundAnchors();
+  if (Cl32BitIDs) {
+    // Share decoding metadata before merging it with lifetime-sensitive checks.
+    mergeDominatingConversionBaseAnchors();
+  }
+  mergeLoadBoundAnchors();
+  foldStaticBoundAnchors();
+  if (Cl32BitIDs) {
+    // Folding a static base introduces an origin; share it with check loads.
+    hoistLoadBoundAnchors();
+    mergeLoadBoundAnchors();
+  }
+}
+
+void optimizeLoadBoundAnchors(PTSanAnalysisState &PTA) {
+  PTSanOptimizer(PTA).optimizeLoadBoundAnchors();
 }
 
 } // namespace llvm::ptsan

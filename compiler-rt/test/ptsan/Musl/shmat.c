@@ -26,6 +26,22 @@
 // BOUNDS: Found bad
 // STALE: STALE-READY
 // STALE: Found bad
+//
+// RUN: %ptsan_musl_id32_strict -Wall -Wextra -Werror -o %t.id32 %s
+// RUN: %run %t.id32 libc-good
+// RUN: %run %t.id32 syscall-good
+// RUN: %run %t.id32 libc-multiple
+// RUN: %run %t.id32 syscall-multiple
+// RUN: %run %t.id32 libc-failed-detach
+// RUN: %run %t.id32 syscall-failed-detach
+// RUN: not %run %t.id32 libc-bad 2> %t.id32.libc-bad
+// RUN: FileCheck %s --check-prefix=BOUNDS < %t.id32.libc-bad
+// RUN: not %run %t.id32 syscall-bad 2> %t.id32.syscall-bad
+// RUN: FileCheck %s --check-prefix=BOUNDS < %t.id32.syscall-bad
+// RUN: not %run %t.id32 libc-stale 2> %t.id32.libc-stale
+// RUN: FileCheck %s --check-prefix=STALE < %t.id32.libc-stale
+// RUN: not %run %t.id32 syscall-stale 2> %t.id32.syscall-stale
+// RUN: FileCheck %s --check-prefix=STALE < %t.id32.syscall-stale
 
 #define _GNU_SOURCE
 
@@ -52,20 +68,18 @@ static size_t pageSize(void) {
   return (size_t)result;
 }
 
-static void *clearPointerID(const void *pointer) {
-  const uintptr_t address_mask = UINT64_C(0x0000ffffffffffff);
-  return (void *)((uintptr_t)pointer & address_mask);
-}
-
-static void checkLiveBounds(uint16_t id, const void *base, size_t size) {
+static void checkLiveBounds(PTSanID id, const void *base, size_t size) {
   assert(id != 0);
+#ifdef PTSAN_TEST_32_BIT_IDS
+  assert(ptsan_get_base(id) == ptsan_get_address(base));
+#else
   assert(ptsan_get_base(id) == (uint64_t)(uintptr_t)base);
+#endif
   assert(ptsan_get_size(id) == size);
 }
 
-static void checkRetiredBounds(uint16_t id) {
+static void checkRetiredBounds(PTSanID id) {
   assert(id != 0);
-  assert(ptsan_get_base(id) == 0);
   assert(ptsan_get_size(id) == 0);
 }
 
@@ -126,7 +140,7 @@ static int testGood(bool use_syscall) {
     return 4;
   }
 
-  const uint16_t mapping_id = get_id(mapping);
+  const PTSanID mapping_id = get_id(mapping);
   checkLiveBounds(mapping_id, mapping, segment_size);
   mapping[0] = 1;
   mapping[segment_size - 1] = 2;
@@ -186,8 +200,8 @@ static int testMultipleAttachments(bool use_syscall) {
     return 4;
   }
 
-  const uint16_t first_id = get_id(first);
-  const uint16_t second_id = get_id(second);
+  const PTSanID first_id = get_id(first);
+  const PTSanID second_id = get_id(second);
   assert(first_id != second_id);
   checkLiveBounds(first_id, first, page_size);
   checkLiveBounds(second_id, second, page_size);
@@ -219,7 +233,7 @@ static int testFailedDetach(bool use_syscall) {
   if (mapping == MAP_FAILED) {
     return 2;
   }
-  const uint16_t mapping_id = get_id(mapping);
+  const PTSanID mapping_id = get_id(mapping);
   checkLiveBounds(mapping_id, mapping, page_size);
 
   errno = 0;
@@ -255,10 +269,9 @@ static int testStalePointer(bool use_syscall) {
     return 4;
   }
 
-  const uint16_t old_id = get_id(mapping);
+  const PTSanID old_id = get_id(mapping);
   checkLiveBounds(old_id, mapping, page_size);
   volatile char *stale_pointer = mapping;
-  void *raw_address = clearPointerID(mapping);
 
   if (detachMemory(use_syscall, mapping) != 0) {
     return 5;
@@ -266,12 +279,13 @@ static int testStalePointer(bool use_syscall) {
   checkRetiredBounds(old_id);
 
   char *replacement =
-      (char *)mmap(raw_address, page_size, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+      (char *)mmap(mapping, page_size, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
   if (replacement == MAP_FAILED) {
     return 6;
   }
-  const uint16_t replacement_id = get_id(replacement);
+  assert(ptsan_get_address(replacement) == ptsan_get_address(mapping));
+  const PTSanID replacement_id = get_id(replacement);
   assert(replacement_id != old_id);
   checkLiveBounds(replacement_id, replacement, page_size);
   checkRetiredBounds(old_id);

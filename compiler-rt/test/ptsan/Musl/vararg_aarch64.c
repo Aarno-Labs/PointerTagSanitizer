@@ -10,8 +10,8 @@
 // RUN: %run %t.o0
 // RUN: %ptsan_musl_strict -mllvm -ptsan-no-opts %s -o %t.noopts
 // RUN: %run %t.noopts
-// RUN: %ptsan_musl_strict -mllvm -ptsan-stack-ids-per-bucket=1 %s -o %t.small
-// RUN: %run %t.small
+// RUN: %ptsan_musl_strict -mllvm -ptsan-stack-id-thread-buckets=0 %s -o %t.nobuckets
+// RUN: %run %t.nobuckets
 // CHECK: Found bad {{.*}} access
 // CLEAN-NOT: Found bad
 // CLEAN: Unreclaimed IDs at exit: 0

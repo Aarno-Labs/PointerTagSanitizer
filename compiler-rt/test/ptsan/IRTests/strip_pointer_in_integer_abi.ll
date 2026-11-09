@@ -6,9 +6,11 @@
 ; PTSan preserves IDs across ptrtoint and the generic PTSan musl dispatcher
 ; boundary, including when it carries a fixed-width syscall executor.
 ; __syscall_cp is C dispatch code and must also preserve IDs until checking
-; at the syscall boundary. Inline assembly must receive raw addresses.
+; at the syscall boundary. Nonempty inline assembly must receive raw addresses.
 ;
-; RUN: %opt_ptsan %s | FileCheck %s
+; RUN: %opt_ptsan %s | FileCheck %s --check-prefixes=CHECK,DEFAULT
+
+; RUN: %opt_ptsan -ptsan-32-bit-ids %s | FileCheck %s --check-prefixes=CHECK,ID32
 
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
@@ -49,11 +51,27 @@ entry:
 define void @inline_asm(ptr %p) {
 entry:
   %as_int = ptrtoint ptr %p to i64
-  call void asm sideeffect "", "r"(i64 %as_int)
+  call void asm sideeffect "testq $0, $0", "r,~{flags}"(i64 %as_int)
   ret void
 }
 
 ; CHECK-LABEL: define void @inline_asm(
 ; CHECK: [[ASM_INT:%.*]] = ptrtoint ptr %p to i64
-; CHECK: [[ASM_RAW:%.*]] = {{.*}}call i64 asm "andq $2, $0", "=r,0,r,~{flags}"(i64 [[ASM_INT]], i64 281474976710655)
-; CHECK: call void asm sideeffect "", "r"(i64 [[ASM_RAW]])
+; DEFAULT: [[ASM_RAW:%.*]] = {{.*}}call i64 asm "andq $2, $0", "=r,0,r,~{flags}"(i64 [[ASM_INT]], i64 281474976710655)
+; ID32: [[BASE:%.*]] = load i64, ptr {{%.*}}
+; ID32: [[PAYLOAD:%.*]] = and i64 [[ASM_INT]], 4294967295
+; ID32: [[DECODED:%.*]] = add i64 [[BASE]], [[PAYLOAD]]
+; ID32: [[ASM_RAW:%.*]] = select i1 {{%.*}}, i64 [[DECODED]], i64 [[ASM_INT]]
+; CHECK: call void asm sideeffect "testq $0, $0", "r,~{flags}"(i64 [[ASM_RAW]])
+
+define void @empty_inline_asm(ptr %p) {
+entry:
+  %as_int = ptrtoint ptr %p to i64
+  call void asm sideeffect "", "r"(i64 %as_int)
+  ret void
+}
+
+; CHECK-LABEL: define void @empty_inline_asm(
+; CHECK: [[EMPTY_INT:%.*]] = ptrtoint ptr %p to i64
+; CHECK-NEXT: {{.*}}call void asm sideeffect "", "r"(i64 [[EMPTY_INT]])
+; CHECK-NEXT: ret void

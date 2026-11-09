@@ -6,10 +6,10 @@
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 
 // OUT: line id: 0x[[#%x,LINE:]]
-// OUT: dup id: 0x[[#LINE + 1]]
+// OUT: dup id: 0x{{[0-9a-f]+}}
 // OUT: line id: 0x[[#LINE]]
-// OUT: dup id: 0x[[#LINE + 2]]
-// OUT: resolved id: 0x[[#LINE + 3]]
+// OUT: dup id: 0x{{[0-9a-f]+}}
+// OUT: resolved id: 0x{{[0-9a-f]+}}
 
 // ERR: Unreclaimed IDs at exit: 0
 
@@ -44,7 +44,7 @@ int main(void) {
             break; // EOF or error
         }
         print_id(line);
-        assert(get_id(line) != 0);
+        assert(get_id(line) != 0 && get_id(line) != ptsan_default_id());
 
         // 3) Duplicate the line via strdup (calls malloc internally).
         char *dup = strdup(line);
@@ -55,6 +55,8 @@ int main(void) {
             return 1;
         }
 
+        assert(get_id(dup) != 0 && get_id(dup) != ptsan_default_id());
+        assert(get_id(dup) != get_id(line));
         print_id(dup);
 
         free(dup);
@@ -70,6 +72,7 @@ int main(void) {
         return 1;
     }
 
+    assert(get_id(resolved) != 0 && get_id(resolved) != ptsan_default_id());
     print_id(resolved);
 
     printf("Current directory resolved to: %s\n", resolved);

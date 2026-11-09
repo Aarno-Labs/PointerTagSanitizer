@@ -3,6 +3,10 @@
 // RUN: ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s
 
+// RUN: %clangxx_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe 2> err.txt
+// RUN: cat err.txt | FileCheck %s
+
 // CHECK-NOT: Found bad
 
 #include <stdio.h>

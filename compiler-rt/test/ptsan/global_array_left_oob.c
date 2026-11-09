@@ -1,12 +1,16 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -mllvm -ptsan-abort-on-error -o %exe %s
 // RUN: not ./%exe 2> err.txt
+// RUN: cat err.txt | FileCheck %s --check-prefixes=CHECK,ID16
+
+// RUN: %clang_ptsan_id32 -g -O2 -mllvm -ptsan-abort-on-error -o %exe %s
+// RUN: not ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s
 
 // CHECK: Found bad POINT access
 // CHECK: Alloc size  0x1203
 // CHECK: Access size 0x1
-// CHECK: Min-Base = -71
+// ID16: Min-Base = -71
 
 #include <stdio.h>
 

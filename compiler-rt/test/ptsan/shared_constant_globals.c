@@ -6,6 +6,9 @@
 // RUN: %clang_ptsan -o %t %s
 // RUN: %run %t
 
+// RUN: %clang_ptsan_id32 -o %t %s
+// RUN: %run %t
+
 #include "Inputs/ptsan_test_interface.h"
 
 #include <assert.h>
@@ -24,12 +27,12 @@ __attribute__((noinline)) static const char *getLiteral(void) {
 
 int main(void) {
   const char *literal = getLiteral();
-  uint16_t first_id = get_id(FirstString);
-  uint16_t second_id = get_id(SecondString);
-  uint16_t scalar_id = get_id(&ScalarConstant);
-  uint16_t forced_writable_id = get_id(&ForcedWritableConstant);
-  uint16_t literal_id = get_id(literal);
-  uint16_t mutable_id = get_id(&MutableGlobal);
+  PTSanID first_id = get_id(FirstString);
+  PTSanID second_id = get_id(SecondString);
+  PTSanID scalar_id = get_id(&ScalarConstant);
+  PTSanID forced_writable_id = get_id(&ForcedWritableConstant);
+  PTSanID literal_id = get_id(literal);
+  PTSanID mutable_id = get_id(&MutableGlobal);
 
   assert(first_id != 0);
   assert(first_id != ptsan_default_id());
@@ -51,8 +54,8 @@ int main(void) {
   uint64_t shared_base = ptsan_get_base(first_id);
   uint64_t shared_size = ptsan_get_size(first_id);
   uint64_t address_mask = (UINT64_C(1) << 48) - 1;
-  uint64_t first_address = (uint64_t)(uintptr_t)FirstString & address_mask;
-  uint64_t second_address = (uint64_t)(uintptr_t)SecondString & address_mask;
+  uint64_t first_address = ptsan_get_address(FirstString);
+  uint64_t second_address = ptsan_get_address(SecondString);
 
   shared_base &= address_mask;
   assert(shared_base <= first_address);

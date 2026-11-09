@@ -27,6 +27,7 @@
 // Keep the name, length and terminator intact, and verify getenv observes the
 // changed value. _Exit avoids the unrelated strict-mode musl exit/TLS hole.
 #include "../Inputs/ptsan_test_interface.h"
+#include <assert.h>
 #include <stdlib.h>
 
 extern char **environ;
@@ -42,10 +43,16 @@ int main(void) {
   char *volatile *entries = environ;
   if (!entries[0] || !entries[1] || entries[2] != NULL)
     _Exit(3);
-  if (ptsan_get_size(array_id) != 3 * sizeof(char *) ||
-      ptsan_get_size(get_id(entries[0])) != sizeof("PTSAN_ENV=alpha") ||
-      ptsan_get_size(get_id(entries[1])) != sizeof("PTSAN_EMPTY="))
-    _Exit(10);
+  assert(ptsan_get_size(array_id) == 3 * sizeof(char *));
+  unsigned string_id = get_id(entries[0]);
+  assert(string_id != 0 && string_id != ptsan_default_id());
+  assert(string_id == get_id(entries[1]) && string_id != array_id);
+  assert(ptsan_get_address(entries[1]) ==
+         ptsan_get_address(entries[0]) + sizeof("PTSAN_ENV=alpha"));
+  assert((ptsan_id_bits() == 32 ? ptsan_get_base(string_id) :
+          ptsan_get_address((void *)ptsan_get_base(string_id))) +
+             ptsan_get_size(string_id) ==
+         ptsan_get_address(entries[1]) + sizeof("PTSAN_EMPTY="));
 #elif ENV_CASE == 1
   volatile char *entry = environ[0];
   if (entry[0] != 'P' || entry[sizeof("PTSAN_ENV=") - 1] != 'a' ||

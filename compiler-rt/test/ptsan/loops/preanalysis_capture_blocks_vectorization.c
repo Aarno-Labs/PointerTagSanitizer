@@ -4,13 +4,13 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // REQUIRES: x86_64-target-arch
-// RUN: %clang_raw -fsanitize=ptsan -O3 -march=skylake-avx512 \
+// RUN: %clang_ptsan_plain -O3 -march=skylake-avx512 \
 // RUN:   -fno-discard-value-names -mllvm -force-vector-width=4 \
 // RUN:   -mllvm -force-vector-interleave=1 \
 // RUN:   -mllvm -ptsan-preanalyze-loops=0 \
 // RUN:   -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | \
 // RUN:   FileCheck %s --check-prefix=VECTORIZED
-// RUN: %clang_raw -fsanitize=ptsan -O3 -march=skylake-avx512 \
+// RUN: %clang_ptsan_plain -O3 -march=skylake-avx512 \
 // RUN:   -fno-discard-value-names -mllvm -force-vector-width=4 \
 // RUN:   -mllvm -force-vector-interleave=1 \
 // RUN:   -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | \

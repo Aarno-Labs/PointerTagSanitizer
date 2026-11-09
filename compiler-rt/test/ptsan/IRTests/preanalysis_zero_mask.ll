@@ -3,7 +3,7 @@
 ; See https://llvm.org/LICENSE.txt for license information.
 ; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 ;
-; RUN: %clang_raw -x ir -fsanitize=ptsan -O2 \
+; RUN: %clang_ptsan_plain -x ir -O2 \
 ; RUN:   -mllvm -ptsan-preanalyze-loops=1 \
 ; RUN:   -mllvm -ptsan-stop-after=metadata-lowering \
 ; RUN:   -S -emit-llvm -o - %s | FileCheck %s
@@ -22,7 +22,7 @@ define void @zero_mask_does_not_create_loop_range(ptr %base) {
 ; CHECK-LABEL: define void @zero_mask_does_not_create_loop_range(
 ; CHECK: %[[LAST:.*]] = getelementptr i8, ptr %base, i64 3
 ; CHECK: %[[MIN:.*]] = select i1 {{.*}}, ptr %base, ptr %[[LAST]]
-; CHECK: call void (...) @__ptsan_loop_preanalysis({{.*}}ptr %[[MIN]], i64 4)
+; CHECK: call void (...) @__ptsan_loop_preanalysis({{.*}}ptr %[[MIN]], i64 4{{(, i32 %.*)?}})
 ; CHECK-NOT: @__ptsan_loop_preanalysis
 ; CHECK: loop:
 ; CHECK: load volatile i8

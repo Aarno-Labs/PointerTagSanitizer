@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 // PTSanLoopInfoGather.cpp
 #include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -146,6 +147,9 @@ void PTSanLoopInfoGather::analyzeFunction() {
       FMA.visit(I);
     }
   }
+
+  // Strip-only operations need neither ranges nor completeness accounting.
+  llvm::erase_if(PtrOps, [](PtrOp &Op) { return Op.CheckTy == NO_CHECK; });
 
   // First, figure out which checks can be hoisted
   DenseMap<Loop *, SmallVector<CheckInfo>> HoistableChecks;

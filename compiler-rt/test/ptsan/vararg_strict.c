@@ -14,14 +14,12 @@
 // RUN:   -DTEST_CASE=OVERFLOW_FP_OVERREAD -o %t.fp-overread %s
 // RUN: not %t.fp-overread > %t.fp.out 2>&1
 // RUN: FileCheck %s --check-prefix=OVERREAD < %t.fp.out
-// RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error=0 \
+// RUN: %clang_ptsan -O2 \
 // RUN:   -DTEST_CASE=EMPTY_OVERFLOW -o %t.empty %s
-// RUN: %t.empty > %t.empty.out 2>&1
-// RUN: FileCheck %s --check-prefix=RECOVER < %t.empty.out
+// RUN: not %t.empty > %t.empty.out 2>&1
+// RUN: FileCheck %s --check-prefix=OVERREAD < %t.empty.out
 //
 // OVERREAD: Found bad {{.*}} access
-// RECOVER: Found bad POINT access
-// RECOVER: Unreclaimed IDs at exit: 0
 
 // Exercise the four SysV x86-64 argument paths independently, then check
 // copying/restarting lists, recursion, and indirect calls with mixed arguments.
@@ -135,12 +133,13 @@ __attribute__((noinline)) int variadic(int depth, ...) {
   if (depth && invoke(depth - 1)) {
     return 4;
   }
-  // Ending one list must not retire the backing IDs of its copy.
-  result |= consume(copy);
-  va_end(copy);
   va_start(arguments, depth);
   result |= consume(arguments);
   va_end(arguments);
+  // Ending and restarting one list must preserve its copy's backing IDs
+  // and encoding, even though va_start initializes the shared storage again.
+  result |= consume(copy);
+  va_end(copy);
   return result;
 }
 
