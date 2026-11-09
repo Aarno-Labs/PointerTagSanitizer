@@ -1,0 +1,124 @@
+{
+  "schema": 1,
+  "provenance": "Provisional test-input expectations: October 14-15 summary; names and diagnostic patterns from the local October 1 run. CI uses current documented dependencies, including stack temporal safety on; the older local run used it off. Non-strict Perl reviewed on October 16 at 6094b32 with the established arithmetic/comparison flags restored: pat_psycho passes, leaving only the leaky-magic access complaint. Review deviations; never learn expectations automatically. LAM entries initially mirror software-decoding expectations; LAM has 15 usable ID bits and deviations must be reviewed. Reviewed CI revision 4da6f0531eda41adbc10e3573f9933f84e570aa1: strict LAM additionally exhausts IDs in 526.blender_r (valid RE, child status 256, exhaustion diagnostic only); all other SPEC outcomes match their expectations. 507.cactuBSSN_r added for glibc only (including the plain baseline and LAM); expected to pass based on the July paper campaign. GNU Fortran supplies its build-only sources, with C/C++ instrumented by Clang. This addition does not change the historical counts above; review new CI results. Reviewed after the signal/ID-cache hardening changes: test-input Perl now passes in musl non-strict; musl strict retains its exhaustion outcome without the former access complaint, for both software decoding and LAM.",
+  "benchmarks": [
+    "500.perlbench_r",
+    "502.gcc_r",
+    "505.mcf_r",
+    "507.cactuBSSN_r",
+    "508.namd_r",
+    "510.parest_r",
+    "511.povray_r",
+    "519.lbm_r",
+    "520.omnetpp_r",
+    "523.xalancbmk_r",
+    "525.x264_r",
+    "526.blender_r",
+    "531.deepsjeng_r",
+    "538.imagick_r",
+    "541.leela_r",
+    "544.nab_r",
+    "557.xz_r",
+    "997.specrand_fr",
+    "999.specrand_ir"
+  ],
+  "configurations": {
+    "glibc-id32": {},
+    "musl-nonstrict-id32": {},
+    "musl-strict-id32": {},
+    "glibc": {},
+    "musl-nonstrict": {},
+    "musl-strict": {
+      "500.perlbench_r": {
+        "category": "out-of-ids",
+        "valid": "VE",
+        "child_statuses": [
+          0,
+          0
+        ],
+        "diagnostics": [
+          "exhaustion"
+        ]
+      },
+      "510.parest_r": {
+        "category": "out-of-ids",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "exhaustion"
+        ]
+      },
+      "520.omnetpp_r": {
+        "category": "out-of-ids",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "exhaustion"
+        ]
+      }
+    },
+    "glibc-lam": {},
+    "musl-nonstrict-lam": {},
+    "musl-strict-lam": {
+      "500.perlbench_r": {
+        "category": "out-of-ids",
+        "valid": "VE",
+        "child_statuses": [
+          0,
+          0
+        ],
+        "diagnostics": [
+          "exhaustion"
+        ]
+      },
+      "510.parest_r": {
+        "category": "out-of-ids",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "exhaustion"
+        ]
+      },
+      "520.omnetpp_r": {
+        "category": "out-of-ids",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "exhaustion"
+        ]
+      },
+      "526.blender_r": {
+        "category": "out-of-ids",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "exhaustion"
+        ]
+      }
+    }
+  },
+  "benchmark_configurations": {
+    "507.cactuBSSN_r": [
+      "plain-glibc",
+      "glibc",
+      "glibc-lam",
+      "glibc-id32"
+    ],
+    "526.blender_r": [
+      "plain-glibc", "plain-musl",
+      "glibc", "musl-nonstrict", "musl-strict",
+      "glibc-lam", "musl-nonstrict-lam", "musl-strict-lam"
+    ]
+  },
+  "id32_notes": "All selected ID32 workloads are expected to pass, based on the prior PR3 test-input campaign. Do not inherit ID16 exhaustion expectations. Blender is excluded because process-local IDs do not support serialized pointer identities. Cactus and the current strong-stack configuration still need their first ID32 CI run; review deviations."
+}

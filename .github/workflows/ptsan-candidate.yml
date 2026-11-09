@@ -1,0 +1,102 @@
+name: PTSan candidate validation
+
+on:
+  push:
+    # Explicit branches include every branch and exclude tag-only pushes.
+    branches: ['**']
+
+permissions:
+  contents: read
+
+# Supersede obsolete candidates while allowing cancellation cleanup to finish.
+# Called workflows use a separate group to serialize access to build directories.
+concurrency:
+  group: ptsan-private-auto-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  correctness_id32:
+    name: Correctness (id32)
+    if: ${{ github.repository == 'Aarno-Labs/PointerTagSanitizer-private' }}
+    uses: ./.github/workflows/ptsan-ci.yml
+    with:
+      group: id32
+      suite: all
+
+  correctness_software:
+    name: Correctness (software)
+    needs: correctness_id32
+    if: ${{ !cancelled() && github.repository == 'Aarno-Labs/PointerTagSanitizer-private' }}
+    uses: ./.github/workflows/ptsan-ci.yml
+    with:
+      group: software
+      suite: all
+
+  correctness_lam:
+    name: Correctness (lam)
+    needs: correctness_software
+    if: ${{ !cancelled() && github.repository == 'Aarno-Labs/PointerTagSanitizer-private' }}
+    uses: ./.github/workflows/ptsan-ci.yml
+    with:
+      group: lam
+      suite: all
+
+  performance_id32:
+    name: Performance (id32)
+    needs: [correctness_id32, correctness_software, correctness_lam]
+    if: >-
+      ${{ !cancelled() &&
+          github.repository == 'Aarno-Labs/PointerTagSanitizer-private' &&
+          needs.correctness_id32.result == 'success' &&
+          needs.correctness_software.result == 'success' &&
+          needs.correctness_lam.result == 'success' }}
+    uses: ./.github/workflows/ptsan-performance.yml
+    with:
+      group: id32
+      suite: all
+      repetitions: 1
+
+  performance_software:
+    name: Performance (software)
+    needs: [correctness_id32, correctness_software, correctness_lam, performance_id32]
+    if: >-
+      ${{ !cancelled() &&
+          github.repository == 'Aarno-Labs/PointerTagSanitizer-private' &&
+          needs.correctness_id32.result == 'success' &&
+          needs.correctness_software.result == 'success' &&
+          needs.correctness_lam.result == 'success' }}
+    uses: ./.github/workflows/ptsan-performance.yml
+    with:
+      group: software
+      suite: all
+      repetitions: 1
+
+  performance_lam:
+    name: Performance (lam)
+    needs: [correctness_id32, correctness_software, correctness_lam, performance_software]
+    if: >-
+      ${{ !cancelled() &&
+          github.repository == 'Aarno-Labs/PointerTagSanitizer-private' &&
+          needs.correctness_id32.result == 'success' &&
+          needs.correctness_software.result == 'success' &&
+          needs.correctness_lam.result == 'success' }}
+    uses: ./.github/workflows/ptsan-performance.yml
+    with:
+      group: lam
+      suite: all
+      repetitions: 1
+
+  performance_glibc_stack_off:
+    name: Performance (glibc-stack-off)
+    needs: [correctness_id32, correctness_software, correctness_lam, performance_lam]
+    if: >-
+      ${{ !cancelled() &&
+          github.repository == 'Aarno-Labs/PointerTagSanitizer-private' &&
+          needs.correctness_id32.result == 'success' &&
+          needs.correctness_software.result == 'success' &&
+          needs.correctness_lam.result == 'success' }}
+    uses: ./.github/workflows/ptsan-performance.yml
+    with:
+      group: glibc-stack-off
+      suite: all
+      repetitions: 1

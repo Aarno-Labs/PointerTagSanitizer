@@ -1,0 +1,367 @@
+name: PTSan CI
+
+on:
+  workflow_call:
+    inputs:
+      group:
+        description: Configuration group
+        required: true
+        type: string
+      suite:
+        description: Benchmark suite
+        default: all
+        type: string
+  workflow_dispatch:
+    inputs:
+      group:
+        description: "Configurations: each group includes non-strict and strict musl"
+        type: choice
+        options: [software, lam, id32]
+        default: software
+      suite:
+        description: "Benchmark suite to validate"
+        type: choice
+        options: [all, multisource, spec, fleetbench]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ptsan-private-runner
+  # Keep waiting runs from different branches instead of replacing them.
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  regression:
+    if: github.repository == 'Aarno-Labs/PointerTagSanitizer-private'
+    name: Correctness (${{ inputs.group }}, ${{ inputs.suite }})
+    runs-on:
+      group: ptsan-ci
+      labels: [self-hosted, linux, x64]
+    timeout-minutes: 1800
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI_GROUP: ${{ inputs.group }}
+      CI_SUITE: ${{ inputs.suite }}
+      BUILD_DIR: ${{ format('/home/ptsan-ci/builds/PointerTagSanitizer-private/{0}', inputs.group) }}
+      MUSL_SOURCE: /home/ptsan-ci/sources/musl
+      LAM_DEPENDENCIES: ${{ inputs.group == 'lam' && 'ON' || 'OFF' }}
+      GLIBC_MODE: ${{ inputs.group == 'id32' && 'glibc-id32' || inputs.group == 'lam' && 'glibc-lam' || 'glibc' }}
+      MUSL_NONSTRICT_MODE: ${{ inputs.group == 'id32' && 'musl-nonstrict-id32' || inputs.group == 'lam' && 'musl-nonstrict-lam' || 'musl-nonstrict' }}
+      MUSL_STRICT_MODE: ${{ inputs.group == 'id32' && 'musl-strict-id32' || inputs.group == 'lam' && 'musl-strict-lam' || 'musl-strict' }}
+      SPEC_ROOT: /home/ptsan-ci/spec2017
+      FLEETBENCH_L1_DATA_SIZE: ${{ vars.FLEETBENCH_L1_DATA_SIZE || '49152' }}
+      FLEETBENCH_L2_SIZE: ${{ vars.FLEETBENCH_L2_SIZE || '3145728' }}
+      FLEETBENCH_L3_SIZE: ${{ vars.FLEETBENCH_L3_SIZE || '25165824' }}
+
+    steps:
+      - name: Check Python venv support
+        run: |
+          if ! /usr/bin/python3 -c 'import venv, ensurepip'; then
+            echo '::error::Install python3-venv on the runner.'
+            exit 1
+          fi
+
+      - name: Validate workflow inputs
+        run: |
+          case "$CI_SUITE" in
+            all|multisource|spec|fleetbench) ;;
+            *) echo "Unknown benchmark suite: $CI_SUITE" >&2; exit 1 ;;
+          esac
+          if [[ "$CI_GROUP" == lam && "$CI_SUITE" == fleetbench ]]; then
+            echo "Fleetbench has not been validated for LAM configurations." >&2
+            exit 1
+          fi
+
+      - name: Clear previous CI build
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = ptsan-ci
+          case "$CI_GROUP" in
+            software) test "$BUILD_DIR" = /home/ptsan-ci/builds/PointerTagSanitizer-private/software ;;
+            lam) test "$BUILD_DIR" = /home/ptsan-ci/builds/PointerTagSanitizer-private/lam ;;
+            id32) test "$BUILD_DIR" = /home/ptsan-ci/builds/PointerTagSanitizer-private/id32 ;;
+            *) echo "Unknown CI group: $CI_GROUP" >&2; exit 1 ;;
+          esac
+          rm -rf -- "$BUILD_DIR"
+          mkdir -p "$BUILD_DIR"
+
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Keep results with the selected build
+        run: |
+          set -euo pipefail
+          # Checkout cleanup may remove this link on the next group, but the
+          # reports survive until this group's build directory is cleared.
+          mkdir -p "$BUILD_DIR/ci-results"
+          ln -s "$BUILD_DIR/ci-results" ci-results
+
+      - name: Set CPU policy for builds and correctness tests
+        run: sudo -n /usr/local/sbin/ptsan-fast
+
+      - name: Create CI Python environment
+        run: |
+          set -euo pipefail
+          mkdir -p ci-results
+          cp .github/requirements/ptsan-ci.txt ci-results/python-requirements.txt
+          {
+            /usr/bin/python3 -m venv "$BUILD_DIR/venv"
+            "$BUILD_DIR/venv/bin/python" -m pip install --disable-pip-version-check \
+              -r .github/requirements/ptsan-ci.txt
+            "$BUILD_DIR/venv/bin/python" -m pip check
+            "$BUILD_DIR/venv/bin/python" -c 'import psutil; from distutils.version import LooseVersion; print("psutil", psutil.__version__); print("distutils", LooseVersion.__module__)'
+            "$BUILD_DIR/venv/bin/python" -m pip freeze --all \
+              | tee ci-results/python-packages.txt
+          } 2>&1 | tee ci-results/python-setup.log
+          echo "$BUILD_DIR/venv/bin" >> "$GITHUB_PATH"
+
+      - name: Check benchmark harness
+        run: python -m unittest discover -s .github/tests -v
+
+      - name: Require working LAM_U48
+        if: inputs.group == 'lam'
+        run: |
+          set -euo pipefail
+          /usr/bin/clang -O2 .github/scripts/ptsan-lam-probe.c -o "$BUILD_DIR/lam-probe"
+          "$BUILD_DIR/lam-probe" 2>&1 | tee ci-results/lam-probe.log
+
+      - name: Check SPEC installation access
+        if: ${{ inputs.suite == 'all' || inputs.suite == 'spec' }}
+        run: |
+          set -euo pipefail
+          test -r "$SPEC_ROOT/shrc"
+          test -x /usr/bin/make
+          /usr/bin/make --version
+          test -x "$SPEC_ROOT/bin/runcpu"
+          test -r "$SPEC_ROOT/benchspec/CPU/500.perlbench_r/Spec/object.pm"
+          # Test the dedicated installation as the runner before building.
+          # shrc also checks that its config directory is writable.
+          test -x /usr/bin/gfortran  # 507.cactuBSSN_r build support in glibc configurations.
+          /bin/bash -c 'cd "$1" && source ./shrc && runcpu --version' \
+            ptsan-spec-preflight "$SPEC_ROOT"
+          cat "$SPEC_ROOT/version.txt" | tee ci-results/spec-version.txt
+
+      - name: Record environment
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = ptsan-ci
+          mkdir -p ci-results
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)" >> "$GITHUB_ENV"
+          # The musl ExternalProjects invoke GNU Make rather than CMake/Ninja.
+          echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+          {
+            git rev-parse HEAD
+            hostname
+            uname -a
+            nproc
+            free -h
+            df -h "$BUILD_DIR"
+            /usr/bin/clang --version
+            cmake --version
+            ninja --version
+            python --version
+          } 2>&1 | tee ci-results/environment.log
+
+      - name: Copy pinned musl source
+        run: |
+          set -euo pipefail
+          {
+            expected=9fa28ece75d8a2191de7c5bb53bed224c5947417
+            if ! test -d "$MUSL_SOURCE/.git"; then
+              echo "Permanent musl source is missing: $MUSL_SOURCE" >&2
+              exit 1
+            fi
+            revision=$(git -C "$MUSL_SOURCE" rev-parse HEAD 2>/dev/null || true)
+            tag=$(git -C "$MUSL_SOURCE" describe --tags --exact-match 2>/dev/null || true)
+            if test "$revision" != "$expected" || test "$tag" != v1.2.6; then
+              echo "Permanent musl source is not clean tag v1.2.6 ($expected)" >&2
+              echo "Found tag $tag at $revision" >&2
+              exit 1
+            fi
+            if test -n "$(git -C "$MUSL_SOURCE" status --porcelain --untracked-files=all)"; then
+              echo "Permanent musl source has local changes: $MUSL_SOURCE" >&2
+              git -C "$MUSL_SOURCE" status --short >&2
+              exit 1
+            fi
+            cp -a "$MUSL_SOURCE" "$BUILD_DIR/musl-src"
+            echo "musl $tag: $revision"
+          } 2>&1 | tee ci-results/musl-source.log
+
+      - name: Fetch Fleetbench and pinned Bazel
+        id: fleetbench_source
+        if: ${{ (inputs.suite == 'all' || inputs.suite == 'fleetbench') && (inputs.group == 'software' || inputs.group == 'id32') }}
+        timeout-minutes: 15
+        run: python .github/scripts/ptsan_fleetbench.py fetch
+
+      - name: Configure Release build with assertions
+        run: |
+          set -euo pipefail
+          cmake -S llvm -B "$BUILD_DIR" -G Ninja \
+            -C "$GITHUB_WORKSPACE/clang/cmake/caches/PTSan.cmake" \
+            -DCMAKE_C_COMPILER=/usr/bin/clang \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DPython3_EXECUTABLE="$BUILD_DIR/venv/bin/python" \
+            -DLLVM_USE_LINKER=lld \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_INCLUDE_TESTS=ON \
+            -DCOMPILER_RT_INCLUDE_TESTS=ON \
+            -DPTSAN_MUSL_SOURCE_DIR="$BUILD_DIR/musl-src" \
+            -DPTSAN_BUILD_LAM_DEPENDENCIES="$LAM_DEPENDENCIES" \
+            -DPTSAN_ID32_STACK_TEMPORAL_SAFETY=1 \
+            -DLLVM_LIT_ARGS="-sv -j$(nproc) --timeout=300" \
+            2>&1 | tee ci-results/configure.log
+
+      - name: Build all default targets
+        id: build
+        timeout-minutes: 210
+        run: |
+          set -euo pipefail
+          ninja -C "$BUILD_DIR" -j"$(nproc)" \
+            2>&1 | tee ci-results/build-dependencies.log
+
+      - name: Cross-build AArch64 runtimes and link smoke programs
+        if: ${{ !cancelled() && inputs.group == 'software' && steps.build.outcome == 'success' }}
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          bash .github/scripts/ptsan-aarch64-smoke.sh "$BUILD_DIR" \
+            2>&1 | tee ci-results/aarch64-smoke.log
+
+      - name: Run host-libc regressions
+        if: ${{ !cancelled() && inputs.group == 'software' && steps.build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          export LIT_OPTS="--output=$GITHUB_WORKSPACE/ci-results/check-ptsan.json --xunit-xml-output=$GITHUB_WORKSPACE/ci-results/check-ptsan.xml"
+          ninja -C "$BUILD_DIR" -j"$(nproc)" check-ptsan \
+            2>&1 | tee ci-results/build-and-test.log
+
+      - name: Run musl regressions (strict and non-strict)
+        if: ${{ !cancelled() && inputs.group == 'software' && steps.build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          export LIT_OPTS="--output=$GITHUB_WORKSPACE/ci-results/check-ptsan-musl.json --xunit-xml-output=$GITHUB_WORKSPACE/ci-results/check-ptsan-musl.xml"
+          ninja -C "$BUILD_DIR" -j"$(nproc)" check-ptsan-musl \
+            2>&1 | tee ci-results/check-ptsan-musl.log
+
+      - name: Check selected runtime and C++ dependencies
+        if: ${{ !cancelled() && inputs.group != 'software' && steps.build.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          {
+            if [[ "$CI_GROUP" == id32 ]]; then
+              id_bits=32
+              stack_temporal=1
+              configs=(glibc-id32 musl-id32-nonstrict musl-id32-strict musl-id32-strict-indicator)
+            else
+              id_bits=15
+              stack_temporal=1
+              configs=(glibc-lam musl-nonstrict-lam musl-strict-lam)
+            fi
+            for config in "${configs[@]}"; do
+              exe="$BUILD_DIR/config-smoke-$config"
+              "$BUILD_DIR/bin/clang++" --config="ptsan-$config.cfg" -O2 -g \
+                -fsanitize-ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
+                -mllvm -ptsan-stack-temporal-safety="$stack_temporal" \
+                -DPTSAN_EXPECTED_ID_BITS="$id_bits" .github/scripts/ptsan-config-smoke.cpp -o "$exe"
+              "$exe"
+              echo "$config runtime and C++ smoke passed"
+            done
+          } 2>&1 | tee ci-results/config-smoke.log
+
+      - name: Fetch LLVM test-suite source
+        id: multisource_source
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'multisource') && steps.build.outcome == 'success' }}
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          {
+            git clone --depth=1 --filter=blob:none --sparse --branch=llvmorg-18.1.8 \
+              https://github.com/llvm/llvm-test-suite.git "$BUILD_DIR/test-suite-src"
+            git -C "$BUILD_DIR/test-suite-src" sparse-checkout set \
+              MultiSource cmake litsupport tools
+            git -C "$BUILD_DIR/test-suite-src" describe --tags --exact-match
+            git -C "$BUILD_DIR/test-suite-src" rev-parse HEAD
+          } 2>&1 | tee ci-results/test-suite-source.log
+
+      - name: Build MultiSource benchmarks (${{ inputs.group }} configurations)
+        id: multisource_build
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'multisource') && steps.multisource_source.outcome == 'success' }}
+        timeout-minutes: 90
+        run: python .github/scripts/ptsan-multisource.py build --modes "$CI_GROUP"
+
+      - name: Validate MultiSource with glibc
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'multisource') && (steps.multisource_build.outcome == 'success' || steps.multisource_build.outcome == 'failure') }}
+        timeout-minutes: 60
+        run: python .github/scripts/ptsan-multisource.py validate "$GLIBC_MODE" --modes "$CI_GROUP"
+
+      - name: Validate MultiSource with non-strict musl
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'multisource') && (steps.multisource_build.outcome == 'success' || steps.multisource_build.outcome == 'failure') }}
+        timeout-minutes: 60
+        run: python .github/scripts/ptsan-multisource.py validate "$MUSL_NONSTRICT_MODE" --modes "$CI_GROUP"
+
+      - name: Validate MultiSource with strict musl
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'multisource') && (steps.multisource_build.outcome == 'success' || steps.multisource_build.outcome == 'failure') }}
+        timeout-minutes: 60
+        run: python .github/scripts/ptsan-multisource.py validate "$MUSL_STRICT_MODE" --modes "$CI_GROUP"
+
+      - name: Build SPEC benchmarks (${{ inputs.group }} configurations)
+        id: spec_build
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'spec') && steps.build.outcome == 'success' }}
+        timeout-minutes: 180
+        run: python .github/scripts/ptsan-spec.py build --modes "$CI_GROUP"
+
+      - name: Validate SPEC test inputs with glibc
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'spec') && (steps.spec_build.outcome == 'success' || steps.spec_build.outcome == 'failure') }}
+        timeout-minutes: 90
+        run: python .github/scripts/ptsan-spec.py validate "$GLIBC_MODE" --modes "$CI_GROUP"
+
+      - name: Validate SPEC test inputs with non-strict musl
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'spec') && (steps.spec_build.outcome == 'success' || steps.spec_build.outcome == 'failure') }}
+        timeout-minutes: 90
+        run: python .github/scripts/ptsan-spec.py validate "$MUSL_NONSTRICT_MODE" --modes "$CI_GROUP"
+
+      - name: Validate SPEC test inputs with strict musl
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'spec') && (steps.spec_build.outcome == 'success' || steps.spec_build.outcome == 'failure') }}
+        timeout-minutes: 90
+        run: python .github/scripts/ptsan-spec.py validate "$MUSL_STRICT_MODE" --modes "$CI_GROUP"
+
+      - name: Validate SPEC ref inputs (shared pool across configurations)
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'spec') && (steps.spec_build.outcome == 'success' || steps.spec_build.outcome == 'failure') }}
+        timeout-minutes: 1080
+        run: python .github/scripts/ptsan-spec.py validate --modes "$CI_GROUP" --size ref
+
+      - name: Build Fleetbench (glibc, non-strict musl, strict musl)
+        id: fleetbench_build
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'fleetbench') && steps.build.outcome == 'success' && steps.fleetbench_source.outcome == 'success' }}
+        timeout-minutes: 240
+        run: python .github/scripts/ptsan_fleetbench.py build --group "$CI_GROUP"
+
+      - name: Validate Fleetbench
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'fleetbench') && (steps.fleetbench_build.outcome == 'success' || steps.fleetbench_build.outcome == 'failure') }}
+        timeout-minutes: 90
+        # Match performance CI: cache-size overrides describe CPU 3 on this
+        # heterogeneous runner, not every CPU in the build affinity mask.
+        run: taskset -c 3 python .github/scripts/ptsan_fleetbench.py validate --group "$CI_GROUP"
+
+      - name: Collect build configuration
+        if: always()
+        run: |
+          mkdir -p ci-results
+          if test -f "$BUILD_DIR/CMakeCache.txt"; then
+            cp "$BUILD_DIR/CMakeCache.txt" ci-results/
+          fi
+
+      - name: Upload logs and test results
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ptsan-ci-${{ inputs.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BUILD_DIR }}/ci-results/
+          retention-days: 14
