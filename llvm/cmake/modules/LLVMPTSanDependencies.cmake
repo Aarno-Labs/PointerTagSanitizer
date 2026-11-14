@@ -137,7 +137,7 @@ foreach(ptsan_glibc_variant IN LISTS ptsan_glibc_variants)
     set(ptsan_glibc_encoding_flags
       "-fsanitize-ptsan-32-bit-ids -mllvm -ptsan-stack-temporal-safety=${PTSAN_ID32_STACK_TEMPORAL_SAFETY}")
   endif()
-  set(ptsan_glibc_flags "-mllvm -ptsan-strip-ids ${ptsan_glibc_encoding_flags}")
+  set(ptsan_glibc_flags "-mllvm -ptsan-strip-ids -mllvm -ptsan-strip-ids-on-cmp ${ptsan_glibc_encoding_flags}")
   ptsan_generate_config(ptsan-${ptsan_glibc_variant}.cfg
     "${ptsan_config_header}\
 -fsanitize=ptsan
