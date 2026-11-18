@@ -13,6 +13,46 @@
 
 namespace llvm::ptsan {
 
+static void expandModfIntrinsics(Function &F) {
+  // Mirror SelectionDAGLegalize::expandModf() in
+  // llvm/lib/CodeGen/SelectionDAG/LegalizeDAG.cpp. Code generation otherwise
+  // prefers the modf libcall when available and can use the destination of a
+  // result store as the call's output pointer. By then PTSan has stripped that
+  // store destination, so instrumented libc receives a raw pointer. Expand
+  // while the result stores are still visible to PTSan.
+  for (Instruction &I : make_early_inc_range(instructions(F))) {
+    auto *Modf = dyn_cast<IntrinsicInst>(&I);
+    if (!Modf || Modf->getIntrinsicID() != Intrinsic::modf) {
+      continue;
+    }
+
+    IRBuilder<> IRB(Modf);
+    IRB.SetCurrentDebugLocation(Modf->getDebugLoc());
+    Value *Input = Modf->getArgOperand(0);
+    Value *IntPart =
+        IRB.CreateUnaryIntrinsic(Intrinsic::trunc, Input, Modf, "modf.int");
+    Value *FracPart = IRB.CreateFSubFMF(Input, IntPart, Modf, "modf.frac");
+
+    Value *FracToUse = FracPart;
+    if (!Modf->hasNoInfs()) {
+      Value *Abs = IRB.CreateFAbs(Input, Modf, "modf.abs");
+      Value *IsInf = IRB.CreateFCmpFMF(
+          FCmpInst::FCMP_OEQ, Abs, ConstantFP::getInfinity(Input->getType()),
+          Modf, "modf.isinf");
+      FracToUse = IRB.CreateSelect(IsInf, ConstantFP::getZero(Input->getType()),
+                                   FracPart, "modf.frac.select");
+    }
+
+    Value *ResultFrac =
+        IRB.CreateCopySign(FracToUse, Input, Modf, "modf.frac.signed");
+    Value *Result = PoisonValue::get(Modf->getType());
+    Result = IRB.CreateInsertValue(Result, ResultFrac, 0, "modf.result.frac");
+    Result = IRB.CreateInsertValue(Result, IntPart, 1, "modf.result");
+    Modf->replaceAllUsesWith(Result);
+    Modf->eraseFromParent();
+  }
+}
+
 static void foldObstackPointerReconstruction(Function &F) {
   // Legacy obstack_free reconstructs target as chunk + (target - chunk),
   // including a literal NULL target. Recover the original pointer and its ID
@@ -207,6 +247,7 @@ bool PTSanPreparationPass::run(Module &M) {
 }
 
 bool PTSanPreparationPass::run(PTSanAnalysisState &PTA) {
+  expandModfIntrinsics(PTA.F);
   foldObstackPointerReconstruction(PTA.F);
   normalizeNullGEPs(PTA.F);
 
