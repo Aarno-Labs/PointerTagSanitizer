@@ -10,6 +10,13 @@ import os
 import shlex
 
 
+# PTSan tests use shell loops, assignments, and compound redirections.
+# LLVM 23 defaults to lit's internal shell; retain the native shell here.
+import lit.formats
+config.test_format = lit.formats.ShTest(
+    execute_external=True, force_execute_external=True)
+config.available_features.add("shell")
+
 config.name = "PointerTagSanitizerMusl" + config.name_suffix
 config.test_source_root = os.path.dirname(__file__)
 
@@ -58,5 +65,5 @@ config.excludes.add("Inputs")
 config.available_features.add("ptsan-instrumented-musl")
 
 # Native Linux static configurations.
-if config.host_os != "Linux" or config.host_arch not in ["x86_64", "aarch64"]:
+if config.target_os != "Linux" or config.host_arch not in ["x86_64", "aarch64"]:
     config.unsupported = True

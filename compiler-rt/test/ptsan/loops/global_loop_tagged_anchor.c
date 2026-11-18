@@ -11,15 +11,19 @@
 // RUN: FileCheck %s --check-prefix=BAD < %t.bad
 
 // Static-bound folding tags the global base. Materializing the inner loop's
-// range then casts that same anchor to an integer. Late optimization must
-// preserve its tagged polarity without adding a second TaggedAnchor.
+// range then casts the global pointer to an integer. LLVM 23 folds truncation
+// into a narrow ptrtoint, which can need a fresh anchor. Late optimization must
+// preserve tagged polarity without nesting one TaggedAnchor inside another.
 // Keep the loops scalar so the range begins at the global, not a remainder GEP.
 //
 // IR-LABEL: define {{.*}}@sum(
 // IR: [[GLOBAL:%.*]] = load ptr, ptr @values.ptsan.ptr
 // IR: [[TAGGED:%.*]] = call ptr @__ptsan_tagged(ptr returned [[GLOBAL]])
 // IR: call i64 @__ptsan_static_base(ptr [[TAGGED]])
-// IR: %ptsan.first.int = ptrtoint ptr [[TAGGED]] to i64
+// IR-NOT: call ptr @__ptsan_tagged(ptr returned [[TAGGED]])
+// IR: [[FIRST_TAGGED:%.*]] = call ptr @__ptsan_tagged(ptr returned [[GLOBAL]])
+// IR-NEXT: [[LOW:%.*]] = ptrtoint ptr [[FIRST_TAGGED]] to i48
+// IR-NEXT: %ptsan.first.low = zext i48 [[LOW]] to i64
 // GOOD-NOT: Found bad
 // GOOD: sum: 43680
 // GOOD-NOT: Found bad

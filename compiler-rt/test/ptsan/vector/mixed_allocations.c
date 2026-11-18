@@ -71,7 +71,7 @@
 // DISCOVERY-GATHER: [[GATHER_BASES:%.*]] = call <4 x i64> @__ptsan_load_base(<4 x i64> [[GATHER_IDS]], <4 x i1> [[GATHER_MASK]])
 // DISCOVERY-GATHER: [[GATHER_SPANS:%.*]] = call <4 x i64> @__ptsan_load_span(<4 x i64> [[GATHER_IDS]], <4 x i1> [[GATHER_MASK]])
 // DISCOVERY-GATHER: call void (...) @__ptsan_access(<4 x i64> [[GATHER_IDS]], <4 x i64> [[GATHER_BASES]], <4 x i64> [[GATHER_SPANS]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0, <4 x i1> [[GATHER_MASK]]
-// DISCOVERY-GATHER-NEXT: {{.*}}call <4 x i32> @llvm.masked.gather.v4i32.v4p0(<4 x ptr> [[GATHER_RAW]], i32 4, <4 x i1> [[GATHER_MASK]],
+// DISCOVERY-GATHER-NEXT: {{.*}}call <4 x i32> @llvm.masked.gather.v4i32.v4p0(<4 x ptr> align 4 [[GATHER_RAW]], <4 x i1> [[GATHER_MASK]],
 //
 // DISCOVERY-SCATTER-LABEL: define {{.*}} @mixed_scatter(
 // DISCOVERY-SCATTER: [[SCATTER_MASK:%.*]] = icmp ne <4 x i32>
@@ -84,7 +84,7 @@
 // DISCOVERY-SCATTER: [[SCATTER_BASES:%.*]] = call <4 x i64> @__ptsan_load_base(<4 x i64> [[SCATTER_IDS]], <4 x i1> [[SCATTER_MASK]])
 // DISCOVERY-SCATTER: [[SCATTER_SPANS:%.*]] = call <4 x i64> @__ptsan_load_span(<4 x i64> [[SCATTER_IDS]], <4 x i1> [[SCATTER_MASK]])
 // DISCOVERY-SCATTER: call void (...) @__ptsan_access(<4 x i64> [[SCATTER_IDS]], <4 x i64> [[SCATTER_BASES]], <4 x i64> [[SCATTER_SPANS]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 1, <4 x i1> [[SCATTER_MASK]]
-// DISCOVERY-SCATTER-NEXT: {{.*}}call void @llvm.masked.scatter.v4i32.v4p0({{.*}}<4 x ptr> [[SCATTER_RAW]], i32 4, <4 x i1> [[SCATTER_MASK]])
+// DISCOVERY-SCATTER-NEXT: {{.*}}call void @llvm.masked.scatter.v4i32.v4p0({{.*}}<4 x ptr> align 4 [[SCATTER_RAW]], <4 x i1> [[SCATTER_MASK]])
 //
 // OPT-GATHER-LABEL: define {{.*}} @mixed_gather(
 // The pointer-array load, data gather, and output store are distinct accesses.

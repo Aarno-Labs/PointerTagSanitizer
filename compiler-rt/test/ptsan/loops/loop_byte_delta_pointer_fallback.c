@@ -8,7 +8,7 @@
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
 // RUN:   -mllvm -ptsan-preanalyze-loops=0 \
 // RUN:   -mllvm -ptsan-reoptimize=0 \
-// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefixes=IR,DEFAULT
+// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR
 // RUN: %clang_ptsan -O2 \
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
 // RUN:   -mllvm -ptsan-preanalyze-loops=0 \
@@ -23,28 +23,17 @@
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
 // RUN:   -mllvm -ptsan-preanalyze-loops=0 \
 // RUN:   -mllvm -ptsan-reoptimize=0 \
-// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefixes=IR,ID32
+// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR
 
-// The row pointer and column stride are both recurrences of the outer loop.
-// Consequently, the last address visited by the inner loop contains a pointer
-// AddRec shifted by a second outer-loop AddRec.  There is no exact SSA
-// representative for that address, and its offset from %row_base still
-// contains a recurrence, so it cannot be serialized directly.  The byte delta
-// therefore remains pointer-dependent and must be calculated from the low 48
-// address bits rather than by subtracting full-width tagged pointers.
-//
+// The row pointer and column stride are recurrences of the outer loop.
+// LLVM 23 can express the combined extent as an integer offset, avoiding the
+// pointer-dependent fallback needed in LLVM 19. Size arithmetic must remain
+// independent of the tagged pointer bits; the runtime still checks both the
+// valid four-row range and the invalid fifth row.
 // IR-LABEL: define {{.*}}@varying_inner_stride(
-// DEFAULT: [[FIRST:%.*]] = ptrtoint ptr %row_base.
-// DEFAULT: %ptsan.last.int = ptrtoint ptr
-// DEFAULT: [[FIRST48:%.*]] = trunc i64 [[FIRST]] to i48
-// ID32: [[FIRST48:%.*]] = trunc i64 {{%.*}} to i48
-// IR: %ptsan.first.low = zext i48 [[FIRST48]] to i64
-// IR: %ptsan.last.low = zext i48
-// IR: %ptsan.forward.delta = sub i64 %ptsan.last.low, %ptsan.first.low
-// IR: %ptsan.backward.delta = sub i64 %ptsan.first.low, %ptsan.last.low
-// IR: %ptsan.abs.delta = call i64 @llvm.smax.i64
-// IR: %ptsan.loop.size = add i64 %ptsan.abs.delta, 1
-// IR: call void @ptsan_complain({{.*}}i64 %ptsan.loop.size)
+// IR: [[EXTENT:%.*]] = call i64 @llvm.smax.i64(i64 {{%.*}}, i64 {{%.*}})
+// IR-NEXT: [[SIZE:%.*]] = add i64 [[EXTENT]], 1
+// IR: call void @ptsan_complain({{.*}}i64 [[SIZE]])
 
 // GOOD-NOT: Found bad
 // BAD: Found bad LOOP access

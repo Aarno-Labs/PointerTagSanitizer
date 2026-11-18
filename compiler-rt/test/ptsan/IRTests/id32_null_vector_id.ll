@@ -20,7 +20,7 @@ define void @strip_zero_vector() {
 ; CHECK-LABEL: define void @strip_zero_vector(
 ; CHECK: [[ID:%.*]] = call i64 @__ptsan_get_id(ptr null)
 ; CHECK-NEXT: [[BASE:%.*]] = call i64 @__ptsan_load_base(i64 [[ID]])
-; CHECK-NEXT: call <4 x ptr> @__ptsan_strip(<4 x ptr> zeroinitializer, i64 [[ID]], i64 [[BASE]])
+; CHECK-NEXT: call <4 x ptr> @__ptsan_strip(<4 x ptr> splat (ptr null), i64 [[ID]], i64 [[BASE]])
 entry:
   %id = call i64 @__ptsan_get_id(ptr null)
   %base = call i64 @__ptsan_load_base(i64 %id)

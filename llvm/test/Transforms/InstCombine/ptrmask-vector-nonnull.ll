@@ -40,8 +40,9 @@ declare <2 x ptr> @llvm.ptrmask.v2p0.v2i64(<2 x ptr>, <2 x i64>)
 define <2 x ptr> @ptrmask_vector_known_nonnull_no_nonnull_attr(<2 x i64> %indices) {
 ; CHECK-LABEL: define <2 x ptr> @ptrmask_vector_known_nonnull_no_nonnull_attr
 ; CHECK-SAME: (<2 x i64> [[INDICES:%.*]]) {
-; CHECK-NEXT:    [[GEP:%.*]] = getelementptr inbounds [64 x %struct.vector_nonnull_object], ptr @vector_nonnull_objects, i64 0, <2 x i64> [[INDICES]], i32 1
-; CHECK-NEXT:    [[R:%.*]] = call align 4 <2 x ptr> @llvm.ptrmask.v2p0.v2i64(<2 x ptr> [[GEP]], <2 x i64> <i64 281474976710652, i64 281474976710652>)
+; CHECK-NEXT:    [[BASE:%.*]] = getelementptr inbounds [8 x i8], ptr @vector_nonnull_objects, <2 x i64> [[INDICES]]
+; CHECK-NEXT:    [[GEP:%.*]] = getelementptr inbounds i8, <2 x ptr> [[BASE]], i64 4
+; CHECK-NEXT:    [[R:%.*]] = call align 4 <2 x ptr> @llvm.ptrmask.v2p0.v2i64(<2 x ptr> [[GEP]], <2 x i64> splat (i64 281474976710652))
 ; CHECK-NEXT:    ret <2 x ptr> [[R]]
 ;
   %gep = getelementptr inbounds [64 x %struct.vector_nonnull_object], ptr @vector_nonnull_objects, i64 0, <2 x i64> %indices, i32 1

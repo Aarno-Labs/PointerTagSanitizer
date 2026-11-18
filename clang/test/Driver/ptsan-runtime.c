@@ -23,8 +23,8 @@
 // RUN: %clang -### --target=x86_64-unknown-linux-musl -fsanitize=ptsan -fsanitize-ptsan-32-bit-ids -fsanitize-ptsan-strict-mode -fsanitize-ptsan-runtime-validate -c %s 2>&1 | FileCheck %s --check-prefix=FORWARD
 // FORWARD: "-mllvm" "-ptsan-32-bit-ids" "-mllvm" "-ptsan-strict-mode" "-mllvm" "-ptsan-runtime-validate"
 // RUN: %clang -### --target=x86_64-unknown-linux-musl -fsanitize-ptsan-32-bit-ids -mllvm -ptsan-strip-ids -c %s 2>&1 | FileCheck %s --check-prefix=STRIP
-// STRIP: "-mllvm" "-ptsan-32-bit-ids"
-// STRIP-SAME: "-mllvm" "-ptsan-strip-ids"
+// STRIP-DAG: "-mllvm" "-ptsan-32-bit-ids"
+// STRIP-DAG: "-mllvm" "-ptsan-strip-ids"
 
 // may-decode-raw is pass-local: the driver only forwards it.
 // RUN: %clang -### --target=x86_64-unknown-linux-musl -fsanitize=ptsan -mllvm -ptsan-may-decode-raw -c %s 2>&1 | FileCheck %s --check-prefix=RAW

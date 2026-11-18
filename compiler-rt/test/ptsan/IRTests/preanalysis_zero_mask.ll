@@ -15,8 +15,7 @@
 
 target triple = "x86_64-unknown-linux-gnu"
 
-declare <4 x i32> @llvm.masked.load.v4i32.p0(ptr, i32 immarg, <4 x i1>,
-                                             <4 x i32>)
+declare <4 x i32> @llvm.masked.load.v4i32.p0(ptr, <4 x i1>, <4 x i32>)
 
 define void @zero_mask_does_not_create_loop_range(ptr %base) {
 ; CHECK-LABEL: define void @zero_mask_does_not_create_loop_range(
@@ -36,7 +35,7 @@ loop:
   %value = load volatile i8, ptr %p
   %far = getelementptr i8, ptr %p, i64 4096
   %unused = call <4 x i32> @llvm.masked.load.v4i32.p0(
-      ptr %far, i32 4, <4 x i1> zeroinitializer, <4 x i32> poison) [ "keep"() ]
+      ptr align 4 %far, <4 x i1> zeroinitializer, <4 x i32> poison) [ "keep"() ]
   %next = add nuw i64 %i, 1
   %done = icmp eq i64 %next, 4
   br i1 %done, label %exit, label %loop, !llvm.loop !0

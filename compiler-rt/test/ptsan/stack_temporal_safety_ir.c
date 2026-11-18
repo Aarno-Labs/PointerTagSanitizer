@@ -25,7 +25,7 @@ void one_stack_id(void) {
 // STRONG-ID32: call void @ptsan_get_stack_ids
 // STRONG-ID32: call i32 @ptsan_choose_stack_origin(i64 4096)
 // STRONG-ID32: call void @escape
-// STRONG-ID32: [[SPAN:%.*]] = getelementptr inbounds %__ptsan_ObjectBounds, ptr {{.*}}, i64 {{.*}}, i32 1
+// STRONG-ID32: [[SPAN:%.*]] = getelementptr inbounds{{( nuw)?}} i8, ptr {{.*}}, i64 8
 // STRONG-ID32-NEXT: store i64 0, ptr [[SPAN]]
 // STRONG-ID32: store i64 {{.*}}, ptr @ptsan_next_stack_id
 // STRONG-ID32: call void @ptsan_free_stack_ids

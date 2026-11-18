@@ -28,7 +28,7 @@
 // output check remains, leaving two checks total.
 
 // OPT-LABEL: define {{.*}} @copy_active_cells(
-// OPT: @llvm.uadd.with.overflow.v8i64({{.*}}<i64 56, i64 56, i64 56, i64 56, i64 56, i64 56, i64 56, i64 56>)
+// OPT: @llvm.uadd.with.overflow.v8i64({{.*}}splat (i64 56))
 // OPT: call void @ptsan_complain_vector(
 // OPT-NOT: call void @ptsan_complain_vector(
 // OPT: call <8 x double> @llvm.masked.gather.v8f64.v8p0(

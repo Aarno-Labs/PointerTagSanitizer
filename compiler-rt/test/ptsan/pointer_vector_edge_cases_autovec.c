@@ -41,9 +41,9 @@
 // not claim that those two kernels force lane-wise GetID/Tag lowering.
 
 // LATE-LABEL: define {{.*}} @mixed_select(
-// LATE: [[COMMON:%.*]] = getelementptr inbounds i32, ptr %common, <4 x i64>
+// LATE: [[COMMON:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, ptr %common, <4 x i64>
 // LATE: [[BASES:%.*]] = load <4 x ptr>,
-// LATE: [[MIXED:%.*]] = getelementptr inbounds i32, <4 x ptr> [[BASES]], <4 x i64>
+// LATE: [[MIXED:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, <4 x ptr> [[BASES]], <4 x i64>
 // LATE: [[SELECTED:%.*]] = select <4 x i1> {{%.*}}, <4 x ptr> [[MIXED]], <4 x ptr> [[COMMON]]
 // LATE: [[RAW_SELECTED:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[SELECTED]]
 // LATE: icmp eq <4 x ptr> [[RAW_SELECTED]],
@@ -53,19 +53,19 @@
 // LATE-LABEL: define {{.*}} @mixed_recurrence(
 // LATE: [[RECURRENCE:%.*]] = phi <4 x ptr>
 // LATE: [[BASES:%.*]] = load <4 x ptr>,
-// LATE: [[CURRENT:%.*]] = getelementptr inbounds i32, <4 x ptr> [[BASES]], <4 x i64>
+// LATE: [[CURRENT:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, <4 x ptr> [[BASES]], <4 x i64>
 // LATE: [[RAW_CURRENT:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[CURRENT]]
 // LATE: shufflevector <4 x ptr> {{%.*}}, <4 x ptr> [[CURRENT]],
 // LATE: icmp eq <4 x ptr> [[RAW_CURRENT]],
 
 // LATE-LABEL: define {{.*}} @guarded_store(
-// LATE: [[POINTERS:%.*]] = getelementptr inbounds i32, ptr %base, <4 x i64>
+// LATE: [[POINTERS:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, ptr %base, <4 x i64>
 // LATE: [[TAGGED_POINTERS:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}[[POINTERS]])
-// LATE: {{.*}}call void @llvm.masked.store.v4p0.p0(<4 x ptr> [[TAGGED_POINTERS]],
+// LATE: {{.*}}call void @llvm.masked.store.v4p0.p0(<4 x ptr> {{(align [0-9]+ )?}}[[TAGGED_POINTERS]],
 
 // LATE-LABEL: define {{.*}} @nullable_load(
-// LATE: [[NULLS:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}zeroinitializer)
-// LATE: [[LOADED:%.*]] = {{.*}}call <4 x ptr> @llvm.masked.load.v4p0.p0(ptr {{%.*}}, i32 8, <4 x i1> {{%.*}}, <4 x ptr> [[NULLS]])
+// LATE: [[NULLS:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}splat (ptr null))
+// LATE: [[LOADED:%.*]] = {{.*}}call <4 x ptr> @llvm.masked.load.v4p0.p0(ptr align 8 {{%.*}}, <4 x i1> {{%.*}}, <4 x ptr> [[NULLS]])
 // LATE: [[TAGGED_LOADED:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}[[LOADED]])
 // LATE: store <4 x ptr> [[TAGGED_LOADED]],
 

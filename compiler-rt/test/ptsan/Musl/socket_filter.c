@@ -6,7 +6,7 @@
 // Exercise classic BPF socket filters, whose program contains a nested
 // instruction pointer.
 //
-// RUN: %ptsan_musl_strict -Wall -Wextra -Werror -o %t %s
+// RUN: %ptsan_musl_strict -Wall -Wextra -Werror -Wno-alloc-size -o %t %s
 // RUN: %run %t good
 // RUN: not %run %t bad-filter 2> %t.filter
 // RUN: FileCheck %s < %t.filter
@@ -41,6 +41,7 @@ static int testGood(void) {
 static int testBadFilter(void) {
   struct TestSocketFilterProgram program;
   program.length = 1;
+  // Deliberately undersized: the runtime must diagnose the nested range.
   program.filter = malloc(sizeof(struct TestSocketFilter) - 1);
   if (!program.filter) {
     return 1;

@@ -20,7 +20,7 @@ declare void @llvm.masked.scatter.v2i32.v2p0(<2 x i32>, <2 x ptr>, i32 immarg, <
 ; CHECK: %mask = icmp sgt
 ; CHECK: [[BASE:%.*]] = call <2 x i64> @__ptsan_load_base({{.*}}<2 x i1> %mask)
 ; CHECK: [[RAW:%.*]] = call <2 x ptr> @__ptsan_strip_id32({{.*}}<2 x i64> [[BASE]])
-; CHECK: call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> [[RAW]], i32 4, <2 x i1> %mask,
+; CHECK: call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> align 4 [[RAW]], <2 x i1> %mask,
 define <2 x i32> @computed_mask(<2 x ptr> %pointers, <2 x i64> %indices) {
   %mask = icmp sgt <2 x i64> %indices, zeroinitializer
   %value = call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> %pointers, i32 4, <2 x i1> %mask, <2 x i32> zeroinitializer)
@@ -36,7 +36,7 @@ define <2 x i32> @computed_mask(<2 x ptr> %pointers, <2 x i64> %indices) {
 ; CHECK: %second_mask = icmp sgt
 ; CHECK: [[SECOND_BASE:%.*]] = call <2 x i64> @__ptsan_load_base({{.*}}<2 x i1> %second_mask)
 ; CHECK: [[SECOND_RAW:%.*]] = call <2 x ptr> @__ptsan_strip_id32({{.*}}<2 x i64> [[SECOND_BASE]])
-; CHECK: call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> [[SECOND_RAW]], i32 4, <2 x i1> %second_mask,
+; CHECK: call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> align 4 [[SECOND_RAW]], <2 x i1> %second_mask,
 define <2 x i32> @sequential_masks(<2 x ptr> %pointers, <2 x i64> %indices) {
   %first_mask = icmp sgt <2 x i64> %indices, zeroinitializer
   %first = call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> %pointers, i32 4, <2 x i1> %first_mask, <2 x i32> zeroinitializer)
@@ -50,12 +50,12 @@ define <2 x i32> @sequential_masks(<2 x ptr> %pointers, <2 x i64> %indices) {
 ; CHECK: %left_mask = icmp sgt
 ; CHECK: [[LEFT_BASE:%.*]] = call <2 x i64> @__ptsan_load_base({{.*}}<2 x i1> %left_mask)
 ; CHECK: [[LEFT_RAW:%.*]] = call <2 x ptr> @__ptsan_strip_id32({{.*}}<2 x i64> [[LEFT_BASE]])
-; CHECK: call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> [[LEFT_RAW]],
+; CHECK: call <2 x i32> @llvm.masked.gather.v2i32.v2p0(<2 x ptr> {{(align [0-9]+ )?}}[[LEFT_RAW]],
 ; CHECK: right:
 ; CHECK: %right_mask = icmp slt
 ; CHECK: [[RIGHT_BASE:%.*]] = call <2 x i64> @__ptsan_load_base({{.*}}<2 x i1> %right_mask)
 ; CHECK: [[RIGHT_RAW:%.*]] = call <2 x ptr> @__ptsan_strip_id32({{.*}}<2 x i64> [[RIGHT_BASE]])
-; CHECK: call void @llvm.masked.scatter.v2i32.v2p0({{.*}}<2 x ptr> [[RIGHT_RAW]],
+; CHECK: call void @llvm.masked.scatter.v2i32.v2p0({{.*}}<2 x ptr> {{(align [0-9]+ )?}}[[RIGHT_RAW]],
 define <2 x i32> @branch_masks(<2 x ptr> %pointers, <2 x i64> %indices, i1 %choose) {
   br i1 %choose, label %left, label %right
 left:

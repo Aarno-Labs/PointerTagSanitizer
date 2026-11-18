@@ -24,7 +24,7 @@ declare <vscale x 4 x i32> @llvm.masked.gather.nxv4i32.nxv4p0(
 define <vscale x 4 x i32> @contiguous(ptr %base,
                                       <vscale x 4 x i1> %mask) {
 ; META-LABEL: define <vscale x 4 x i32> @contiguous(
-; META: [[LANES:%.*]] = call <vscale x 4 x i64> @llvm.experimental.stepvector.nxv4i64()
+; META: [[LANES:%.*]] = call <vscale x 4 x i64> @llvm.stepvector.nxv4i64()
 ; META: [[OFFSETS:%.*]] = mul <vscale x 4 x i64> [[LANES]], {{.*}}
 ; META: [[POINTERS:%.*]] = getelementptr i8, ptr %base, <vscale x 4 x i64> [[OFFSETS]]
 ; META: call void (...) @__ptsan_access({{.*}}<vscale x 4 x ptr> [[POINTERS]], <vscale x 4 x i64> {{.*}}, i64 4, i32 1, i32 0, <vscale x 4 x i1> %mask
@@ -38,7 +38,7 @@ entry:
 define <vscale x 4 x i32> @gather(<vscale x 4 x ptr> %pointers,
                                   <vscale x 4 x i1> %mask) {
 ; META-LABEL: define <vscale x 4 x i32> @gather(
-; META-NOT: llvm.experimental.stepvector
+; META-NOT: llvm.stepvector
 ; META: call void (...) @__ptsan_access({{.*}}<vscale x 4 x ptr> %pointers, <vscale x 4 x i64> {{.*}}, i64 4, i32 1, i32 0, <vscale x 4 x i1> %mask
 entry:
   %value = call <vscale x 4 x i32> @llvm.masked.gather.nxv4i32.nxv4p0(

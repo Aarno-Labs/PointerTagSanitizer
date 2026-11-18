@@ -30,7 +30,7 @@
 // RUN: not ./%exe.id32 mixed-bad 2>&1 | FileCheck %s --check-prefix=BAD
 
 // LATE-LABEL: define {{.*}} @common_ids(
-// LATE: [[COMMON:%.*]] = getelementptr inbounds i32, ptr %base, <4 x i64>
+// LATE: [[COMMON:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, ptr %base, <4 x i64>
 // LATE: [[COMMON_RAW:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[COMMON]]
 // LATE: icmp eq <4 x ptr> [[COMMON_RAW]],
 // LATE: [[COMMON_TAGGED:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}[[COMMON]])
@@ -38,14 +38,14 @@
 
 // LATE-LABEL: define {{.*}} @mixed_ids(
 // LATE: [[BASES:%.*]] = load <4 x ptr>,
-// LATE: [[MIXED:%.*]] = getelementptr inbounds i32, <4 x ptr> [[BASES]], <4 x i64>
+// LATE: [[MIXED:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, <4 x ptr> [[BASES]], <4 x i64>
 // LATE: [[MIXED_RAW:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[MIXED]]
 // LATE: icmp eq <4 x ptr> [[MIXED_RAW]],
 // LATE: [[MIXED_TAGGED:%.*]] = call <4 x ptr> @__ptsan_tagged(<4 x ptr> {{.*}}[[MIXED]])
 // LATE: store <4 x ptr> [[MIXED_TAGGED]],
 
 // LATE-LABEL: define {{.*}} @gep_recurrence(
-// LATE: [[CURRENT:%.*]] = getelementptr inbounds i32, ptr %base, <4 x i64>
+// LATE: [[CURRENT:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, ptr %base, <4 x i64>
 // LATE: [[CURRENT_RAW:%.*]] = call <4 x ptr> @__ptsan_strip(<4 x ptr> [[CURRENT]]
 // LATE: shufflevector <4 x ptr> {{%.*}}, <4 x ptr> [[CURRENT]],
 // LATE: icmp eq <4 x ptr> [[CURRENT_RAW]],

@@ -28,7 +28,7 @@
 
 // OPT-LABEL: define {{.*}} @sum_adjacent(
 // OPT: getelementptr i8, ptr {{.*}}, <8 x i64> <i64 0, i64 4, i64 8, i64 12, i64 16, i64 20, i64 24, i64 28>
-// OPT: @llvm.uadd.with.overflow.v8i64({{.*}}<i64 8, i64 8, i64 8, i64 8, i64 8, i64 8, i64 8, i64 8>)
+// OPT: @llvm.uadd.with.overflow.v8i64({{.*}}splat (i64 8))
 // OPT: call void @ptsan_complain_vector(
 // OPT-NOT: call void @ptsan_complain_vector(
 // OPT: call <8 x i32> @llvm.masked.load.v8i32.p0(

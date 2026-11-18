@@ -50,7 +50,7 @@ void merge_accesses(char *buf, int idx) {
 
 __attribute__((noinline))
 void removable_stack(int idx) {
-  char buf[20];
+  volatile char buf[20] = {0};
   int j = idx & 15;
   Sink = buf[j];
 }
@@ -79,7 +79,7 @@ void removable_const_global(int idx) {
 
 __attribute__((noinline))
 void one_stack(int i) {
-  char buf[20];
+  volatile char buf[20] = {0};
   Sink = buf[i];
 }
 

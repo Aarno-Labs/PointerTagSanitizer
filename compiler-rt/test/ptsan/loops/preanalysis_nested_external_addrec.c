@@ -86,7 +86,7 @@ void nested_external_addrec(struct nested_data *data, unsigned rows) {
 // CHECK-DAG: ![[MIN]] = !{!"scev", i16 5, ![[ROW_TERM:[0-9]+]], {{.*}}}
 // CHECK-DAG: ![[ROW_TERM]] = !{!"scev", i16 6, {{.*}}![[ROW_ADDREC:[0-9]+]]}
 // CHECK-DAG: ![[ROW_ADDREC]] = !{!"scev", i16 3, ![[ROW_UNKNOWN:[0-9]+]], i32 64}
-// CHECK-DAG: ![[ROW_UNKNOWN]] = !{!"scev", i16 15, ![[ROW_CAPTURE:[0-9]+]]}
+// CHECK-DAG: ![[ROW_UNKNOWN]] = !{!"scev", i16 16, ![[ROW_CAPTURE:[0-9]+]]}
 // CHECK-DAG: ![[ROW_CAPTURE]] = !{!"capture", i32 1}
 
 // Runtime unrolling moves a scalar prologue in front of the surviving inner

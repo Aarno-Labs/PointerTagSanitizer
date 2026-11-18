@@ -12,8 +12,8 @@
 ; CHECK-DAG: [[ASINT:%[0-9A-Za-z_.]+]] = ptrtoint ptr %call to i64
 ; DEFAULT-DAG: [[ID:%[0-9A-Za-z_.]+]] = lshr i64 [[ASINT]], 48
 ; ID32-DAG: [[ID:%[0-9A-Za-z_.]+]] = select i1 {{.*}}, i64 {{.*}}, i64 0
-; CHECK-DAG: [[BASEGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 0
-; CHECK-DAG: [[BOUNDGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 1
+; CHECK-DAG: [[BASEGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds{{( nuw)?}} [16 x i8], ptr {{.*}}, i64 [[ID]]
+; CHECK-DAG: [[BOUNDGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds{{( nuw)?}} i8, ptr [[BASEGEP]], i64 8
 ; CHECK-DAG: [[BASEVAL:%[0-9A-Za-z_.]+]] = load i64, ptr [[BASEGEP]], align 8
 ; CHECK-DAG: [[BOUNDVAL:%[0-9A-Za-z_.]+]] = load i64, ptr [[BOUNDGEP]], align 8
 ; CHECK: br i1

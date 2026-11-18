@@ -5,10 +5,10 @@
 ; Check should only get to if.end
 ; CHECK-LABEL: define{{.*}}@case_branch_poison
 ; CHECK-LABEL: if.end:
-; CHECK: baseGep = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64
-; CHECK: base = load i64,
-; CHECK: spanGep = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64
-; CHECK: span = load i64,
+; CHECK: [[BASE:%.*]] = getelementptr inbounds{{( nuw)?}} [16 x i8], ptr @ptsan_bounds, i64
+; CHECK: [[SPAN:%.*]] = getelementptr inbounds{{( nuw)?}} i8, ptr [[BASE]], i64 8
+; CHECK-DAG: load i64, ptr [[SPAN]], align 8
+; CHECK-DAG: load i64, ptr [[BASE]], align 8
 
 
 ; ModuleID = '../hoisting.c'

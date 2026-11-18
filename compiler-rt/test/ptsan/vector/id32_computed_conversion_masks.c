@@ -28,15 +28,15 @@
 // CHECK: [[IDS:%.*]] = call <4 x i64> @__ptsan_get_id(<4 x ptr> [[POINTERS]])
 // CHECK: [[BASES:%.*]] = call <4 x i64> @__ptsan_load_base(<4 x i64> [[IDS]], <4 x i1> [[MASK]])
 // CHECK: [[RAW:%.*]] = call <4 x ptr> @__ptsan_strip_id32(<4 x ptr> [[POINTERS]], <4 x i64> [[IDS]], <4 x i64> [[BASES]])
-// CHECK: call <4 x i32> @llvm.masked.gather{{.*}}(<4 x ptr> [[RAW]], i32 4, <4 x i1> [[MASK]],
+// CHECK: call <4 x i32> @llvm.masked.gather{{.*}}(<4 x ptr> align 4 [[RAW]], <4 x i1> [[MASK]],
 //
 // CHECK-LABEL: define {{.*}} @sequential_masks(
 // CHECK: [[SHARED_RAW:%.*]] = call <4 x ptr> @__ptsan_strip_id32(
-// CHECK: [[FIRST:%.*]] = {{.*}}call <4 x i32> @llvm.masked.gather{{.*}}(<4 x ptr> [[SHARED_RAW]],
+// CHECK: [[FIRST:%.*]] = {{.*}}call <4 x i32> @llvm.masked.gather{{.*}}(<4 x ptr> {{(align [0-9]+ )?}}[[SHARED_RAW]],
 // CHECK: [[LATER_MASK:%.*]] = icmp sgt <4 x i32> {{%.*}}, [[FIRST]]
 // CHECK-NOT: call <4 x ptr> @__ptsan_strip_id32(
-// CHECK: [[NEXT:%.*]] = getelementptr inbounds i8, <4 x ptr> [[SHARED_RAW]], i64 4
-// CHECK: call <4 x i32> @llvm.masked.gather{{.*}}(<4 x ptr> [[NEXT]], i32 4, <4 x i1> [[LATER_MASK]],
+// CHECK: [[NEXT:%.*]] = getelementptr inbounds{{( nuw)?}} i8, <4 x ptr> [[SHARED_RAW]], i64 4
+// CHECK: call <4 x i32> @llvm.masked.gather{{.*}}(<4 x ptr> align 4 [[NEXT]], <4 x i1> [[LATER_MASK]],
 // BAD: Found bad VECTOR access
 
 #include <assert.h>

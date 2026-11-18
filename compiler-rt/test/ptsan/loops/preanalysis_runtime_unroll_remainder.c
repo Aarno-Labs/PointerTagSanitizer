@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
 // CHECK: call void @llvm.sideeffect() [ "ptsan.loop.preheader"(i64 [[LOOP_ID:[0-9]+]]), "deopt"(ptr %array, i32 %count) ], !ptsan.loop.bounds ![[BOUNDS:[0-9]+]]
 // CHECK-COUNT-1: call void (...) @__ptsan_loop_preanalysis(
 // CHECK: br i1 {{.*}}, label %for.cond.cleanup, label %for.body.epil
-// CHECK: for.body.epil:
+// CHECK: for.body.epil.preheader:
 // CHECK-NOT: call void (...) @__ptsan_access(
 // CHECK: store i32
 // CHECK: for.body:

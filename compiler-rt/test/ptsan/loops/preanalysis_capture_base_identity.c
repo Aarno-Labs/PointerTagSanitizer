@@ -31,8 +31,6 @@
 // CAPTURE-NEXT: call void (...) @__ptsan_loop_preanalysis(
 // CAPTURE-NOT: call void (...) @__ptsan_access(
 // CAPTURE: {{^}}[[REMAINDER_DISPATCH]]:
-// CAPTURE: br i1 {{.*}}, label %for.cond.cleanup, label %[[REMAINDER:[^, ]+]]
-// CAPTURE: {{^}}[[REMAINDER]]:
 // CAPTURE: [[REMAINDER_BASE:%.*]] = load ptr, ptr
 // CAPTURE: call void @llvm.sideeffect() [ "ptsan.loop.preheader"(i64 [[INNER_ID]]), "deopt"(ptr [[REMAINDER_BASE]], i32 %column_count) ]{{.*}}!ptsan.loop.bounds
 // CAPTURE-NEXT: call void (...) @__ptsan_loop_preanalysis(

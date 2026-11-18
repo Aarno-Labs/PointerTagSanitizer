@@ -9,8 +9,8 @@
 ;DEFAULT: [[ID:%.*]] = lshr i64 {{%.*}}, 48
 ;ID32: %cond = select i1 %tobool.not, ptr {{%.*}}, ptr {{%.*}}, !ptsan.stripped
 ;ID32: [[ID:%.*]] = select i1 %tobool.not, i64 %call1.id, i64 %call.id
-;CHECK-DAG: {{%.*}} = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 0
-;CHECK-DAG: {{%.*}} = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 1
+;CHECK-DAG: {{%.*}} = getelementptr inbounds{{( nuw)?}} [16 x i8], ptr {{.*}}, i64 [[ID]]
+;CHECK-DAG: {{%.*}} = getelementptr inbounds{{( nuw)?}} i8, ptr {{%.*}}, i64 8
 
 
 ; ModuleID = '../hoisting.c'

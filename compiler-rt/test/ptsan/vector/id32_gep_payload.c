@@ -24,9 +24,9 @@ int objects[256];
 // offsets from objects are 0..60 and 12..72, respectively.
 // CHECK-LABEL: define {{.*}} @constant_step(
 // CHECK-NOT: call <4 x ptr> @__ptsan_strip_id32
-// CHECK: [[FIRST:%.*]] = getelementptr inbounds i32, {{.*}} <4 x i64> {{.*}} !ptsan.tagged
+// CHECK: [[FIRST:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, {{.*}} <4 x i64> {{.*}} !ptsan.tagged
 // CHECK-NOT: call <4 x ptr> @__ptsan_tag_id32
-// CHECK: getelementptr inbounds i8, <4 x ptr> [[FIRST]], i64 12, {{.*}} !ptsan.tagged
+// CHECK: getelementptr inbounds{{( nuw)?}} i8, <4 x ptr> [[FIRST]], i64 12,{{.*}} !ptsan.tagged
 // CHECK-NOT: call <4 x ptr> @__ptsan_tag_id32
 // CHECK: ret void
 __attribute__((noinline))
@@ -43,9 +43,9 @@ void constant_step(int **restrict first, int **restrict second,
 // Expect both vector GEPs to stay tagged, without stripping: the second bounded
 // index extends the total byte-offset range from 0..60 to 0..88.
 // CHECK-LABEL: define {{.*}} @varying_step(
-// CHECK: [[FIRST:%.*]] = getelementptr inbounds i32, {{.*}} <4 x i64> {{.*}} !ptsan.tagged
+// CHECK: [[FIRST:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, {{.*}} <4 x i64> {{.*}} !ptsan.tagged
 // CHECK-NOT: call <4 x ptr> @__ptsan_tag_id32
-// CHECK: getelementptr inbounds i32, <4 x ptr> [[FIRST]], <4 x i64> {{.*}} !ptsan.tagged
+// CHECK: getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, <4 x ptr> [[FIRST]], <4 x i64> {{.*}} !ptsan.tagged
 // CHECK-NOT: call <4 x ptr> @__ptsan_tag_id32
 // CHECK: ret void
 __attribute__((noinline))
@@ -64,8 +64,8 @@ void varying_step(int **restrict first, int **restrict second,
 // scalar prefix contributes 0..60 bytes and the vector adds 0..28 bytes.
 // CHECK-LABEL: define {{.*}} @scalar_start(
 // CHECK-NOT: call <4 x ptr> @__ptsan_strip_id32
-// CHECK: [[START:%.*]] = getelementptr inbounds i32, ptr {{.*}} !ptsan.tagged
-// CHECK: getelementptr inbounds i32, ptr [[START]], <4 x i64> {{.*}} !ptsan.tagged
+// CHECK: [[START:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, ptr {{.*}} !ptsan.tagged
+// CHECK: getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, ptr [[START]], <4 x i64> {{.*}} !ptsan.tagged
 // CHECK-NOT: call <4 x ptr> @__ptsan_tag_id32
 // CHECK: ret ptr
 __attribute__((noinline))
@@ -98,8 +98,8 @@ void unknown_base(int *base, int **restrict output,
 // results. Even though the final step is small, the prefix can exceed the
 // representable payload: an unrestricted unsigned index is scaled by four.
 // CHECK-LABEL: define {{.*}} @unbounded_prefix(
-// CHECK: [[FIRST:%.*]] = getelementptr inbounds i32, {{.*}} <4 x i64> {{.*}} !ptsan.stripped
-// CHECK: getelementptr inbounds i8, <4 x ptr> [[FIRST]], i64 12, {{.*}} !ptsan.stripped
+// CHECK: [[FIRST:%.*]] = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, {{.*}} <4 x i64> {{.*}} !ptsan.stripped
+// CHECK: getelementptr inbounds{{( nuw)?}} i8, <4 x ptr> [[FIRST]], i64 12,{{.*}} !ptsan.stripped
 // CHECK: call <4 x ptr> @__ptsan_tag_id32
 // CHECK: ret void
 __attribute__((noinline))
@@ -140,15 +140,16 @@ void past_headroom(int **restrict output, const unsigned *restrict indices) {
   }
 }
 
-// Expect the vector GEP to stay tagged, without stripping. SLP broadcasts a
-// scalar pointer through insertelement/shufflevector; the TaggedAnchor on the
-// inserted scalar must not hide its allocation base or its scalar offset.
+// Expect the vector GEP to stay tagged, without stripping. LLVM 23 represents
+// the broadcast as a scalar-base/vector-index GEP; its scalar prefix must not
+// hide the allocation base or offset. The explicit insertelement/shufflevector
+// form is covered separately by IRTests/id32_gep_splat.ll.
 // This IR check uses AVX to make SLP choose four pointer lanes. Runtime checks
 // still compile for baseline x86-64 and do not require AVX on the test host.
 // SPLAT-LABEL: define {{.*}} @scalar_splat(
 // SPLAT-NOT: call <4 x ptr> @__ptsan_strip_id32
-// SPLAT: shufflevector <4 x ptr>
-// SPLAT: getelementptr i8, <4 x ptr> {{.*}} !ptsan.tagged
+// SPLAT: [[START:%.*]] = getelementptr inbounds{{( nuw)?}} [4 x i8], ptr {{.*}}, i64 {{.*}}, !ptsan.tagged
+// SPLAT: getelementptr inbounds{{( nuw)?}} i8, ptr [[START]], <4 x i64> <i64 4, i64 12, i64 20, i64 28>, !ptsan.tagged
 // SPLAT-NOT: call <4 x ptr> @__ptsan_tag_id32
 // SPLAT: ret void
 __attribute__((noinline))

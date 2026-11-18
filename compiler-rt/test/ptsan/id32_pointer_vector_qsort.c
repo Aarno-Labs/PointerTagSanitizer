@@ -17,7 +17,7 @@
 // RUN: %run %t
 
 // RAW-LABEL: define {{.*}} @initialize(
-// RAW: getelementptr i8, <4 x ptr> {{%.*}}, <4 x i64>
+// RAW: getelementptr inbounds{{( nuw)?}} i8, ptr %base, <4 x i64> <i64 32, i64 28, i64 24, i64 20>
 // RAW: store <4 x ptr>
 
 #include "Inputs/ptsan_test_interface.h"

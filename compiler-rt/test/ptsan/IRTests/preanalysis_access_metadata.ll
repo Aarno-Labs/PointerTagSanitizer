@@ -17,10 +17,10 @@ define void @copy(ptr noalias %dst, ptr noalias %src) {
 ; CHECK: define void @copy(
 ; CHECK: call void @llvm.sideeffect() {{.*}}!ptsan.loop.bounds
 ; CHECK: %i = phi i64 [ 0, %entry ], [ %next, %loop ]{{$}}
-; CHECK: %p = getelementptr inbounds i32, ptr %src, i64 %i{{$}}
+; CHECK: %p = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, ptr %src, i64 %i{{$}}
 ; CHECK: %x = load i32, ptr %p, align 4, !ptsan.loop.ids ![[ID:[0-9]+]]
 ; CHECK: %y = add i32 %x, 1{{$}}
-; CHECK: %q = getelementptr inbounds i32, ptr %dst, i64 %i{{$}}
+; CHECK: %q = getelementptr inbounds{{( nuw)?}} {{(i32|\[4 x i8\])}}, ptr %dst, i64 %i{{$}}
 ; CHECK: store i32 %y, ptr %q, align 4, !ptsan.loop.ids ![[ID]]
 ; CHECK: %next = add nuw nsw i64 %i, 1{{$}}
 ; CHECK: %done = icmp eq i64 %next, 64{{$}}

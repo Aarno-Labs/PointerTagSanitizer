@@ -10,13 +10,13 @@ volatile int Sink;
 
 __attribute__((noinline))
 void use_stack_unknown(int i) {
-  char buf[20];
+  volatile char buf[20] = {0};
   Sink = buf[i];
 }
 
 __attribute__((noinline))
 void use_stack_masked(int i) {
-  char buf[20];
+  volatile char buf[20] = {0};
   int j = i & 15;
   Sink = buf[j];
 }

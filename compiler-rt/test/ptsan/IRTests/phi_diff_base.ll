@@ -9,8 +9,8 @@
 ;DEFAULT: [[ID:%.*]] = phi i64 [ %call1.id, %if.else ], [ %call.id, %if.then ]
 ;ID32: [[ID:%.*]] = phi i64 [ %call.id, %if.then ], [ %call1.id, %if.else ]
 ;ID32: %ptr.0 = phi ptr {{.*}}, !ptsan.stripped
-;CHECK-DAG:   {{%.*}} = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 0
-;CHECK-DAG:   {{%.*}} = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 1
+;CHECK-DAG:   {{%.*}} = getelementptr inbounds{{( nuw)?}} [16 x i8], ptr {{.*}}, i64 [[ID]]
+;CHECK-DAG:   {{%.*}} = getelementptr inbounds{{( nuw)?}} i8, ptr {{%.*}}, i64 8
 ;CHECK-DAG:   {{%.*}} = load i64, ptr {{%.*}}, align 8
 ;CHECK-DAG:   {{%.*}} = load i64, ptr {{%.*}}, align 8
 ;CHECK-DAG:   %ptr.0.inRange.not =

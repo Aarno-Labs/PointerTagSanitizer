@@ -61,12 +61,12 @@ void nested_recursive_representatives(struct nested_data *data,
 // CHECK-DAG: ![[MIN]] = !{!"scev", i16 5, ![[MIDDLE_TERM:[0-9]+]], {{.*}}}
 // CHECK-DAG: ![[MIDDLE_TERM]] = !{!"scev", i16 6, {{.*}}![[MIDDLE_ADDREC:[0-9]+]]}
 // CHECK-DAG: ![[MIDDLE_ADDREC]] = !{!"scev", i16 3, ![[MIDDLE_UNKNOWN:[0-9]+]], i32 64}
-// CHECK-DAG: ![[MIDDLE_UNKNOWN]] = !{!"scev", i16 15, ![[MIDDLE_CAPTURE:[0-9]+]]}
+// CHECK-DAG: ![[MIDDLE_UNKNOWN]] = !{!"scev", i16 16, ![[MIDDLE_CAPTURE:[0-9]+]]}
 // CHECK-DAG: ![[MIDDLE_CAPTURE]] = !{!"capture", i32 1}
 // CHECK-DAG: ![[MAX]] = !{!"scev", i16 5, ![[MAX_TERM:[0-9]+]], {{.*}}}
 // CHECK-DAG: ![[MAX_TERM]] = !{!"scev", i16 6, {{.*}}![[MAX_ADDREC:[0-9]+]]}
 // CHECK-DAG: ![[MAX_ADDREC]] = !{!"scev", i16 3, ![[STRIDE_OFFSET:[0-9]+]], i32 64}
 // CHECK-DAG: ![[STRIDE_OFFSET]] = !{!"scev", i16 5, ![[STRIDE_TERM:[0-9]+]], {{.*}}}
 // CHECK-DAG: ![[STRIDE_TERM]] = !{!"scev", i16 6, {{.*}}![[STRIDE_UNKNOWN:[0-9]+]]}
-// CHECK-DAG: ![[STRIDE_UNKNOWN]] = !{!"scev", i16 15, ![[STRIDE_CAPTURE:[0-9]+]]}
+// CHECK-DAG: ![[STRIDE_UNKNOWN]] = !{!"scev", i16 16, ![[STRIDE_CAPTURE:[0-9]+]]}
 // CHECK-DAG: ![[STRIDE_CAPTURE]] = !{!"capture", i32 3}

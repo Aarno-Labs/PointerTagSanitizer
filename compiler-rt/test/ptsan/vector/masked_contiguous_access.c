@@ -35,16 +35,16 @@
 // DISCOVERY-LOAD: [[LOAD_MASK:%.*]] = and <4 x i1>
 // DISCOVERY-LOAD: [[LOAD_RAW:%.*]] = call ptr @__ptsan_strip(
 // DISCOVERY-LOAD: call void (...) @__ptsan_access({{.*}}i64 4, i32 1, i32 0, <4 x i1> [[LOAD_MASK]]
-// DISCOVERY-LOAD-NEXT: {{.*}}call <4 x i32> @llvm.masked.load.v4i32.p0(ptr [[LOAD_RAW]], i32 4, <4 x i1> [[LOAD_MASK]],
+// DISCOVERY-LOAD-NEXT: {{.*}}call <4 x i32> @llvm.masked.load.v4i32.p0(ptr align 4 [[LOAD_RAW]], <4 x i1> [[LOAD_MASK]],
 // DISCOVERY-LOAD: [[STORE_RAW:%.*]] = call ptr @__ptsan_strip(
 // DISCOVERY-LOAD: call void (...) @__ptsan_access({{.*}}i64 4, i32 1, i32 1, <4 x i1> [[LOAD_MASK]]
-// DISCOVERY-LOAD-NEXT: {{.*}}call void @llvm.masked.store.v4i32.p0({{.*}}ptr [[STORE_RAW]], i32 4, <4 x i1> [[LOAD_MASK]])
+// DISCOVERY-LOAD-NEXT: {{.*}}call void @llvm.masked.store.v4i32.p0({{.*}}ptr align 4 [[STORE_RAW]], <4 x i1> [[LOAD_MASK]])
 
 // DISCOVERY-STORE-LABEL: define {{.*}} @guarded_store(
 // DISCOVERY-STORE: [[STORE_MASK:%.*]] = and <4 x i1>
 // DISCOVERY-STORE: [[ONLY_STORE_RAW:%.*]] = call ptr @__ptsan_strip(
 // DISCOVERY-STORE: call void (...) @__ptsan_access({{.*}}i64 4, i32 1, i32 1, <4 x i1> [[STORE_MASK]]
-// DISCOVERY-STORE-NEXT: {{.*}}call void @llvm.masked.store.v4i32.p0({{.*}}ptr [[ONLY_STORE_RAW]], i32 4, <4 x i1> [[STORE_MASK]])
+// DISCOVERY-STORE-NEXT: {{.*}}call void @llvm.masked.store.v4i32.p0({{.*}}ptr align 4 [[ONLY_STORE_RAW]], <4 x i1> [[STORE_MASK]])
 
 // BAD: Found bad VECTOR access
 // GOOD-NOT: Found bad

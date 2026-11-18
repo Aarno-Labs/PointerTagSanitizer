@@ -5,8 +5,8 @@
 ; Check should be hoisted to invoke.cont, but no higher
 ; CHECK-LABEL: define{{.*}}@_Z11test_invokePi
 ; CHECK-LABEL: invoke.cont:
-; CHECK-DAG: [[BASEGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64 %buf.id{{[0-9]*}}, i32 0
-; CHECK-DAG: [[BOUNDGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64 %buf.id{{[0-9]*}}, i32 1
+; CHECK-DAG: [[BASEGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds{{( nuw)?}} [16 x i8], ptr @ptsan_bounds, i64 %buf.id{{[0-9]*}}
+; CHECK-DAG: [[BOUNDGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds{{( nuw)?}} i8, ptr [[BASEGEP]], i64 8
 ; CHECK-DAG: [[BASEVAL:%[0-9A-Za-z_.]+]] = load i64, ptr [[BASEGEP]], align 8
 ; CHECK-DAG: [[BOUNDVAL:%[0-9A-Za-z_.]+]] = load i64, ptr [[BOUNDGEP]], align 8
 ; CHECK: br i1

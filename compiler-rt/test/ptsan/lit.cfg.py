@@ -2,10 +2,17 @@
 # -*- Python -*-
 
 import os
+import platform
 import subprocess
 import sys
 
 # Setup config name.
+# PTSan tests use shell loops, assignments, and compound redirections.
+# LLVM 23 defaults to lit's internal shell; retain the native shell here.
+import lit.formats
+config.test_format = lit.formats.ShTest(
+    execute_external=True, force_execute_external=True)
+
 config.name = "PointerTagSanitizer" + config.name_suffix
 
 # Setup source root.
@@ -56,7 +63,7 @@ config.excludes.add('Inputs')
 config.excludes.add('lib')
 
 def host_supports_x86_lam_u48():
-    if config.host_os != "Linux":
+    if platform.system() != "Linux":
         return False
     if config.host_arch != "x86_64":
         return False
@@ -88,5 +95,5 @@ if host_supports_x86_lam_u48():
     config.available_features.add("ptsan-lam-u48-runtime")
 
 # PTSan tests are currently supported on Linux only.
-if not (config.host_os in ["Linux"] and config.target_arch in ["aarch64", "x86_64"]):
+if not (config.target_os in ["Linux"] and config.target_arch in ["aarch64", "x86_64"]):
     config.unsupported = True

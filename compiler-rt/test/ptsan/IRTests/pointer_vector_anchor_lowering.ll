@@ -23,7 +23,7 @@ define <4 x i64> @lower_vector_get_id(<4 x ptr> %value) {
 ; CHECK-LABEL: define <4 x i64> @lower_vector_get_id(
 ; CHECK-NOT: extractelement
 ; CHECK: [[BITS:%.*]] = ptrtoint <4 x ptr> %value to <4 x i64>
-; CHECK-NEXT: [[IDS:%.*]] = lshr <4 x i64> [[BITS]], <i64 48, i64 48, i64 48, i64 48>
+; CHECK-NEXT: [[IDS:%.*]] = lshr <4 x i64> [[BITS]], splat (i64 48)
 ; CHECK-NEXT: ret <4 x i64> [[IDS]]
 entry:
   %ids = call <4 x i64> @__ptsan_get_id(<4 x ptr> %value)
@@ -34,7 +34,7 @@ define <4 x ptr> @lower_vector_strip(<4 x ptr> %value) {
 ; CHECK-LABEL: define <4 x ptr> @lower_vector_strip(
 ; CHECK: [[RAW:%.*]] = call <4 x ptr> @llvm.ptrmask.v4p0.v4i64(
 ; CHECK-SAME: <4 x ptr> %value,
-; CHECK-SAME: <4 x i64> <i64 281474976710655, i64 281474976710655, i64 281474976710655, i64 281474976710655>)
+; CHECK-SAME: <4 x i64> splat (i64 281474976710655))
 ; CHECK-NEXT: ret <4 x ptr> [[RAW]]
 entry:
   %raw = call <4 x ptr> @__ptsan_strip(<4 x ptr> %value)
@@ -46,7 +46,7 @@ define <4 x ptr> @lower_vector_tag(<4 x ptr> %left, <4 x ptr> %right,
 ; CHECK-LABEL: define <4 x ptr> @lower_vector_tag(
 ; CHECK: [[IDS:%.*]] = select <4 x i1> %condition, <4 x i64> {{%.*}}, <4 x i64> {{%.*}}
 ; CHECK: [[VALUE_BITS:%.*]] = ptrtoint <4 x ptr> %value to <4 x i64>
-; CHECK-NEXT: [[TAG_BITS:%.*]] = shl <4 x i64> [[IDS]], <i64 48, i64 48, i64 48, i64 48>
+; CHECK-NEXT: [[TAG_BITS:%.*]] = shl <4 x i64> [[IDS]], splat (i64 48)
 ; CHECK-NEXT: [[TAGGED_BITS:%.*]] = or <4 x i64> [[VALUE_BITS]], [[TAG_BITS]]
 ; CHECK-NEXT: [[TAGGED:%.*]] = inttoptr <4 x i64> [[TAGGED_BITS]] to <4 x ptr>
 ; CHECK-NEXT: ret <4 x ptr> [[TAGGED]]
@@ -70,8 +70,8 @@ define <4 x i64> @lower_vector_get_id(<4 x ptr> %value) {
 ; CHECK-LABEL: define <4 x i64> @lower_vector_get_id(
 ; CHECK-NOT: extractelement
 ; CHECK: [[BITS:%.*]] = ptrtoint <4 x ptr> %value to <4 x i64>
-; CHECK-NEXT: [[HIGH:%.*]] = lshr <4 x i64> [[BITS]], <i64 32, i64 32, i64 32, i64 32>
-; CHECK-NEXT: [[ENRICHED:%.*]] = icmp slt <4 x i64> [[BITS]], <i64 -1, i64 -1, i64 -1, i64 -1>
+; CHECK-NEXT: [[HIGH:%.*]] = lshr <4 x i64> [[BITS]], splat (i64 32)
+; CHECK-NEXT: [[ENRICHED:%.*]] = icmp slt <4 x i64> [[BITS]], splat (i64 -1)
 ; CHECK-NEXT: [[IDS:%.*]] = select <4 x i1> [[ENRICHED]], <4 x i64> [[HIGH]], <4 x i64> zeroinitializer
 ; CHECK-NEXT: ret <4 x i64> [[IDS]]
 entry:
@@ -103,8 +103,8 @@ define <4 x ptr> @lower_vector_tag(<4 x ptr> %left, <4 x ptr> %right,
 ; CHECK: [[BASES:%.*]] = call <4 x i64> @llvm.masked.gather
 ; CHECK: [[VALUE_BITS:%.*]] = ptrtoint <4 x ptr> %value to <4 x i64>
 ; CHECK-NEXT: [[PAYLOAD:%.*]] = sub <4 x i64> [[VALUE_BITS]], [[BASES]]
-; CHECK-NEXT: [[HIGH:%.*]] = shl <4 x i64> [[IDS]], <i64 32, i64 32, i64 32, i64 32>
-; CHECK-NEXT: [[FITS:%.*]] = icmp ule <4 x i64> [[PAYLOAD]], <i64 4294967295, i64 4294967295, i64 4294967295, i64 4294967295>
+; CHECK-NEXT: [[HIGH:%.*]] = shl <4 x i64> [[IDS]], splat (i64 32)
+; CHECK-NEXT: [[FITS:%.*]] = icmp ule <4 x i64> [[PAYLOAD]], splat (i64 4294967295)
 ; CHECK-NEXT: [[PACKED:%.*]] = or <4 x i64> [[HIGH]], [[PAYLOAD]]
 ; CHECK-NEXT: [[SAFE:%.*]] = select <4 x i1> [[FITS]], <4 x i64> [[PACKED]], <4 x i64> [[VALUE_BITS]]
 ; CHECK-NEXT: [[ZERO:%.*]] = icmp eq <4 x i64> [[IDS]], zeroinitializer

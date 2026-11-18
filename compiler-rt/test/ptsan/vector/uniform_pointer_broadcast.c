@@ -61,7 +61,7 @@
 // DISCOVERY-NOT: call <4 x i64> @__ptsan_get_id
 // DISCOVERY-NOT: call <4 x i64> @__ptsan_load_base
 // DISCOVERY-NOT: call <4 x i64> @__ptsan_load_span
-// DISCOVERY: {{.*}}call <4 x i32> @llvm.masked.gather.v4i32.v4p0(<4 x ptr> [[RAW_FIELD]],
+// DISCOVERY: {{.*}}call <4 x i32> @llvm.masked.gather.v4i32.v4p0(<4 x ptr> {{(align [0-9]+ )?}}[[RAW_FIELD]],
 // DISCOVERY: ret void
 
 // GOOD-NOT: Found bad

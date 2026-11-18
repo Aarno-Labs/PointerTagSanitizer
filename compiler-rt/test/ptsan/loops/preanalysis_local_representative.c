@@ -16,11 +16,11 @@
 // CHECK-DAG: ![[INNER_BASE]] = !{!"base", ![[BASE_CAPTURE:[0-9]+]], ![[INNER_RANGE:[0-9]+]]}
 // CHECK-DAG: ![[BASE_CAPTURE]] = !{!"capture", i32 0}
 // CHECK-DAG: ![[INNER_RANGE]] = !{!"LoopAccessRange", ![[ROW_SCEV:[0-9]+]], ![[END_SCEV:[0-9]+]], ![[DELTA_SCEV:[0-9]+]], ![[SIZE_SCEV:[0-9]+]]}
-// CHECK-DAG: ![[ROW_SCEV]] = !{!"scev", i16 15, ![[ROW_CAPTURE:[0-9]+]]}
+// CHECK-DAG: ![[ROW_SCEV]] = !{!"scev", i16 16, ![[ROW_CAPTURE:[0-9]+]]}
 // CHECK-DAG: ![[ROW_CAPTURE]] = !{!"capture", i32 1}
-// CHECK-DAG: ![[END_SCEV]] = !{!"scev", i16 15, ![[END_CAPTURE:[0-9]+]]}
+// CHECK-DAG: ![[END_SCEV]] = !{!"scev", i16 16, ![[END_CAPTURE:[0-9]+]]}
 // CHECK-DAG: ![[END_CAPTURE]] = !{!"capture", i32 2}
-// CHECK-DAG: ![[DELTA_SCEV]] = !{!"scev", i16 15, ![[DELTA_CAPTURE:[0-9]+]]}
+// CHECK-DAG: ![[DELTA_SCEV]] = !{!"scev", i16 16, ![[DELTA_CAPTURE:[0-9]+]]}
 // CHECK-DAG: ![[DELTA_CAPTURE]] = !{!"capture", i32 3}
 
 #include <stdint.h>

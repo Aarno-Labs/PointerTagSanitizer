@@ -13,8 +13,8 @@
 // RUN: %clang_ptsan_id32 -O2 -fno-strict-overflow -mllvm -ptsan-no-opts -o %t.no-opts %s
 // RUN: %run %t.no-opts x
 
-// IR: [[DELTA:%.*]] = select i1 {{.*}}, i64 -4, i64 0
-// IR: getelementptr inbounds i8, ptr %p, i64 [[DELTA]]
+// IR: [[DELTA:%.*]] = select i1 {{.*}}, i64 0, i64 -4
+// IR: getelementptr inbounds{{( nuw)?}} i8, ptr %p, i64 [[DELTA]]
 
 #include <assert.h>
 #include <stdlib.h>
