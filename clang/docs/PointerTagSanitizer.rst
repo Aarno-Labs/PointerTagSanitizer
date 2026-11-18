@@ -26,8 +26,8 @@ Build setup
 ===========
 
 The builds below use Ninja and follow the
-`LLVM 19 build requirements
-<https://releases.llvm.org/19.1.0/docs/GettingStarted.html#software>`_.
+`LLVM build requirements
+<https://llvm.org/docs/GettingStarted.html#software>`_.
 The default build supports C and C++ with glibc. Supplying musl sources also
 builds strict and non-strict musl support alongside glibc.
 
