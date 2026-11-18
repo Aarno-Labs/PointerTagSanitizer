@@ -156,6 +156,12 @@ public:
     SourceAnchor Result(Anchor::create(DS, DS.PTSanSource, Source->getType(),
                                        IP, {Source}));
     Source->replaceUsesWithIf(Result.Call, [&](Use &U) {
+      Instruction *User = dyn_cast<Instruction>(U.getUser());
+      // LLVM 23 requires lifetime markers to refer directly to their alloca.
+      // They describe raw stack storage, not the tagged pointer value.
+      if (User && User->isLifetimeStartOrEnd()) {
+        return false;
+      }
       return U.getUser() != Result.Call;
     });
     return Result;

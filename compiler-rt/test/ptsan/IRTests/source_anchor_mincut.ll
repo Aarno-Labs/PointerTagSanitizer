@@ -34,6 +34,11 @@ entry:
 ; LOWER-LABEL: define i8 @stripped_alloca(
 ; LOWER-NOT: ptsan_get_stack_ids
 ; LOWER: ret i8
+; CHECK-LABEL: define i8 @stripped_alloca(
+; CHECK: %buffer = alloca
+; CHECK: call void @llvm.lifetime.start.p0(ptr %buffer)
+; CHECK: call void @llvm.lifetime.end.p0(ptr %buffer)
+; CHECK: ret i8
 
 ; Paying for one conversion outside the loop is sufficient.
 define void @tagged_in_loop(i1 %done) {
