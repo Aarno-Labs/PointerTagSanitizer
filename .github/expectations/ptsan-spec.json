@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "provenance": "Provisional test-input expectations: October 14-15 summary; names and diagnostic patterns from the local October 1 run. CI uses current documented dependencies, including stack temporal safety on; the older local run used it off. Non-strict Perl reviewed on October 16 at 6094b32 with the established arithmetic/comparison flags restored: pat_psycho passes, leaving only the leaky-magic access complaint. Review deviations; never learn expectations automatically. LAM entries initially mirror software-decoding expectations; LAM has 15 usable ID bits and deviations must be reviewed. Reviewed CI revision 4da6f0531eda41adbc10e3573f9933f84e570aa1: strict LAM additionally exhausts IDs in 526.blender_r (valid RE, child status 256, exhaustion diagnostic only); all other SPEC outcomes match their expectations. 507.cactuBSSN_r added for glibc only (including the plain baseline and LAM); expected to pass based on the July paper campaign. GNU Fortran supplies its build-only sources, with C/C++ instrumented by Clang. This addition does not change the historical counts above; review new CI results. Reviewed after the signal/ID-cache hardening changes: test-input Perl now passes in musl non-strict; musl strict retains its exhaustion outcome without the former access complaint, for both software decoding and LAM.",
+  "provenance": "Provisional test-input expectations: October 14-15 summary; names and diagnostic patterns from the local October 1 run. CI uses current documented dependencies, including stack temporal safety on; the older local run used it off. Non-strict Perl reviewed on October 16 at 6094b32 with the established arithmetic/comparison flags restored: pat_psycho passes, leaving only the leaky-magic access complaint. Review deviations; never learn expectations automatically. LAM entries initially mirror software-decoding expectations; LAM has 15 usable ID bits and deviations must be reviewed. Reviewed CI revision 4da6f0531eda41adbc10e3573f9933f84e570aa1: strict LAM additionally exhausts IDs in 526.blender_r (valid RE, child status 256, exhaustion diagnostic only); all other SPEC outcomes match their expectations. 507.cactuBSSN_r added for glibc only (including the plain baseline and LAM); expected to pass based on the July paper campaign. GNU Fortran supplies its build-only sources, with C/C++ instrumented by Clang. This addition does not change the historical counts above; review new CI results. Reviewed after the signal/ID-cache hardening changes: test-input Perl now passes in musl non-strict; musl strict retains its exhaustion outcome without the former access complaint, for both software decoding and LAM. LLVM 23.1.5 qualification on November 17, 2026 established that 510.parest_r test inputs report an access in every software-decoding and ID32 configuration. libc++ commit d9bc548facf3929b45a68d0d8ae44778afe66d8f changed __tree::find and exposes SPEC's existing end-iterator dereference; libc++19 optimized away the load. LAM mirrors this compile-time outcome. In strict ID16 modes the access occurs before the former exhaustion outcome.",
   "benchmarks": [
     "500.perlbench_r",
     "502.gcc_r",
@@ -23,11 +23,66 @@
     "999.specrand_ir"
   ],
   "configurations": {
-    "glibc-id32": {},
-    "musl-nonstrict-id32": {},
-    "musl-strict-id32": {},
-    "glibc": {},
-    "musl-nonstrict": {},
+    "glibc-id32": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "access"
+        ]
+      }
+    },
+    "musl-nonstrict-id32": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "access"
+        ]
+      }
+    },
+    "musl-strict-id32": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "access"
+        ]
+      }
+    },
+    "glibc": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "access"
+        ]
+      }
+    },
+    "musl-nonstrict": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "access"
+        ]
+      }
+    },
     "musl-strict": {
       "500.perlbench_r": {
         "category": "out-of-ids",
@@ -41,13 +96,13 @@
         ]
       },
       "510.parest_r": {
-        "category": "out-of-ids",
+        "category": "stack-out-of-bounds",
         "valid": "RE",
         "child_statuses": [
           256
         ],
         "diagnostics": [
-          "exhaustion"
+          "access"
         ]
       },
       "520.omnetpp_r": {
@@ -61,8 +116,30 @@
         ]
       }
     },
-    "glibc-lam": {},
-    "musl-nonstrict-lam": {},
+    "glibc-lam": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "access"
+        ]
+      }
+    },
+    "musl-nonstrict-lam": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [
+          256
+        ],
+        "diagnostics": [
+          "access"
+        ]
+      }
+    },
     "musl-strict-lam": {
       "500.perlbench_r": {
         "category": "out-of-ids",
@@ -76,13 +153,13 @@
         ]
       },
       "510.parest_r": {
-        "category": "out-of-ids",
+        "category": "stack-out-of-bounds",
         "valid": "RE",
         "child_statuses": [
           256
         ],
         "diagnostics": [
-          "exhaustion"
+          "access"
         ]
       },
       "520.omnetpp_r": {
@@ -120,5 +197,5 @@
       "glibc-lam", "musl-nonstrict-lam", "musl-strict-lam"
     ]
   },
-  "id32_notes": "All selected ID32 workloads are expected to pass, based on the prior PR3 test-input campaign. Do not inherit ID16 exhaustion expectations. Blender is excluded because process-local IDs do not support serialized pointer identities. Cactus and the current strong-stack configuration still need their first ID32 CI run; review deviations."
+  "id32_notes": "ID32 does not inherit ID16 exhaustion expectations. On LLVM 23, 510.parest_r instead expects the same access diagnostic as the ID16 and LAM configurations because libc++'s inlined map::find now preserves SPEC's invalid end-iterator load through PTSan instrumentation. Blender is excluded because process-local IDs do not support serialized pointer identities. Cactus and the current strong-stack configuration still need their first ID32 CI run; review deviations."
 }
