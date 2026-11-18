@@ -760,8 +760,12 @@ Value *PTSanMinCutRewriter::getRetagID(Value *V, Instruction *UseIP) {
     FalseID = PTU.splatToMatchType(FalseID, IDTy, IP);
     // Selects have ordinary insertion points, so an ID select is simpler than
     // forcing the pointer select to stay tagged.
-    Value *ID = IRB.CreateSelect(Select->getCondition(), TrueID, FalseID,
-                                 Select->getName() + ".ptsan.id");
+    // Recursive ID recovery can reference PHIs whose incoming values are
+    // still being populated. Insert the select without simplifying it: the
+    // simplifier requires complete PHIs when inspecting their incoming edges.
+    Value *ID = IRB.Insert(
+        SelectInst::Create(Select->getCondition(), TrueID, FalseID),
+        Select->getName() + ".ptsan.id");
     return cacheID(ID);
   }
 
