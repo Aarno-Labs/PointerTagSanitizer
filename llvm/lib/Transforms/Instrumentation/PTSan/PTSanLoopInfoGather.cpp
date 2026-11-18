@@ -259,7 +259,12 @@ void PTSanLoopInfoGather::analyzeLoop(
   uint64_t ID = NextLoopID++;
   for (BasicBlock *BB : L->blocks()) {
     for (Instruction &I : *BB) {
-      addPTSanLoopID(I, ID);
+      // Membership is consumed by memory checks, including calls/intrinsics
+      // that may later be lowered to accesses. Pure address/arithmetic ops
+      // carry no checks and must not acquire access metadata in VPlan.
+      if (I.mayReadOrWriteMemory()) {
+        addPTSanLoopID(I, ID);
+      }
     }
   }
 
