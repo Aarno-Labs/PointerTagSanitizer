@@ -265,7 +265,9 @@ def build_modes(build, workspace, performance=False, group='software',
                      f'build --jobs={jobs}', 'build --local_ram_resources=18000',
                      'build --copt=-DPTSAN_FLEETBENCH_TARGET',
                      'build --linkopt=-DPTSAN_FLEETBENCH_TARGET',
-                     'build --copt=-U_FORTIFY_SOURCE', 'build --copt=-DABSL_FORCE_WAITER_MODE=2',
+                     'build --copt=-U_FORTIFY_SOURCE',
+                     'build --copt=-Wno-deprecated-attributes',
+                     'build --copt=-DABSL_FORCE_WAITER_MODE=2',
                      'build --linkopt=-Wl,--build-id=sha1']
             if CONFIGURATIONS[mode].musl:
                 lines += ['build --copt=-idirafter --copt=/usr/include',
