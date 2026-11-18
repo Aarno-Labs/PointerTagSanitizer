@@ -34,11 +34,11 @@ define i1 @ptrtoint_cmp(ptr %p, ptr %q) {
 ; DISCOVERY-CLEAR-DAG: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p
 ; DISCOVERY-CLEAR-DAG: [[Q:%.*]] = call ptr @__ptsan_strip(ptr %q
 ; DISCOVERY-CLEAR-DAG: %pi = ptrtoint ptr [[P]] to i64
-; DISCOVERY-CLEAR-DAG: %qi = ptrtoint ptr [[Q]] to i64
+; DISCOVERY-CLEAR-DAG: %qi = ptrtoaddr ptr [[Q]] to i64
 ; DISCOVERY-CLEAR: icmp eq i64 %pi, %qi
 entry:
   %pi = ptrtoint ptr %p to i64
-  %qi = ptrtoint ptr %q to i64
+  %qi = ptrtoaddr ptr %q to i64
   %cmp = icmp eq i64 %pi, %qi
   ret i1 %cmp
 }
@@ -76,7 +76,7 @@ define i64 @ptr_sub(ptr %p, ptr %q) {
 ; DISCOVERY-CLEAR: sub i64 [[PI]], [[QI]]
 entry:
   %pi = ptrtoint ptr %p to i64
-  %qi = ptrtoint ptr %q to i64
+  %qi = ptrtoaddr ptr %q to i64
   %sub = sub i64 %pi, %qi
   ret i64 %sub
 }

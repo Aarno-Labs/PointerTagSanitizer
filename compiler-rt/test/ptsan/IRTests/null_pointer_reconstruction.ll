@@ -40,7 +40,7 @@ define ptr @recover_target(ptr %base, ptr %target, ptr %saved) {
 ; CHECK: store i64 %offset, ptr %saved
 ; CHECK: ret ptr %target
   %base.bits = ptrtoint ptr %base to i64
-  %target.bits = ptrtoint ptr %target to i64
+  %target.bits = ptrtoaddr ptr %target to i64
   %offset = sub i64 %target.bits, %base.bits
   store i64 %offset, ptr %saved
   %result = getelementptr i8, ptr %base, i64 %offset

@@ -86,7 +86,7 @@ void PTSanLateOptimizer::insertTaggedUseAnchors() {
       continue;
     }
 
-    if (auto *PtrToInt = dyn_cast<PtrToIntInst>(&I)) {
+    if (CastInst *PtrToInt = getPtrToInt(&I)) {
       addPointerUse(PtrToInt->getOperandUse(0));
       continue;
     }
@@ -205,11 +205,11 @@ static bool validatePolarities(PTSanAnalysisState &PTA) {
     if (!PTA.ClearIDsOnArith) {
       if (auto *Sub = dyn_cast<BinaryOperator>(&I)) {
         if (Sub->getOpcode() == Instruction::Sub) {
-          auto *Left = dyn_cast<PtrToIntInst>(Sub->getOperand(0));
-          auto *Right = dyn_cast<PtrToIntInst>(Sub->getOperand(1));
+          CastInst *Left = getPtrToInt(Sub->getOperand(0));
+          CastInst *Right = getPtrToInt(Sub->getOperand(1));
           if (Left && Right) {
-            Valid &= haveSamePolarity(Left->getPointerOperand(),
-                                      Right->getPointerOperand());
+            Valid &= haveSamePolarity(Left->getOperand(0),
+                                      Right->getOperand(0));
           }
         }
       }

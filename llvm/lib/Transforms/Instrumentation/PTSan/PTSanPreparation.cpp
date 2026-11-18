@@ -34,13 +34,13 @@ static void foldObstackPointerReconstruction(Function &F) {
         !Offset->getType()->isIntegerTy(PointerBits) ||
         DL.getIndexSizeInBits(AddressSpace) != PointerBits ||
         !match(Offset, m_Sub(m_Value(TargetBits),
-                            m_PtrToInt(m_Specific(Base))))) {
+                            m_PtrToIntOrAddr(m_Specific(Base))))) {
       continue;
     }
     Value *Target;
     if (match(TargetBits, m_Zero())) {
       Target = ConstantPointerNull::get(cast<PointerType>(GEP->getType()));
-    } else if (!match(TargetBits, m_PtrToInt(m_Value(Target))) ||
+    } else if (!match(TargetBits, m_PtrToIntOrAddr(m_Value(Target))) ||
                Target->getType() != GEP->getType()) {
       continue;
     }

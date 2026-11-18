@@ -1414,8 +1414,8 @@ static bool isUntaggedStripValue(Value *V) {
     return true;
   }
 
-  if (auto *PTI = dyn_cast<PtrToIntOperator>(V)) {
-    Value *Pointer = PTI->getPointerOperand();
+  Value *Pointer;
+  if (match(V, m_PtrToIntOrAddr(m_Value(Pointer)))) {
     return isa<Function>(Pointer) || isUntaggedConstantPtr(Pointer);
   }
 

@@ -1684,6 +1684,7 @@ MDNode *SerializeBoundsInfo::serializeSCEV(const SCEV *S) {
   case scTruncate:
   case scZeroExtend:
   case scSignExtend:
+  case scPtrToAddr:
   case scPtrToInt: {
     const SCEVCastExpr *C = cast<SCEVCastExpr>(S);
     const SCEV *Op = C->getOperand();
@@ -1796,6 +1797,7 @@ const SCEV *DeserializeBoundsInfo::deserializeSCEV(Metadata *M) {
   case scTruncate:
   case scZeroExtend:
   case scSignExtend:
+  case scPtrToAddr:
   case scPtrToInt: {
     // ["scev", kind, OpSCEV, BitWidth]
     assert(Node->getNumOperands() == 4 && "Cast SCEV must have Op + BitWidth");
@@ -1815,6 +1817,8 @@ const SCEV *DeserializeBoundsInfo::deserializeSCEV(Metadata *M) {
       return SE.getZeroExtendExpr(Op, Ty);
     case scSignExtend:
       return SE.getSignExtendExpr(Op, Ty);
+    case scPtrToAddr:
+      return SE.getPtrToAddrExpr(Op);
     case scPtrToInt:
       return SE.getPtrToIntExpr(Op, Ty);
     default:

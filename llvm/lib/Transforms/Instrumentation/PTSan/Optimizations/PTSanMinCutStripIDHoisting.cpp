@@ -484,8 +484,8 @@ void PTSanMinCutGraphBuilder::buildGraph() {
     if (!PTA.ClearIDsOnArith) {
       if (auto *Sub = dyn_cast<BinaryOperator>(&I)) {
         if (Sub->getOpcode() == Instruction::Sub) {
-          auto *Left = dyn_cast<PtrToIntInst>(Sub->getOperand(0));
-          auto *Right = dyn_cast<PtrToIntInst>(Sub->getOperand(1));
+          CastInst *Left = getPtrToInt(Sub->getOperand(0));
+          CastInst *Right = getPtrToInt(Sub->getOperand(1));
           if (Left && Right) {
             unsigned SubNode = Graph.addNode();
             addUseBoundary(Left->getOperandUse(0), SubNode);

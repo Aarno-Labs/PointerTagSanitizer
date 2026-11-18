@@ -45,6 +45,7 @@ public:
   void visitCmpInst(CmpInst &CI);
   void visitBinaryOperator(BinaryOperator &I);
   void visitPtrToIntInst(PtrToIntInst &I);
+  void visitPtrToAddrInst(PtrToAddrInst &I);
 
   void handleMainIfMain();
 };

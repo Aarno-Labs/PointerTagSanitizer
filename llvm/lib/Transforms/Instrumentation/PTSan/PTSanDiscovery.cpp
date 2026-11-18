@@ -236,9 +236,9 @@ void PTSanDiscoverer::visitCmpInst(CmpInst &CI) {
   Value *Op0 = CI.getOperand(0);
   Value *Op1 = CI.getOperand(1);
   // Strip before numeric casts lose bits or change the interpretation of an ID.
-  auto findPtrToInt = [](Value *V) -> PtrToIntInst * {
+  auto findPtrToInt = [](Value *V) -> CastInst * {
     while (auto *Cast = dyn_cast<CastInst>(V)) {
-      if (auto *PtrToInt = dyn_cast<PtrToIntInst>(Cast)) {
+      if (CastInst *PtrToInt = getPtrToInt(Cast)) {
         return PtrToInt;
       }
       V = Cast->getOperand(0);
@@ -260,8 +260,8 @@ void PTSanDiscoverer::visitCmpInst(CmpInst &CI) {
     addPtrSink(PtrOp(&CI, 1));
   }
 
-  PtrToIntInst *PtrToInt0 = findPtrToInt(Op0);
-  PtrToIntInst *PtrToInt1 = findPtrToInt(Op1);
+  CastInst *PtrToInt0 = findPtrToInt(Op0);
+  CastInst *PtrToInt1 = findPtrToInt(Op1);
   if (!(Ty->isPtrOrPtrVectorTy() || (PtrToInt0 && PtrToInt1))) {
     return;
   }
@@ -270,8 +270,8 @@ void PTSanDiscoverer::visitCmpInst(CmpInst &CI) {
   // Capture them before inserting strips for the comparison.
   if (ClValidateArith && ClValidate && !Ty->isVectorTy()) {
     ValidateArithAnchor::create(
-        DS, &CI, PtrToInt0 ? PtrToInt0->getPointerOperand() : Op0,
-        PtrToInt1 ? PtrToInt1->getPointerOperand() : Op1);
+        DS, &CI, PtrToInt0 ? PtrToInt0->getOperand(0) : Op0,
+        PtrToInt1 ? PtrToInt1->getOperand(0) : Op1);
   }
 
   if (PTA.ClearIDsOnCmp) {
@@ -317,8 +317,7 @@ void PTSanDiscoverer::visitBinaryOperator(BinaryOperator &I) {
   // will have the same ID -- one could be tagged and one
   // could be untagged
   bool IsPointerSubtraction = I.getOpcode() == Instruction::Sub &&
-                              isa<PtrToIntInst>(Op0) &&
-                              isa<PtrToIntInst>(Op1);
+                              getPtrToInt(Op0) && getPtrToInt(Op1);
 
   if (IsPointerSubtraction && ClValidateArith && ClValidate) {
     ValidateArithAnchor::create(DS, &I, Op0, Op1);
@@ -340,20 +339,20 @@ void PTSanDiscoverer::visitBinaryOperator(BinaryOperator &I) {
 
   if (I.getOpcode() == Instruction::AShr ||
       I.getOpcode() == Instruction::LShr) {
-    if (isa<PtrToIntInst>(Op0)) {
+    if (getPtrToInt(Op0)) {
       StripAnchor Strip = createStripWithDependencies(PTA, &I, Op0);
       I.setOperand(0, Strip.Call);
     }
   } else if (I.isBitwiseLogicOp()) {
     // Some programs (gcc!) use the high bits of pointers as
     // hash keys. We should preserve their operation
-    if (isa<PtrToIntInst>(Op0)) {
+    if (getPtrToInt(Op0)) {
       auto *Mask = dyn_cast<ConstantInt>(Op1);
       if (Mask && shouldStripPointerBitTwiddle(I.getOpcode(), *Mask)) {
         StripAnchor Strip = createStripWithDependencies(PTA, &I, Op0);
         I.setOperand(0, Strip.Call);
       }
-    } else if (isa<PtrToIntInst>(Op1)) {
+    } else if (getPtrToInt(Op1)) {
       auto *Mask = dyn_cast<ConstantInt>(Op0);
       if (Mask && shouldStripPointerBitTwiddle(I.getOpcode(), *Mask)) {
         StripAnchor Strip = createStripWithDependencies(PTA, &I, Op1);
@@ -364,6 +363,12 @@ void PTSanDiscoverer::visitBinaryOperator(BinaryOperator &I) {
 }
 
 void PTSanDiscoverer::visitPtrToIntInst(PtrToIntInst &I) {
+  if (PTA.StripPtrToInt) {
+    addPtrSink(PtrOp(&I, 0));
+  }
+}
+
+void PTSanDiscoverer::visitPtrToAddrInst(PtrToAddrInst &I) {
   if (PTA.StripPtrToInt) {
     addPtrSink(PtrOp(&I, 0));
   }
@@ -409,7 +414,7 @@ void PTSanDiscoverer::IRStripFn(CallBase &CB) {
   DBG(errs() << "Found " << Callee->getName() << ". Stripping ID\n");
   for (unsigned i = 0; i < CB.arg_size(); i++) {
     if (CB.getOperand(i)->getType()->isPtrOrPtrVectorTy() ||
-        isa<PtrToIntInst>(CB.getOperand(i))) {
+        getPtrToInt(CB.getOperand(i))) {
       addPtrSink(PtrOp(&CB, i));
     }
   }
@@ -500,7 +505,7 @@ void PTSanDiscoverer::visitCallBase(CallBase &CB) {
         continue;
       }
       llvm::Value *Arg = CB.getArgOperand(Operand);
-      if (Arg->getType()->isPtrOrPtrVectorTy() || isa<PtrToIntInst>(Arg)) {
+      if (Arg->getType()->isPtrOrPtrVectorTy() || getPtrToInt(Arg)) {
         DBG(errs() << "\tStripping ptr from arg " << Operand << "\n");
         addPtrSink(PtrOp(&CB, Operand));
       }

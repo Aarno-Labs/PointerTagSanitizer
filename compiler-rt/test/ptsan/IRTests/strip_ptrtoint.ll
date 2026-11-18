@@ -5,6 +5,7 @@
 ;
 ; Opting into strip-ptrtoint must decode before scalar and vector integer
 ; conversions, regardless of integer width. Without the flag, keep the bits.
+; PTSan treats ptrtoaddr as ptrtoint; use it for the vector case.
 
 ; RUN: %opt_ptsan -ptsan-stop-after=discovery -ptsan-strip-ptrtoint %s | FileCheck %s
 ; RUN: %opt_ptsan -ptsan-stop-after=discovery %s | FileCheck %s --check-prefix=DEFAULT
@@ -52,7 +53,7 @@ define i128 @wide(ptr %p) {
 define <2 x i64> @vector(<2 x ptr> %p) {
 ; CHECK-LABEL: define <2 x i64> @vector(
 ; CHECK: [[RAW:%.*]] = call <2 x ptr> @__ptsan_strip{{.*}}(<2 x ptr> %p
-; CHECK: ptrtoint <2 x ptr> [[RAW]] to <2 x i64>
-  %bits = ptrtoint <2 x ptr> %p to <2 x i64>
+; CHECK: ptrtoaddr <2 x ptr> [[RAW]] to <2 x i64>
+  %bits = ptrtoaddr <2 x ptr> %p to <2 x i64>
   ret <2 x i64> %bits
 }

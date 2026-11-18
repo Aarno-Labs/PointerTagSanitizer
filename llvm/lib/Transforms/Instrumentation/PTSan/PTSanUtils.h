@@ -64,6 +64,14 @@ enum class Polarity {
   Stripped,
 };
 
+// PTSan treats ptrtoaddr as ptrtoint.
+inline CastInst *getPtrToInt(Value *V) {
+  if (isa<PtrToIntInst, PtrToAddrInst>(V)) {
+    return cast<CastInst>(V);
+  }
+  return nullptr;
+}
+
 void setPTSanPolarityMetadata(Instruction &I, Polarity P);
 
 class PointerTagSanitizer;
@@ -246,7 +254,7 @@ struct PtrOp {
   void validate() {
     Value *V = U->get();
 
-    if (isa<PtrToIntInst>(V)) {
+    if (getPtrToInt(V)) {
       return;
     }
     if (V->getType()->isPtrOrPtrVectorTy()) {

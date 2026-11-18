@@ -33,7 +33,7 @@ loop:
   %b = phi ptr [ %q, %entry ], [ %nextb, %loop ]
   %c = phi ptr [ %r, %entry ], [ %nextc, %loop ]
   %id = call i64 @__ptsan_get_id(ptr %a)
-  %aa = ptrtoint ptr %a to i64
+  %aa = ptrtoaddr ptr %a to i64
   %ab = ptrtoint ptr %b to i64
   %ac = ptrtoint ptr %c to i64
   %v1 = load volatile i8, ptr %a
