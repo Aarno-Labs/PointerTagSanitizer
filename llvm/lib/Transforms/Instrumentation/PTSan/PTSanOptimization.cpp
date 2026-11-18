@@ -334,7 +334,7 @@ SmallPtrSet<Instruction *, 32>
 PTSanOptimizer::getValidCheckIPs(HoistTarget MustDominate,
                                       Instruction *Sink, AccessRange &Range) {
   DBG(errs() << "\n----Getting checkIP-----\n");
-  SCEVExpander Expander(SE, DS.DL, "valid-check-ips");
+  SCEVExpander Expander(SE, "valid-check-ips");
   SmallPtrSet<Instruction *, 32> CheckIPs;
   SmallPtrSet<Instruction *, 8> Deps = Range.getDeps(&PTU);
 

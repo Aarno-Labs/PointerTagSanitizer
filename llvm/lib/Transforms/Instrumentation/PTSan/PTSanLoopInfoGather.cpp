@@ -20,7 +20,7 @@
 #include "llvm/IR/Metadata.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "PTSanUtils.h"
@@ -127,7 +127,7 @@ void PTSanLoopInfoGather::analyzePtrOp(DenseMap<Loop *, SmallVector<CheckInfo>> 
     // a loop-body dependency, such as a load, could be re-created as a stale
     // preheader value.
     Instruction *PreheaderIP = L->getLoopPreheader()->getTerminator();
-    SCEVExpander Expander(SE, DL, "ptsan-lig");
+    SCEVExpander Expander(SE, "ptsan-lig");
     if (!AccessExtent->isSafeToExpandAt(Expander, PreheaderIP)) {
       DBG(errs() << "\tAccess extent is not safe in the preheader\n");
       continue;

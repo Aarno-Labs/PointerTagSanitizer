@@ -43,7 +43,7 @@
 #include "llvm/IR/ValueMap.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ErrorOr.h"
@@ -69,7 +69,7 @@ using namespace llvm;
 using namespace llvm::PatternMatch;
 using std::nullopt;
 using std::optional;
-using NW = llvm::SCEV::NoWrapFlags;
+using NW = llvm::SCEVNoWrapFlags;
 
 #define DEBUG_TYPE "ptsan-dbg"
 #define INFO_TYPE "ptsan-info"
@@ -398,7 +398,7 @@ struct PTSanIRB
     this->SetInsertPoint(I);
   }
   explicit PTSanIRB(PointerTagSanitizer &DS, LLVMContext &Ctx)
-      : IRBuilder(Ctx, DS.DL,
+      : IRBuilder(Ctx, InstSimplifyFolder(DS.DL),
                   IRBuilderCallbackInserter(
                       [&DS](Instruction *I) {
                         DS.markAsInstr(I);

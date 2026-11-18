@@ -788,7 +788,7 @@ static void addSanitizers(const Triple &TargetTriple,
     }
 
     if (LangOpts.Sanitize.has(SanitizerKind::PTSan)) {
-      MPM.addPass(PointerTagSanitizerPass());
+      MPM.addPass(PointerTagSanitizerPass(PB.getVirtualFileSystemPtr()));
     }
   };
 

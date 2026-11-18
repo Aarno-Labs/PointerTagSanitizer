@@ -10,11 +10,17 @@
 
 #include "llvm/IR/PassManager.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/VirtualFileSystem.h"
 
 namespace llvm {
 
 class PointerTagSanitizerPass : public PassInfoMixin<PointerTagSanitizerPass> {
+  IntrusiveRefCntPtr<vfs::FileSystem> FS;
+
 public:
+  explicit PointerTagSanitizerPass(
+      IntrusiveRefCntPtr<vfs::FileSystem> FS = vfs::getRealFileSystem())
+      : FS(std::move(FS)) {}
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &AM);
 };
 

@@ -99,7 +99,7 @@ static uint64_t getFunctionGUID(const llvm::Function &F) {
   OS << '\0';
 
   OS.flush();
-  return xxHash64(Accum);
+  return xxh3_64bits(Accum);
 }
 
 PTSanLowerer::PTSanLowerer(Function &F, PointerTagSanitizer &DS,
@@ -324,7 +324,7 @@ static bool areUsesLocal(Value *Start) {
     for (auto &Use : V->uses()) {
       Value *U = Use.getUser();
       DBG(errs() << "\tVisiting " << *U << "\n");
-      if (isa<LoadInst>(U) || isa<BranchInst>(U)) {
+      if (isa<LoadInst>(U) || isa<CondBrInst, UncondBrInst>(U)) {
         continue;
       }
 
@@ -547,7 +547,8 @@ void PTSanLowerer::writeSourceBounds(PTSanIRB &IRB, Value *Source, Value *Size,
           DoesNotFit, Continue->getIterator(), true,
           MDBuilder(DS.Ctx).createBranchWeights(1, 1000), &PTA.DTU, &PTA.LI);
       PTSanIRB FailureIRB(DS, ThenTerm);
-      FailureIRB.CreateCall(Intrinsic::getDeclaration(&DS.M, Intrinsic::trap));
+      FailureIRB.CreateCall(
+          Intrinsic::getOrInsertDeclaration(&DS.M, Intrinsic::trap));
       IRB.SetInsertPoint(Continue);
     }
     Value *Salt;
@@ -1235,7 +1236,7 @@ void PTSanLowerer::prepareSources() {
   // Log allocated source IDs, including nonrepeating dynamic allocas.
   if (ClValidate && NumPtrSourceIDs != 0) {
     PTSanIRB IRB(DS, &*F.getEntryBlock().getFirstInsertionPt());
-    Value *FnNameCStr = IRB.CreateGlobalStringPtr(F.getName(), F.getName());
+    Value *FnNameCStr = IRB.CreateGlobalString(F.getName(), F.getName());
     auto logSources = [&](ArrayRef<SourceAnchor> Sources, size_t IDOffset) {
       for (size_t I = 0; I < Sources.size(); ++I) {
         IRB.SetInsertPoint(Sources[I].Call);
@@ -1392,7 +1393,7 @@ void PTSanLowerer::actuallyAddCheck(const RangeCheckInfo &CI) {
     IRB.CreateCall(DS.ReportVectorError, {CheckID, FunctionID});
   } else {
     std::string Desc = ChkTyToString(CI.Type);
-    llvm::Value *DescPtr = IRB.CreateGlobalStringPtr(Desc);
+    llvm::Value *DescPtr = IRB.CreateGlobalString(Desc);
 
     IRB.CreateCall(DS.ReportGenericError,
       {CheckID, FunctionID, CI.PtrID, DescPtr, CI.Min, CI.Size});
@@ -1460,8 +1461,8 @@ Value *PTSanLowerer::lowerID16Strip(ID16StripAnchor Strip) {
   Type *MaskTy = V->getType()->getWithNewType(DS.U64Ty);
   Value *Mask = PTA.PTU.splatToMatchType(DS.AddrMask, MaskTy, Strip.Call);
 
-  Function *PMFn = Intrinsic::getDeclaration(F.getParent(), Intrinsic::ptrmask,
-                                             {V->getType(), Mask->getType()});
+  Function *PMFn = Intrinsic::getOrInsertDeclaration(
+      F.getParent(), Intrinsic::ptrmask, {V->getType(), Mask->getType()});
   return IRB.CreateCall(PMFn, {V, Mask}, V->getName() + ".true");
 }
 

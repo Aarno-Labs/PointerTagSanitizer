@@ -56,7 +56,7 @@ void PTSanMetadataLowerer::materializeCheckMetadata(CheckAnchor Anchor) {
   DBG(errs() << "Materializing check metadata at " << *CheckIP << "\n");
   DBG(Check.Range->dump(2));
 
-  SCEVExpander Expander(SE, DS.DL, "bounds-check");
+  SCEVExpander Expander(SE, "bounds-check");
   auto [RangeMin, RangeSize] =
       Check.Range->materializeMinSize(&PTU, Expander, CheckIP);
 

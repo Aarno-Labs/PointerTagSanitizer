@@ -103,7 +103,8 @@ public:
     assert(L.getLoopPreheader() && "preanalyzed loop requires a preheader");
     Module *M = L.getHeader()->getModule();
     Instruction *InsertBefore = L.getLoopPreheader()->getTerminator();
-    Function *SideEffect = Intrinsic::getDeclaration(M, Intrinsic::sideeffect);
+    Function *SideEffect =
+        Intrinsic::getOrInsertDeclaration(M, Intrinsic::sideeffect);
     Value *IDValue = ConstantInt::get(Type::getInt64Ty(M->getContext()), ID);
     SmallVector<Value *, 1> MarkerInputs{IDValue};
     OperandBundleDef MarkerBundle(BundleName.str(), MarkerInputs);

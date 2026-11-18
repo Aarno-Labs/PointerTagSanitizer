@@ -349,7 +349,7 @@ getVectorGEPOffsetRange(Value *Ptr, Value *Base, PTSanAnalysisState &PTA) {
   }
   const DataLayout &DL = PTA.F.getParent()->getDataLayout();
   unsigned Bits = DL.getIndexTypeSizeInBits(Ptr->getType());
-  MapVector<Value *, APInt> Indices;
+  SmallMapVector<Value *, APInt, 4> Indices;
   APInt ConstantOffset(Bits, 0);
   if (!GEP->collectOffset(DL, Bits, Indices, ConstantOffset)) {
     return std::nullopt;

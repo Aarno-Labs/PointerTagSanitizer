@@ -47,7 +47,7 @@
 #include "llvm/IR/ValueMap.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -74,7 +74,7 @@ namespace llvm::ptsan {
 
 using std::optional;
 using std::nullopt;
-using NW = llvm::SCEV::NoWrapFlags;
+using NW = llvm::SCEVNoWrapFlags;
 
 cl::opt<bool> ClPTSanLooseLoopOptimizations(
   "ptsan-loose-loop-optimizations",
@@ -178,7 +178,8 @@ getRequiredPolarity(PointerTagSanitizer &DS, Value *V) {
   }
 
   // Source inputs are raw even when visited before their SourceAnchor.
-  if (llvm::any_of(V->users(), [&](User *U) {
+  // LLVM 23 ConstantData values do not materialize use lists.
+  if (V->hasUseList() && llvm::any_of(V->users(), [&](User *U) {
         auto Source = DS.getAsAnchor<SourceAnchor>(U);
         return Source && Source->getSource() == V;
       })) {
@@ -875,7 +876,7 @@ PTSanUtils::getLoopAccessExtent(const SimpleAccessRange &Range, Loop *L) {
     SE.getZeroExtendExpr(SE.getTruncateExpr(LastInt, U48Ty), U64Ty);
 
   const SCEV *Delta =
-    SE.getMinusSCEV(LastMasked, StartMasked, SCEV::NoWrapFlags::FlagNSW);
+    SE.getMinusSCEV(LastMasked, StartMasked, SCEVNoWrapFlags::FlagNSW);
 
   DBG(errs() << "Delta is " << *Delta << "\n");
   const SCEV *TS = SE.getNoopOrAnyExtend(Range.Size, U64Ty);
@@ -1364,7 +1365,7 @@ bool PTSanUtils::isKnownSpatiallyValid(Use *U) {
   }
 
   return isDereferenceableAndAlignedPointer(
-    Ptr, AccessTy, *Alignment, DL, I, nullptr, &DT, nullptr
+    Ptr, AccessTy, *Alignment, SimplifyQuery(DL, &DT, nullptr, I)
   );
 }
 
@@ -1426,7 +1427,7 @@ void FindMemAccesses::visitIntrinsicInst(IntrinsicInst &I) {
       Value *Size =
           ConstantInt::get(Type::getInt64Ty(I.getContext()),
                            ElementSize.getFixedValue());
-      Value *Mask = I.getArgOperand(2);
+      Value *Mask = I.getArgOperand(1);
       PtrOps.push_back(PtrOp(&I, 0, POINT, Size, Mask));
       return;
     }
@@ -1437,7 +1438,7 @@ void FindMemAccesses::visitIntrinsicInst(IntrinsicInst &I) {
       Value *Size =
           ConstantInt::get(Type::getInt64Ty(I.getContext()),
                            ElementSize.getFixedValue());
-      Value *Mask = I.getArgOperand(3);
+      Value *Mask = I.getArgOperand(2);
       PtrOps.push_back(PtrOp(&I, 1, POINT, Size, Mask));
       return;
     }
@@ -1757,7 +1758,7 @@ const SCEV *DeserializeBoundsInfo::deserializeSCEV(Metadata *M) {
     unsigned NumOps = Node->getNumOperands();
     assert(NumOps >= 4 && "NAry SCEV must have at least 2 operands");
 
-    SmallVector<const SCEV *, 4> Ops;
+    SmallVector<SCEVUse, 4> Ops;
     for (unsigned I = 2; I < NumOps; ++I) {
       Ops.push_back(deserializeSCEV(Node->getOperand(I)));
     }

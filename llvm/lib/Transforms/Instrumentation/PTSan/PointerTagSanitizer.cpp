@@ -43,7 +43,7 @@
 #include "llvm/IR/ValueMap.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Plugins/PassPlugin.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -1314,7 +1314,7 @@ void PointerTagSanitizer::verifyNoAnchors() const {
 }
 
 
-static void runOptimizations(Module &M) {
+static void runOptimizations(Module &M, IntrusiveRefCntPtr<vfs::FileSystem> FS) {
   // 1) Set up the various analysis managers
   LoopAnalysisManager     LAM;
   FunctionAnalysisManager FAM;
@@ -1322,7 +1322,8 @@ static void runOptimizations(Module &M) {
   ModuleAnalysisManager   MAM;
 
   // 2) Create a PassBuilder and register analyses
-  PassBuilder PB;
+  PassBuilder PB(nullptr, PipelineTuningOptions(), std::nullopt, nullptr,
+                 std::move(FS));
   PB.registerModuleAnalyses(MAM);
   PB.registerCGSCCAnalyses(CGAM);
   PB.registerFunctionAnalyses(FAM);
@@ -1350,8 +1351,8 @@ void validatePTSanTarget(Module &M) {
     return;
   }
 
-  M.getContext().emitError(Twine(Error) + "; target '" + M.getTargetTriple() +
-                           "' is unsupported");
+  M.getContext().emitError(Twine(Error) + "; target '" +
+                           M.getTargetTriple().str() + "' is unsupported");
   exit(EXIT_FAILURE);
 }
 
@@ -1480,7 +1481,7 @@ PointerTagSanitizerPass::run(Module &M, ModuleAnalysisManager &AM) {
 
   if (ClOptimizeAfterward && Modified) {
     INFO(errs() << "Re-running optimizations post-ptsan\n");
-    runOptimizations(M);
+    runOptimizations(M, FS);
     INFO(errs() << "Re-ran optimizations after ptsan\n");
   }
 
