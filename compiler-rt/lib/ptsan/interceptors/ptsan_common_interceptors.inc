@@ -226,7 +226,7 @@ extern const short *_tolower_tab_;
 
 #ifndef COMMON_INTERCEPTOR_DLOPEN
 #define COMMON_INTERCEPTOR_DLOPEN(filename, flag) \
-  ({ CheckNoDeepBind(filename, flag); REAL(dlopen)(filename, flag); })
+  ({ OnDlOpen(filename, flag); REAL(dlopen)(filename, flag); })
 #endif
 
 #ifndef COMMON_INTERCEPTOR_GET_TLS_RANGE

@@ -1052,7 +1052,7 @@ int OnExit() {
 
 #define COMMON_INTERCEPTOR_DLOPEN(filename, flag)                              \
   ({                                                                           \
-    CheckNoDeepBind(filename, flag);                                           \
+    OnDlOpen(filename, flag);                                                  \
     ptsan_in_libc = 1;                                                         \
     void * out = ORIG_REAL(dlopen)(stripID(filename), flag);                   \
     ptsan_in_libc = 0;                                                         \
@@ -1526,6 +1526,12 @@ INTERCEPTOR(SSIZE_T, getdelim, char **lineptr, SIZE_T *n, int delim, void *strea
 #define SANITIZER_INTERCEPT_MEMCHR 0
 
 // And actual libc wrappers include goes here!
+// LLVM 23 enables common stdio positioning interceptors on Linux too.
+// PTSan supplies these in ptsan_interceptors_with_libc_headers.cpp, where
+// InLibcGuard preserves ownership of lazily allocated FILE buffers.
+#undef SANITIZER_INTERCEPT_FSEEK
+#define SANITIZER_INTERCEPT_FSEEK 0
+
 #include "ptsan_common_interceptors.inc"
 
 // Now we put REAL back or INTERCEPT_FUNCTION will explode
