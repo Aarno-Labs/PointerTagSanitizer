@@ -55,6 +55,7 @@ def multisource_command(build, workspace, output, mode, *, runtime_validate=Fals
             "-G", "Unix Makefiles", "-C", str(workspace / ".github/multisource/ptsan.cmake"),
             f"-DCMAKE_C_COMPILER={build}/bin/clang", f"-DCMAKE_CXX_COMPILER={build}/bin/clang++",
             f"-DCMAKE_C_FLAGS={c}", f"-DCMAKE_CXX_FLAGS={cxx}",
+            f"-DCMAKE_PROJECT_INCLUDE={workspace}/.github/multisource/compat.cmake",
             f"-DTEST_SUITE_LIT={multisource_lit(build)}"]
 
 

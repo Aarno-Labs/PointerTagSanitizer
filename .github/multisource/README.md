@@ -24,6 +24,11 @@ The benchmark harness uses its own pinned `lit` 18.1.8 environment, matching
 Both correctness and performance workflows install the same
 [requirements](requirements.txt); manual runs prepare the environment likewise.
 
+The [CMake compatibility hook](compat.cmake) downgrades only
+`-Wincompatible-pointer-types` in ClamAV's `libclamav_cvd.c` and `shared_cdiff.c`
+and the two GSM `toast.c` files when compiling with Clang 23 or later. Other
+translation units retain the normal diagnostics; upstream sources stay clean.
+
 ```sh
 python -m venv "$BUILD_DIR/test-suite-venv"
 "$BUILD_DIR/test-suite-venv/bin/python" -m pip install -r .github/multisource/requirements.txt
