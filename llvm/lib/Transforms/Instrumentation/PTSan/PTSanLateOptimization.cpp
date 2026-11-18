@@ -107,6 +107,17 @@ void PTSanLateOptimizer::insertTaggedUseAnchors() {
       continue;
     }
 
+    if (auto *RMW = dyn_cast<AtomicRMWInst>(&I)) {
+      addPointerUse(RMW->getOperandUse(1));
+      continue;
+    }
+
+    if (auto *CmpXchg = dyn_cast<AtomicCmpXchgInst>(&I)) {
+      addPointerUse(CmpXchg->getOperandUse(1));
+      addPointerUse(CmpXchg->getOperandUse(2));
+      continue;
+    }
+
     if (auto *Ret = dyn_cast<ReturnInst>(&I)) {
       if (Ret->getNumOperands() != 0) {
         addPointerUse(Ret->getOperandUse(0));
