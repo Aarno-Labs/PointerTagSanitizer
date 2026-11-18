@@ -1,0 +1,3 @@
+# Match the pinned llvmorg-18.1.8 benchmark harness.
+lit==18.1.8
+psutil==7.2.2

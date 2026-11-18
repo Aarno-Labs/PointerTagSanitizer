@@ -289,6 +289,10 @@ jobs:
             git -C "$BUILD_DIR/test-suite-src" describe --tags --exact-match
             git -C "$BUILD_DIR/test-suite-src" rev-parse HEAD
           } 2>&1 | tee ci-results/test-suite-source.log
+          python -m venv "$BUILD_DIR/test-suite-venv"
+          "$BUILD_DIR/test-suite-venv/bin/python" -m pip install \
+            -r .github/multisource/requirements.txt
+          "$BUILD_DIR/test-suite-venv/bin/lit" --version
 
       - name: Build MultiSource benchmarks (${{ inputs.group }} configurations)
         id: multisource_build

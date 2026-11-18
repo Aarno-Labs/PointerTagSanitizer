@@ -13,7 +13,7 @@ import time
 import subprocess
 import sys
 
-from ptsan_ci_config import multisource_command
+from ptsan_ci_config import multisource_command, multisource_lit
 from ptsan_ci_builds import jobserver, minimal_environment, run_build_batch, write_json
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -103,7 +103,7 @@ def configure(build, workspace, suite, results, mode):
 
 
 def validate(build, suite, results, mode, build_exit):
-    status = logged([str(build / 'bin/llvm-lit'), '-sv', f'-j{len(os.sched_getaffinity(0))}',
+    status = logged([str(multisource_lit(build)), '-sv', f'-j{len(os.sched_getaffinity(0))}',
                      '--timeout=300', f'--output={results}/results.json',
                      f'--xunit-xml-output={results}/results.xml', str(suite / 'MultiSource')],
                     results / 'test.log')

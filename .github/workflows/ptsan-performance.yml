@@ -200,6 +200,10 @@ jobs:
             git -C "$BUILD_DIR/test-suite-src" describe --tags --exact-match
             git -C "$BUILD_DIR/test-suite-src" rev-parse HEAD
           } >> ci-results/performance/source-revisions.txt
+          python -m venv "$BUILD_DIR/test-suite-venv"
+          "$BUILD_DIR/test-suite-venv/bin/python" -m pip install \
+            -r .github/multisource/requirements.txt
+          "$BUILD_DIR/test-suite-venv/bin/lit" --version
 
       - name: Fetch Fleetbench and pinned Bazel
         id: fleetbench_source

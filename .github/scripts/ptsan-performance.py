@@ -17,7 +17,7 @@ import time
 
 from ptsan_ci_builds import jobserver, minimal_environment, run_build_batch, stop_group, write_json
 from ptsan_ci_modes import BASELINES, selected_modes
-from ptsan_ci_config import multisource_command, spec_arguments, spec_benchmarks
+from ptsan_ci_config import multisource_command, multisource_lit, spec_arguments, spec_benchmarks
 from check_ptsan_spec import check_result, inspect_case
 import ptsan_fleetbench as fleet
 
@@ -198,7 +198,7 @@ def run_multisource(job, plan, destination, repetition, timeout):
             shutil.rmtree(directory)
     for name in ('build.log', 'generated-tests.txt'):
         shutil.copyfile(Path(job['results']) / name, destination / name)
-    status = run([sys.executable, Path(job['build']) / 'bin/llvm-lit', '-sv', '-j1',
+    status = run([multisource_lit(Path(job['build'])), '-sv', '-j1',
                   f'--timeout={timeout}', f'--output={destination}/results.json', suite / 'MultiSource'],
                  destination / 'run.log', timeout * len(plan['inventory']) + 300)
     built = json.loads((Path(job['results']) / 'build-result.json').read_text())

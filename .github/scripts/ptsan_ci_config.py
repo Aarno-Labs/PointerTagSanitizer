@@ -42,6 +42,11 @@ def benchmark_flags(mode, *, runtime_validate=False, stack_temporal=None, preser
     return tuple(f"{flags} {extra}".strip() for flags in (config.c, config.cxx))
 
 
+def multisource_lit(build):
+    """The pinned test suite uses lit APIs removed from newer LLVM releases."""
+    return build / "test-suite-venv/bin/lit"
+
+
 def multisource_command(build, workspace, output, mode, *, runtime_validate=False,
                         stack_temporal=None, preserve_ids=False):
     c, cxx = benchmark_flags(mode, runtime_validate=runtime_validate,
@@ -50,7 +55,7 @@ def multisource_command(build, workspace, output, mode, *, runtime_validate=Fals
             "-G", "Unix Makefiles", "-C", str(workspace / ".github/multisource/ptsan.cmake"),
             f"-DCMAKE_C_COMPILER={build}/bin/clang", f"-DCMAKE_CXX_COMPILER={build}/bin/clang++",
             f"-DCMAKE_C_FLAGS={c}", f"-DCMAKE_CXX_FLAGS={cxx}",
-            f"-DTEST_SUITE_LIT={build}/bin/llvm-lit"]
+            f"-DTEST_SUITE_LIT={multisource_lit(build)}"]
 
 
 def spec_arguments(build, workspace, mode, config_path, output, *, size, stack_temporal=None):

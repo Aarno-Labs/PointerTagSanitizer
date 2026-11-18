@@ -19,7 +19,14 @@ validation; performance omits it. Both explicitly enable strong stack safety
 for instrumented applications. Baselines have no PTSan options. Execution
 parallelism, timeouts, and repetitions remain separate runner policies.
 
+The benchmark harness uses its own pinned `lit` 18.1.8 environment, matching
+`llvmorg-18.1.8`. LLVM 23's bundled lit removed APIs used by this test suite.
+Both correctness and performance workflows install the same
+[requirements](requirements.txt); manual runs prepare the environment likewise.
+
 ```sh
+python -m venv "$BUILD_DIR/test-suite-venv"
+"$BUILD_DIR/test-suite-venv/bin/python" -m pip install -r .github/multisource/requirements.txt
 python .github/scripts/ptsan-multisource.py build --modes software
 python .github/scripts/ptsan-multisource.py validate glibc --modes software
 python .github/scripts/ptsan-multisource.py validate musl-nonstrict --modes software
