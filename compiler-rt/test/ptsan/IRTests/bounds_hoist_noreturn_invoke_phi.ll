@@ -1,16 +1,17 @@
 ; RUN: %opt_ptsan -ptsan-reoptimize=0 %s -S | FileCheck %s
 
-; A noreturn invoke is not a blocking call, so it can be the first legal
-; insertion point after a pointer PHI. Do not reject that candidate just
-; because it is an invoke. The later blocking call still prevents the bounds
-; loads from being hoisted above it.
+target triple = "x86_64-unknown-linux-gnu"
+
+; A noreturn invoke can free the pointee and then unwind. Bounds loads must
+; stay on the exceptional continuation even when there is no later blocking
+; call. The pointer PHI makes the invoke the initial hoisting candidate.
 
 ; CHECK-LABEL: define void @noreturn_invoke_phi(
 ; CHECK: merge:
 ; CHECK: phi ptr
+; CHECK-NOT: load i64, ptr
 ; CHECK: invoke void @noreturn_call()
 ; CHECK: lpad:
-; CHECK: call void @may_free()
 ; CHECK-DAG: load i64, ptr
 ; CHECK-DAG: load i64, ptr
 ; CHECK: access:
@@ -37,7 +38,6 @@ unreachable:
 lpad:
   %lp = landingpad { ptr, i32 }
           cleanup
-  call void @may_free()
   br label %access
 
 access:
@@ -47,5 +47,4 @@ access:
 }
 
 declare void @noreturn_call() noreturn
-declare void @may_free()
 declare void @use(i8)

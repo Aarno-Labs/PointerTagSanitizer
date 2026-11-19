@@ -1,6 +1,7 @@
+// Tests recovery after a patched check; 32-bit mode always terminates.
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 
-// RUN: %clang_ptsan -g -O2 -mllvm -ptsan-patch-all-with=2 -o %exe.all.patched %s
+// RUN: %clang_ptsan -g -O2 -mllvm -ptsan-abort-on-error=0 -mllvm -ptsan-patch-all-with=2 -o %exe.all.patched %s
 // RUN: ./%exe.all.patched 23 2> log.txt
 // RUN: cat log.txt | FileCheck %s --check-prefix=PATCHED
 

@@ -24,6 +24,7 @@
 
 // CHECK: OK: dirname tests passed
 
+#include "Inputs/ptsan_test_interface.h"
 #include <libgen.h>
 #include <signal.h>
 #include <stdint.h>
@@ -64,7 +65,7 @@ static int check_str_is(const char *what, const char *got, const char *want) {
 
 __attribute__((noinline))
 static unsigned tag_of(char *p) {
-  return (unsigned)((uintptr_t)p >> 48);
+  return get_id(p);
 }
 
 /* Pointer == is tag-blind under ptsan (the pass normalizes comparisons), so check the tag bits explicitly; a 0 tag on the malloc'd input means tagging is off and the test is vacuous. */

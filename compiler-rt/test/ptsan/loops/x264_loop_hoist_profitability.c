@@ -42,10 +42,10 @@
 // REOPT-NOT: ptsan.first.low
 // REOPT: [[SRC_SMAX:%[^ ]+]] = tail call i64 @llvm.smax.i64
 // REOPT-NEXT: [[SRC_SIZE:%[^ ]+]] = add nsw i64 [[SRC_SMAX]], 1
+// REOPT-DAG: %src1.end.ov = tail call {{.*}} i64 [[SRC_SIZE]])
+// REOPT-DAG: %src2.end.ov = tail call {{.*}} i64 [[SRC_SIZE]])
 // REOPT: [[DST_SMAX:%[^ ]+]] = tail call i64 @llvm.smax.i64
 // REOPT-NEXT: [[DST_SIZE:%[^ ]+]] = add nsw i64 [[DST_SMAX]], 1
-// REOPT: %src1.end.ov = tail call {{.*}} i64 [[SRC_SIZE]])
-// REOPT: %src2.end.ov = tail call {{.*}} i64 [[SRC_SIZE]])
 // REOPT: %dst.end.ov = tail call {{.*}} i64 [[DST_SIZE]])
 // REOPT-NOT: ptsan.first.low
 // REOPT: ret void

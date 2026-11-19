@@ -2,6 +2,11 @@
 PointerTagSanitizer
 ===================
 
+.. toctree::
+   :hidden:
+
+   PointerTagSanitizerSecurityAnalysis
+
 .. contents::
    :local:
 
@@ -35,9 +40,12 @@ The supplied CMake configuration builds an optimized compiler. Dependency
 libraries are built and installed under ``$LLVM_BUILD/ptsan``.
 The examples assume this build's ``clang`` and ``clang++`` are on ``PATH``.
 
-The builds provide Clang configuration files alongside the compiler. These
-enable PTSan and select the matching headers and libraries. Custom dependency
-builds can use their own configuration files or explicit compiler flags.
+CMake generates the Clang configuration files in ``$LLVM_BUILD/bin``, alongside
+``clang`` and ``clang++``. This build's compiler finds them by name with
+``--config=...``. Musl configurations, such as ``ptsan-musl-strict.cfg``, are
+generated when ``PTSAN_MUSL_SOURCE_DIR`` is set. These files enable PTSan and
+select the matching headers and libraries. Custom dependency builds can use
+their own configuration files or explicit compiler flags.
 
 Using PTSan with glibc
 ======================
@@ -123,6 +131,24 @@ and libunwind.
 For C applications, use ``clang`` with ``--config=ptsan-musl-strict-c.cfg`` or
 ``--config=ptsan-musl-nonstrict-c.cfg``.
 
+32-bit IDs
+==========
+
+ID32 uses 32-bit allocation identifiers, providing a much larger ID space than
+the default 16-bit mode, at the cost of some extra overhead and slightly less
+flexibility for weird C idioms. Enable it with
+the corresponding ID32 configuration, which also selects libraries built for
+the ID32 pointer format:
+
+.. code-block:: bash
+
+   clang++ --config=ptsan-glibc-id32.cfg -O2 app.cpp -o app
+   clang++ --config=ptsan-musl-id32-nonstrict.cfg -O2 app.cpp -o app
+   clang++ --config=ptsan-musl-id32-strict.cfg -O2 app.cpp -o app
+
+Use ``clang`` for C applications; C-only musl builds can use the corresponding
+``-c.cfg`` variants. ID32 cannot be combined with LAM.
+
 Limitations
 ===========
 
@@ -134,6 +160,9 @@ Instrumented musl does not cover every kernel interface, including some
 helpers, in libunwind, and in selected libc++abi exception-handling and RTTI code.
 Some TLS and late-loaded-module lifecycle cases, and within-frame stack
 lifetime retirement, remain unsupported or incompletely checked.
+
+For the threat model and a detailed discussion of security and deployment
+limitations, see :doc:`PointerTagSanitizerSecurityAnalysis`.
 
 Testing
 =======

@@ -14,13 +14,14 @@
 // deferred bounds writes.
 #include <assert.h>
 #include <stdint.h>
+#include "../../Inputs/ptsan_test_interface.h"
 #include <stdio.h>
 
 static volatile unsigned count = 37;
 
 __attribute__((noinline)) static void consume(char *p, unsigned size) {
-  assert(((uintptr_t)p >> 48) != 0);
-  assert(((uintptr_t)p >> 48) != 0xffff);
+  assert(get_id(p) != 0);
+  assert(get_id(p) != ptsan_default_id());
   p[0] = 3;
   p[size - 1] = 5;
 }
@@ -31,7 +32,7 @@ __attribute__((noinline)) static void recurse(unsigned depth) {
   char buffer[size];
   consume(fixed, sizeof(fixed));
   consume(buffer, size);
-  assert(((uintptr_t)fixed >> 48) != ((uintptr_t)buffer >> 48));
+  assert(get_id(fixed) != get_id(buffer));
   if (depth) {
     recurse(depth - 1);
   }

@@ -20,7 +20,7 @@
 // RUN: FileCheck %s --check-prefix=GOOD < good.txt
 // RUN: ./%exe 4096 2>good.txt
 // RUN: FileCheck %s --check-prefix=GOOD < good.txt
-// RUN: ./%exe 4100 2>bad.txt
+// RUN: not ./%exe 4100 2>bad.txt
 // RUN: FileCheck %s --check-prefix=BAD < bad.txt
 
 // This is the affine-scatter counterpart of loops/loop_hoist_simple_over.c.

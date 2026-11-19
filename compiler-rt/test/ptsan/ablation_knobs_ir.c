@@ -1,12 +1,14 @@
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-preanalyze-loops=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=LOOPHOIST
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-no-loop-check-hoist -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOLOOPHOIST
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=MERGE
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-check-merge -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOMERGE
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=FILTER
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-filter-removable-checks -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOFILTER
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=STACKDEFAULT
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-stack-id-fast-path -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOSTACK
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-opts -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOOPTSSTACK
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-preanalyze-loops=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=LOOPHOIST
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-preanalyze-loops=0 -mllvm -ptsan-no-loop-check-hoist -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOLOOPHOIST
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=MERGE
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-check-merge -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOMERGE
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefix=FILTER
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-filter-removable-checks -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOFILTER
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefixes=STACKDEFAULT,STACK-DEFAULT
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-stack-id-fast-path -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOSTACK
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-no-opts -S -emit-llvm -o - %s | FileCheck %s --check-prefix=NOOPTSSTACK
+
+// RUN: %clang_ptsan_plain -fsanitize-ptsan-32-bit-ids -DPTSAN_TEST_32_BIT_IDS -O1 -g -fno-discard-value-names -mllvm -ptsan-reoptimize=0 -S -emit-llvm -o - %s | FileCheck %s --check-prefixes=STACKDEFAULT,STACK-ID32
 
 volatile char Sink;
 static const char ConstGlobal[16] = "abcdefghijklmn";
@@ -82,27 +84,21 @@ void one_stack(int i) {
 }
 
 // STACKDEFAULT-LABEL: define {{.*}}@one_stack(
-// STACKDEFAULT: has.stack.id.room
-// STACKDEFAULT: call i16 @ptsan_get_stack_ids_1
+// STACK-DEFAULT: has.stack.id.room
+// STACK-DEFAULT: call void @ptsan_get_stack_ids
+// STACK-ID32: has.stack.id.room
+// STACK-ID32: call void @ptsan_get_stack_ids
 
 // NOSTACK-LABEL: define {{.*}}@one_stack(
 // NOSTACK-NOT: has.stack.id.room
-// NOSTACK: call void @ptsan_get_stack_ids_n
-// NOSTACK-NOT: ptsan_get_stack_ids_1
-// NOSTACK-NOT: ptsan_get_stack_ids_2
-// NOSTACK-NOT: ptsan_get_stack_ids_3
-// NOSTACK-NOT: ptsan_get_stack_ids_4
-// NOSTACK: call void @ptsan_free_stack_ids_n
+// NOSTACK: call void @ptsan_get_stack_ids
+// NOSTACK: call void @ptsan_free_stack_ids
 // NOSTACK-NOT: has.stack.id.room
 // NOSTACK: ret void
 
 // NOOPTSSTACK-LABEL: define {{.*}}@one_stack(
 // NOOPTSSTACK-NOT: has.stack.id.room
-// NOOPTSSTACK: call void @ptsan_get_stack_ids_n
-// NOOPTSSTACK-NOT: ptsan_get_stack_ids_1
-// NOOPTSSTACK-NOT: ptsan_get_stack_ids_2
-// NOOPTSSTACK-NOT: ptsan_get_stack_ids_3
-// NOOPTSSTACK-NOT: ptsan_get_stack_ids_4
-// NOOPTSSTACK: call void @ptsan_free_stack_ids_n
+// NOOPTSSTACK: call void @ptsan_get_stack_ids
+// NOOPTSSTACK: call void @ptsan_free_stack_ids
 // NOOPTSSTACK-NOT: has.stack.id.room
 // NOOPTSSTACK: ret void

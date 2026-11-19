@@ -86,24 +86,38 @@ extern cl::opt<bool> ClNoCheckMerge;
 extern cl::opt<bool> ClNoFilterRemovableChecks;
 extern cl::opt<bool> ClNoStackIDFastPath;
 extern cl::opt<bool> ClNoChecks;
-extern cl::opt<bool> ClNoIDs;
-extern cl::opt<bool> ClNoStrip;
 extern cl::opt<bool> ClLAM;
+extern cl::opt<bool> Cl32BitIDs;
+extern cl::opt<bool> ClSupportIndicatorBit;
+extern cl::opt<bool> ClMayDecodeRaw;
+extern cl::opt<unsigned> ClRandomSeed;
+extern cl::opt<bool> ClRandomizeIDs;
+extern cl::opt<unsigned> ClID32OriginQuantum;
 extern cl::opt<bool> ClInstrumentGlobals;
 extern cl::opt<bool> ClValidate;
 extern cl::opt<bool> ClValidateArith;
 extern cl::opt<bool> ClPrintStats;
 extern cl::opt<bool> ClClearIdsOnArith;
+extern cl::opt<int> ClStripPointerBitTwiddles;
+extern cl::opt<bool> ClStripPtrToInt;
+extern cl::list<std::string> ClStripPtrToIntFunctions;
+extern cl::list<std::string> ClClearIdsOnArithFunctions;
+extern cl::list<std::string> ClClearIdsOnCmpFunctions;
 extern cl::opt<bool> ClClearIdsOnCmp;
 extern cl::opt<bool> ClQuietErrors;
 extern cl::opt<bool> ClStrictMode;
+
+inline bool usesConditionalID32Decode() {
+  return Cl32BitIDs && (!ClStrictMode || ClMayDecodeRaw);
+}
 extern cl::opt<bool> ClNoPTSanOpts;
 extern cl::opt<bool> ClUseReturnedMallocSize;
 extern cl::opt<bool> ClAbortOnError;
 extern cl::opt<bool> ClPTSanPreanalyzeLoops;
 extern cl::opt<bool> ClStackTemporalSafety;
-extern cl::opt<unsigned> ClStackIDsPerBucket;
+extern cl::opt<unsigned> ClIDBucketSize;
 extern cl::opt<unsigned> ClStackIDThreadBuckets;
+extern cl::opt<unsigned> ClIDReuseDistance;
 extern cl::opt<bool> ClAddOverflowChecks;
 extern cl::opt<int> ClPatchAllWith;
 extern cl::opt<bool> ClCreateIRDbg;
@@ -114,6 +128,7 @@ bool isCheckMergeDisabled();
 bool isRemovableCheckFilteringDisabled();
 bool isStackIDFastPathDisabled();
 bool isKnownZeroAccessSize(Value *Size);
+void validatePTSanTarget(Module &M);
 Value *findPTSanBasePointer(Value *Start, PTSanUtils &PTU);
 bool isUntaggedConstantPtr(Value *V);
 optional<uint64_t> getStaticGlobalSize(const GlobalVariable *GV,
@@ -175,12 +190,18 @@ class BoundAnchor;
 class LoadBoundAnchor;
 class StaticBoundAnchor;
 class StripAnchor;
+class ID16StripAnchor;
+class ID32StripAnchor;
 class TaggedAnchor;
 class TagAnchor;
+class ID16TagAnchor;
+class ID32TagAnchor;
 class ValidateArithAnchor;
-class PositionedAnchor;
+class TargetedAnchor;
 class FunctionExitAnchor;
 class SetjmpAnchor;
+class VAStartAnchor;
+class VarargCallAnchor;
 class LibcCallAnchor;
 class SpecialStripAnchor;
 
@@ -188,6 +209,7 @@ class PointerTagSanitizer {
 private:
   friend class ::llvm::PointerTagSanitizerPass;
   friend class PTSanAnalysisState;
+  friend struct PTSanUtils;
   friend class Anchor;
   friend class SourceAnchor;
   friend class AccessAnchor;
@@ -198,12 +220,18 @@ private:
   friend class LoadBoundAnchor;
   friend class StaticBoundAnchor;
   friend class StripAnchor;
+  friend class ID16StripAnchor;
+  friend class ID32StripAnchor;
   friend class TaggedAnchor;
   friend class TagAnchor;
+  friend class ID16TagAnchor;
+  friend class ID32TagAnchor;
   friend class ValidateArithAnchor;
-  friend class PositionedAnchor;
+  friend class TargetedAnchor;
   friend class FunctionExitAnchor;
   friend class SetjmpAnchor;
+  friend class VAStartAnchor;
+  friend class VarargCallAnchor;
   friend class LibcCallAnchor;
   friend class SpecialStripAnchor;
   friend class PTSanDiscoverer;
@@ -242,6 +270,7 @@ private:
   IntegerType *U32Ty;
   IntegerType *U64Ty;
   IntegerType *U16Ty;
+  IntegerType *IDTy;
   IntegerType *U8Ty;
   IntegerType *UptrTy;
   IntegerType *BoolTy;
@@ -255,6 +284,9 @@ private:
   ConstantInt *AddrMask;
   ConstantInt *IDMask;
   ConstantInt *DefaultIDNo;
+  unsigned IDBucketSize;
+  unsigned StackIDLogCapacity;
+  unsigned StackIDThreadBuckets;
 
   // Instrumentation status belongs to the specific value we created, not to
   // an arbitrary value that later replaces it. Deletion still removes the
@@ -267,22 +299,11 @@ private:
   SmallPtrSet<Value *, 8> AnchorCallees;
 
   // Globals that we actually get/use/reference
-  FunctionCallee GetStackIDs1;
-  FunctionCallee GetStackIDs2;
-  FunctionCallee GetStackIDs3;
-  FunctionCallee GetStackIDs4;
-  FunctionCallee GetStackIDsN;
+  FunctionCallee GetStackIDs;
 
-  FunctionCallee FreeStackIDs1;
-  FunctionCallee FreeStackIDs2;
-  FunctionCallee FreeStackIDs3;
-  FunctionCallee FreeStackIDs4;
-  FunctionCallee FreeStackIDsN;
-  FunctionCallee GetRepeatableAllocaIDsContainer;
+  FunctionCallee FreeStackIDs;
   FunctionCallee GetRepeatableAllocaID;
-  FunctionCallee FreeRepeatableAllocaIDs;
-  FunctionCallee SaveStackIDCheckpoint;
-  FunctionCallee RestoreStackIDCheckpoint;
+  FunctionCallee RestoreStackIDs;
   FunctionCallee InitVAListX86_64;
   FunctionCallee InitVAListAArch64;
 
@@ -290,6 +311,8 @@ private:
   FunctionCallee LogCheckCalled;
   FunctionCallee GetNextGlobalID;
   FunctionCallee GetConstantGlobalID;
+  FunctionCallee ChooseStackOrigin;
+  FunctionCallee RefillStackOrigins;
   FunctionCallee RegisterTLS;
   FunctionCallee InitTLS;
   FunctionCallee DestroyTLS;
@@ -306,14 +329,20 @@ private:
   FunctionCallee PTSanGetID;
   FunctionCallee PTSanLoadBase;
   FunctionCallee PTSanLoadSpan;
+  FunctionCallee PTSanLoadOrigin;
   FunctionCallee PTSanStaticBase;
   FunctionCallee PTSanStaticSpan;
-  FunctionCallee PTSanStrip;
-  FunctionCallee PTSanStripI64;
+  FunctionCallee PTSanID16Strip;
+  FunctionCallee PTSanID16StripI64;
+  FunctionCallee PTSanID32Strip;
+  FunctionCallee PTSanID32StripI64;
   FunctionCallee PTSanTagged;
-  FunctionCallee PTSanTag;
+  FunctionCallee PTSanID16Tag;
+  FunctionCallee PTSanID32Tag;
   FunctionCallee PTSanFunctionExit;
   FunctionCallee PTSanSetjmp;
+  FunctionCallee PTSanVAStart;
+  FunctionCallee PTSanVarargCall;
   FunctionCallee PTSanValidateArith;
   FunctionCallee PTSanLibcCall;
   FunctionCallee PTSanSpecialStrip;
@@ -321,13 +350,20 @@ private:
   GlobalValue *PTSanVarargSentinel;
   GlobalValue *BoundsArray;
   GlobalValue *TypesArray;
+  GlobalValue *OriginsArray;
+  GlobalValue *StackOriginNextPtr = nullptr;
   GlobalValue *OverflowIDBoundsPtr;
   GlobalValue *NextStackIDPtr;
+  GlobalValue *StackIDCursorPtr;
   GlobalValue *PendingStackIdsPtr = nullptr;
+  GlobalValue *InSignalContextPtr = nullptr;
   GlobalValue *StackIDLimitPtr;
   GlobalValue *PTSanInLibc;
 
   void initializeModule();
+  Value *getBoundsPtr(PTSanIRB &IRB, Value *ID,
+                      optional<unsigned> Field = nullopt);
+  Value *getOriginPtr(PTSanIRB &IRB, Value *ID);
   bool shouldUseInlineStrip() const;
   void markAsInstr(Value *V);
   void unmarkAsInstr(Value *V);
@@ -337,8 +373,6 @@ private:
   SmallVector<AnchorT, 16> collectAnchors(Function &F);
   // Find the following program instruction, skipping adjacent PTSan anchors.
   Instruction *getNextRealInstruction(Anchor Anchor) const;
-  // Find the first valid insertion point after any leading PTSan anchors.
-  Instruction *getFirstRealInsertionPt(BasicBlock &BB) const;
   void verifyNoAnchors() const;
   void setRuntimeFlags();
 

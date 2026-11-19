@@ -1,15 +1,19 @@
 ; RUN: rm -rf %t && mkdir -p %t && cd %t
 ; RUN: %opt_ptsan %s -S > out.ll
-; RUN: cat out.ll | FileCheck %s
+; RUN: cat out.ll | FileCheck %s --check-prefixes=CHECK,DEFAULT
+
+; RUN: %opt_ptsan -ptsan-32-bit-ids %s -S > out.ll
+; RUN: cat out.ll | FileCheck %s --check-prefixes=CHECK,ID32
 
 ; Check should be fully hoisted
 ; CHECK-LABEL: define{{.*}}@case_select_same_base
 ; CHECK-LABEL: entry:
 ; CHECK-NEXT: ptr @malloc
 ; CHECK-DAG: [[ASINT:%[0-9A-Za-z_.]+]] = ptrtoint ptr %call to i64
-; CHECK-DAG: [[ID:%[0-9A-Za-z_.]+]] = lshr i64 [[ASINT]], 48
-; CHECK-DAG: [[BASEGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64 [[ID]], i32 0
-; CHECK-DAG: [[BOUNDGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64 [[ID]], i32 1
+; DEFAULT-DAG: [[ID:%[0-9A-Za-z_.]+]] = lshr i64 [[ASINT]], 48
+; ID32-DAG: [[ID:%[0-9A-Za-z_.]+]] = select i1 {{.*}}, i64 {{.*}}, i64 0
+; CHECK-DAG: [[BASEGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 0
+; CHECK-DAG: [[BOUNDGEP:%[0-9A-Za-z_.]+]] = getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64 [[ID]], i32 1
 ; CHECK-DAG: [[BASEVAL:%[0-9A-Za-z_.]+]] = load i64, ptr [[BASEGEP]], align 8
 ; CHECK-DAG: [[BOUNDVAL:%[0-9A-Za-z_.]+]] = load i64, ptr [[BOUNDGEP]], align 8
 ; CHECK: br i1

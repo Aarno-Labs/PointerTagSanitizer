@@ -6,7 +6,7 @@
 // XFAIL: *
 // RUN: split-file %s %t
 // RUN: %clang_ptsan -O2 -fPIC -shared %t/library.c -o %t/library.so
-// RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error -rdynamic %t/main.c %t/access.c -ldl -o %t/test
+// RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error -rdynamic -I%S %t/main.c %t/access.c -ldl -o %t/test
 // RUN: %t/test %t/library.so
 // REQUIRES: x86_64-target-arch
 
@@ -33,18 +33,20 @@ int *executable_values(void) {
 #include <dlfcn.h>
 #include <stdint.h>
 
+#include "Inputs/ptsan_test_interface.h"
+
 int *executable_values(void);
 
 int main(int argc, char **argv) {
   assert(argc == 2);
-  unsigned before = (uintptr_t)executable_values() >> 48;
-  assert(before && before != 0xffff);
+  unsigned before = get_id(executable_values());
+  assert(before && before != ptsan_default_id());
   void *library = dlopen(argv[1], RTLD_NOW);
   assert(library);
   int *(*library_values)(void) = (int *(*)(void))dlsym(library, "library_values");
   assert(library_values);
-  unsigned after = (uintptr_t)executable_values() >> 48;
+  unsigned after = get_id(executable_values());
   assert(after == before);
-  assert(((uintptr_t)library_values() >> 48) == before);
+  assert(get_id(library_values()) == before);
   return 0;
 }

@@ -19,8 +19,10 @@ entry:
 ; META-DAG: [[ID:%.*]] = call i64 @__ptsan_get_id(ptr null)
 ; META-DAG: [[BASE:%.*]] = call i64 @__ptsan_load_base(i64 [[ID]])
 ; META-DAG: [[SPAN:%.*]] = call i64 @__ptsan_load_span(i64 [[ID]])
-; META: call void (...) @__ptsan_access(i64 [[ID]], i64 [[BASE]], i64 [[SPAN]], ptr null, i64 1, i64 1, i32 1, i32 0)
+; META: call void (...) @__ptsan_access(i64 [[ID]], i64 [[BASE]], i64 [[SPAN]], ptr null, i64 1, i64 1, i32 1, i32 0
 
 ; LOWER-LABEL: define i8 @load_null(
-; LOWER-NOT: call void (...) @__ptsan_access
+; LOWER-NOT: @__ptsan_access
 ; LOWER: call void @ptsan_complain
+; LOWER-NOT: @__ptsan_access
+; LOWER: }

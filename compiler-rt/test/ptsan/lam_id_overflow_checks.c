@@ -1,10 +1,11 @@
+// LAM and the 32-bit encoding are mutually exclusive.
 /* LAM-mode version of id_overflow_checks.c.  This should behave like the
  * 16-bit overflow test, except the runtime ID space ends at 0x7fff.
  */
 
 // REQUIRES: ptsan-lam-u48-runtime
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -g -O2 -fno-discard-value-names -mllvm -ptsan-lam -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-instrument-globals=0 -I%crt_src/include -o %exe %s
+// RUN: %clang_raw -fsanitize=ptsan -g -O2 -fno-discard-value-names -fsanitize-ptsan-lam -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-instrument-globals=0 -mllvm -ptsan-randomize-ids=0 -mllvm -ptsan-id-bucket-size=512 -mllvm -ptsan-stack-id-thread-buckets=12 -I%crt_src/include -o %exe %s
 // RUN: ./%exe 2> err.txt
 // RUN: FileCheck %s < err.txt
 
@@ -16,6 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "Inputs/ptsan_test_interface.h"
+
+// Sequential reservations exclude zero from the first bucket.
+enum { StackIDCount = 12 * 512 - 1 };
 
 uint32_t N;
 #define M 5
@@ -93,6 +97,7 @@ void __attribute__((noinline)) test_mallocs(void) {
   free(p1);
   free(p2);
 
+  // Pool pressure publishes the partial return cache.
   int *p3 = (int *)malloc(20 * sizeof(int));
   assert(get_id(p3) != ptsan_default_id());
   assert_lam_id(get_id(p3));
@@ -114,8 +119,9 @@ void __attribute__((noinline)) test_mallocs(void) {
   use(p5);
 
   free(p5);
-  for (int i = 0; i < M; i++)
+  for (int i = 0; i < M; i++) {
     free(os[i]);
+  }
 
   int *p6 = (int *)malloc(20 * sizeof(int));
   assert(get_id(p6) == ptsan_default_id());
@@ -204,6 +210,39 @@ void __attribute__((noinline)) test_stack_ids(void) {
   use_some_ids();
 }
 
+// Consume the two pressure-recycled IDs, then confirm that genuine exhaustion
+// still falls back while fast-stack IDs remain available.
+void __attribute__((noinline)) test_mixed_heap_stack(int *real_heap) {
+  int stack[10];
+  int *recycled1 = (int *)malloc(10 * sizeof(int));
+  int *recycled2 = (int *)malloc(10 * sizeof(int));
+  int *default_heap = (int *)malloc(10 * sizeof(int));
+  assert(recycled1 != NULL && recycled2 != NULL);
+  assert(get_id(recycled1) != ptsan_default_id());
+  assert(get_id(recycled2) != ptsan_default_id());
+  assert(default_heap != NULL);
+  assert(get_id(real_heap) > StackIDCount);
+  assert(get_id(real_heap) <= ptsan_max_id());
+  assert(get_id(default_heap) == ptsan_default_id());
+  assert(get_id(stack) > 0 && get_id(stack) <= StackIDCount);
+  assert_lam_ptr(real_heap);
+  assert_lam_base(get_id(real_heap));
+  assert_lam_ptr(default_heap);
+  assert_lam_base(get_id(default_heap));
+  assert_lam_ptr(stack);
+  assert_lam_base(get_id(stack));
+
+  real_heap[5] = 11;
+  default_heap[5] = 22;
+  stack[5] = 33;
+  assert(do_use(real_heap) == 11);
+  assert(do_use(default_heap) == 22);
+  assert(do_use(stack) == 33);
+  free(recycled1);
+  free(recycled2);
+  free(default_heap);
+}
+
 int main(void) {
   assert(ptsan_id_bits() == 15);
   assert(ptsan_default_id() == 0x7fff);
@@ -213,25 +252,17 @@ int main(void) {
   // Shared constant ranges reserve permanent IDs even with globals disabled.
   baseline_used_ids = __ptsan_used_global_ids;
   used_ids_is(0);
-  assert(baseline_used_ids < ptsan_num_ids() - 4 - 0x1800);
+  assert(baseline_used_ids < ptsan_num_ids() - 4 - StackIDCount);
   // Leave two non-stack IDs available after allocating ptrs and its elements.
-  N = ptsan_num_ids() - 4 - 0x1800 - baseline_used_ids;
+  uint64_t usable_ids = ptsan_max_id();
+  N = usable_ids - StackIDCount - 3 - baseline_used_ids;
   int **ptrs = (int **)malloc(sizeof(int *) * N);
 
   used_ids_is(1);
-  assert(get_id(ptrs) == 0x1801 + baseline_used_ids);
+  assert(get_id(ptrs) > StackIDCount);
+  assert(get_id(ptrs) <= ptsan_max_id());
   assert_lam_ptr(ptrs);
   assert_lam_base(get_id(ptrs));
-
-  int *prebuf = (int *)malloc(20 * sizeof(int));
-  use(prebuf);
-  assert_lam_id(get_id(prebuf));
-  assert_lam_ptr(prebuf);
-  assert_lam_base(get_id(prebuf));
-
-  used_ids_is(2);
-  free(prebuf);
-  used_ids_is(1);
 
   for (uint32_t i = 0; i < N; i++) {
     int *buf = (int *)malloc(20 * sizeof(int));
@@ -262,8 +293,27 @@ int main(void) {
   test_stack_ids();
   used_ids_is(N + 1);
 
-  for (uint32_t i = 0; i < N; i++)
+  // A full return-cache drain makes real IDs available after exhaustion.
+  // The two earlier frees are still cached, so these frees trigger a drain.
+  for (unsigned i = 0; i != 4096; ++i) {
     free(ptrs[i]);
+  }
+  used_ids_is(N + 1 - 4096);
+  for (unsigned i = 0; i != 4096; ++i) {
+    ptrs[i] = (int *)malloc(20 * sizeof(int));
+    assert(get_id(ptrs[i]) != ptsan_default_id());
+    assert_lam_id(get_id(ptrs[i]));
+    assert_lam_ptr(ptrs[i]);
+    assert_lam_base(get_id(ptrs[i]));
+  }
+  used_ids_is(N + 1);
+
+  test_mixed_heap_stack(ptrs[0]);
+  used_ids_is(N + 1);
+
+  for (uint32_t i = 0; i < N; i++) {
+    free(ptrs[i]);
+  }
 
   free(ptrs);
   used_ids_is(0);

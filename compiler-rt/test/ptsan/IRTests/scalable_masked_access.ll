@@ -27,7 +27,7 @@ define <vscale x 4 x i32> @contiguous(ptr %base,
 ; META: [[LANES:%.*]] = call <vscale x 4 x i64> @llvm.experimental.stepvector.nxv4i64()
 ; META: [[OFFSETS:%.*]] = mul <vscale x 4 x i64> [[LANES]], {{.*}}
 ; META: [[POINTERS:%.*]] = getelementptr i8, ptr %base, <vscale x 4 x i64> [[OFFSETS]]
-; META: call void (...) @__ptsan_access({{.*}}<vscale x 4 x ptr> [[POINTERS]], <vscale x 4 x i64> {{.*}}, i64 4, i32 1, i32 0, <vscale x 4 x i1> %mask)
+; META: call void (...) @__ptsan_access({{.*}}<vscale x 4 x ptr> [[POINTERS]], <vscale x 4 x i64> {{.*}}, i64 4, i32 1, i32 0, <vscale x 4 x i1> %mask
 entry:
   %value = call <vscale x 4 x i32> @llvm.masked.load.nxv4i32.p0(
       ptr %base, i32 4, <vscale x 4 x i1> %mask,
@@ -39,7 +39,7 @@ define <vscale x 4 x i32> @gather(<vscale x 4 x ptr> %pointers,
                                   <vscale x 4 x i1> %mask) {
 ; META-LABEL: define <vscale x 4 x i32> @gather(
 ; META-NOT: llvm.experimental.stepvector
-; META: call void (...) @__ptsan_access({{.*}}<vscale x 4 x ptr> %pointers, <vscale x 4 x i64> {{.*}}, i64 4, i32 1, i32 0, <vscale x 4 x i1> %mask)
+; META: call void (...) @__ptsan_access({{.*}}<vscale x 4 x ptr> %pointers, <vscale x 4 x i64> {{.*}}, i64 4, i32 1, i32 0, <vscale x 4 x i1> %mask
 entry:
   %value = call <vscale x 4 x i32> @llvm.masked.gather.nxv4i32.nxv4p0(
       <vscale x 4 x ptr> %pointers, i32 4, <vscale x 4 x i1> %mask,

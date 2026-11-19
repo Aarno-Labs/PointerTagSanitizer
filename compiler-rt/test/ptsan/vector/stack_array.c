@@ -18,7 +18,7 @@
 // RUN:   %clang_ptsan -O2 -march=x86-64 -Xclang -disable-llvm-passes -x ir -o %exe -
 // RUN: ./%exe 63 2>good.txt
 // RUN: FileCheck %s --check-prefix=GOOD < good.txt
-// RUN: ./%exe 64 2>bad.txt
+// RUN: not ./%exe 64 2>bad.txt
 // RUN: FileCheck %s --check-prefix=BAD < bad.txt
 
 // The pointer passed to gather_stack refers to one stack allocation, but the

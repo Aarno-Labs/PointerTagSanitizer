@@ -4,6 +4,10 @@
 //
 // RUN: %ptsanxx_musl_nonstrict -o %t %s
 // RUN: %run %t
+//
+// Exercise the ID32 libc++ stack with matching application instrumentation.
+// RUN: %ptsanxx_musl_id32_nonstrict -o %t.id32 %s
+// RUN: %run %t.id32
 
 #include <cassert>
 #include <numeric>

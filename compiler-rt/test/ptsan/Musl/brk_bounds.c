@@ -8,9 +8,13 @@
 // RUN: not %run %t end 2>&1 | FileCheck %s
 // RUN: not %run %t shrunk 2>&1 | FileCheck %s
 // CHECK: Found bad POINT access
+//
+// RUN: %ptsan_musl_id32_strict -o %t.id32 %s
+// RUN: %run %t.id32
+// RUN: not %run %t.id32 end 2>&1 | FileCheck %s
+// RUN: not %run %t.id32 shrunk 2>&1 | FileCheck %s
 
-// Use musl's fixed-argument syscall entry: public brk() rejects requests,
-// and variadic syscall() has a separate strict-mode va_arg limitation.
+// Use musl's fixed-argument syscall entry: public brk() rejects requests.
 // Avoid malloc and stdio while this test owns the process break.
 #define _GNU_SOURCE
 #include "../Inputs/ptsan_test_interface.h"
@@ -30,7 +34,7 @@ __attribute__((noinline)) static void touch(char *p) {
 
 int main(int argc, char **argv) {
   char *start = set_break(0);
-  uint16_t id = get_id(start);
+  PTSanID id = get_id(start);
   if (!id || id == ptsan_default_id()) {
     _Exit(1);
   }

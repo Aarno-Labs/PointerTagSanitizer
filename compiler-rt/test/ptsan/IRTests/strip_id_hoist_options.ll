@@ -4,7 +4,6 @@
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
 
-declare ptr @__ptsan_strip(ptr)
 
 ; MinCut still runs under ptsan-no-opts: polarity solving and conversion
 ; insertion are required to construct valid PTSan IR.
@@ -14,9 +13,8 @@ entry:
 
 loop:
   %i = phi i64 [ 0, %entry ], [ %inc, %loop ]
-  %q = getelementptr i8, ptr %p, i64 %i
-  %s = call ptr @__ptsan_strip(ptr %q)
-  %v = load volatile i8, ptr %s
+  %q = getelementptr inbounds i8, ptr %p, i64 %i
+  %v = load volatile i8, ptr %q
   %inc = add nuw i64 %i, 1
   %done = icmp eq i64 %inc, %n
   br i1 %done, label %exit, label %loop
@@ -26,28 +24,26 @@ exit:
 }
 
 ; MINCUT-LABEL: define i8 @loop_strip(
-; MINCUT: [[BASE:%.*]] = call ptr @__ptsan_strip(ptr %p)
-; MINCUT: %q = getelementptr i8, ptr [[BASE]], i64 %i
-; MINCUT-NOT: call ptr @__ptsan_strip(ptr %q)
+; MINCUT: [[BASE:%.*]] = call ptr @__ptsan_strip(ptr %p
+; MINCUT: %q = getelementptr inbounds i8, ptr [[BASE]], i64 %i
+; MINCUT-NOT: call ptr @__ptsan_strip(ptr %q
 
 ; Min-cut pays for one shared strip of %sub.
 define void @shared_subbase_strip(ptr %p, ptr %slot) {
 entry:
-  %sub = getelementptr i8, ptr %p, i64 8
+  %sub = getelementptr inbounds i8, ptr %p, i64 8
   store ptr %sub, ptr %slot
-  %a = getelementptr i8, ptr %sub, i64 1
-  %a.s = call ptr @__ptsan_strip(ptr %a)
-  %a.v = load volatile i8, ptr %a.s
-  %b = getelementptr i8, ptr %sub, i64 2
-  %b.s = call ptr @__ptsan_strip(ptr %b)
-  %b.v = load volatile i8, ptr %b.s
+  %a = getelementptr inbounds i8, ptr %sub, i64 1
+  %a.v = load volatile i8, ptr %a
+  %b = getelementptr inbounds i8, ptr %sub, i64 2
+  %b.v = load volatile i8, ptr %b
   ret void
 }
 
 ; MINCUT-LABEL: define void @shared_subbase_strip(
-; MINCUT: %sub = getelementptr i8, ptr %p, i64 8
-; MINCUT-NEXT: [[SUB:%.*]] = call ptr @__ptsan_strip(ptr %sub)
-; MINCUT: %a = getelementptr i8, ptr [[SUB]], i64 1
-; MINCUT-NOT: call ptr @__ptsan_strip(ptr %a)
-; MINCUT: %b = getelementptr i8, ptr [[SUB]], i64 2
-; MINCUT-NOT: call ptr @__ptsan_strip(ptr %b)
+; MINCUT: %sub = getelementptr inbounds i8, ptr %p, i64 8
+; MINCUT: [[SUB:%.*]] = call ptr @__ptsan_strip(ptr %sub
+; MINCUT: %a = getelementptr inbounds i8, ptr [[SUB]], i64 1
+; MINCUT-NOT: call ptr @__ptsan_strip(ptr %a
+; MINCUT: %b = getelementptr inbounds i8, ptr [[SUB]], i64 2
+; MINCUT-NOT: call ptr @__ptsan_strip(ptr %b

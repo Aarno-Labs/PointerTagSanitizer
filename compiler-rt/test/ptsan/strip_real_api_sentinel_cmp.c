@@ -1,15 +1,15 @@
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names \
 // RUN:   -mllvm -ptsan-reoptimize=0 -o %t.default %s
 // RUN: %t.default | FileCheck %s
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names \
 // RUN:   -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-clear-ids-on-cmp=0 \
 // RUN:   -o %t.no-cmp %s
 // RUN: %t.no-cmp | FileCheck %s
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names \
 // RUN:   -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-clear-ids-on-arith=0 \
 // RUN:   -o %t.no-arith %s
 // RUN: %t.no-arith | FileCheck %s
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names \
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names \
 // RUN:   -mllvm -ptsan-reoptimize=0 -mllvm -ptsan-clear-ids-on-cmp=0 \
 // RUN:   -mllvm -ptsan-clear-ids-on-arith=0 -o %t.no-cmp-arith %s
 // RUN: %t.no-cmp-arith | FileCheck %s

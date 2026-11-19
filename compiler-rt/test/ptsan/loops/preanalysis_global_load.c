@@ -4,16 +4,19 @@
 // RUN: %clang_ptsan -g -O2 -mllvm -ptsan-no-opts -o %exe.noopts %s
 // RUN: ./%exe.noopts 16  2> err && FileCheck %s --check-prefixes=NOOPT,GOOD < err
 // RUN: ./%exe.noopts 64  2> err && FileCheck %s --check-prefixes=NOOPT,GOOD < err
-// RUN: ./%exe.noopts 65  2> err && FileCheck %s --check-prefixes=NOOPT,BAD  < err
-// RUN: ./%exe.noopts 100 2> err && FileCheck %s --check-prefixes=NOOPT,BAD  < err
+// RUN: not ./%exe.noopts 65  2> err
+// RUN: FileCheck %s --check-prefixes=BAD  < err
+// RUN: not ./%exe.noopts 100 2> err
+// RUN: FileCheck %s --check-prefixes=BAD  < err
 
 // Second build: normal ptsan-optimized build
 // RUN: %clang_ptsan -g -O2 -o %exe %s
 // RUN: ./%exe 16  2> err && FileCheck %s --check-prefixes=OPT,GOOD < err
 // RUN: ./%exe 64  2> err && FileCheck %s --check-prefixes=OPT,GOOD < err
-// RUN: ./%exe 65  2> err && FileCheck %s --check-prefixes=OPT,BAD  < err
-// we crash on this one, so we don't get the end stats
-// RUN: not --crash ./%exe 100 2> err && FileCheck %s --check-prefixes=BAD  < err
+// RUN: not ./%exe 65  2> err
+// RUN: FileCheck %s --check-prefixes=BAD  < err
+// RUN: not ./%exe 100 2> err
+// RUN: FileCheck %s --check-prefixes=BAD  < err
 
 // ==================== FileCheck patterns ====================
 

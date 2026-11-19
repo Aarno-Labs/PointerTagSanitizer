@@ -22,8 +22,8 @@ entry:
 }
 
 ; DISCOVERY-LABEL: define i1 @redundant_ptr_strips(
-; DISCOVERY: [[P0:%.*]] = call ptr @__ptsan_strip(ptr %p)
-; DISCOVERY: [[P1:%.*]] = call ptr @__ptsan_strip(ptr %p)
+; DISCOVERY: [[P0:%.*]] = call ptr @__ptsan_strip(ptr %p
+; DISCOVERY: [[P1:%.*]] = call ptr @__ptsan_strip(ptr %p
 ; DISCOVERY: icmp eq ptr [[P0]], [[P1]]
 ; DISCOVERY-LABEL: define i64 @redundant_i64_strips(
 ; DISCOVERY: [[I0:%.*]] = call i64 @__ptsan_strip_i64(i64 %pi)
@@ -31,8 +31,8 @@ entry:
 ; DISCOVERY: sub i64 [[I0]], [[I1]]
 
 ; OPT-LABEL: define i1 @redundant_ptr_strips(
-; OPT: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p)
-; OPT-NOT: call ptr @__ptsan_strip(ptr %p)
+; OPT: [[P:%.*]] = call ptr @__ptsan_strip(ptr %p
+; OPT-NOT: call ptr @__ptsan_strip(ptr %p
 ; OPT: icmp eq ptr [[P]], [[P]]
 ; OPT-LABEL: define i64 @redundant_i64_strips(
 ; OPT: [[I:%.*]] = call i64 @__ptsan_strip_i64(i64 %pi)

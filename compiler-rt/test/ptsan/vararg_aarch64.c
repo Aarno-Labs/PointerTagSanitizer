@@ -77,11 +77,12 @@ __attribute__((noinline)) int variadic(int depth, ...) {
   va_end(ap);
   if (depth && invoke(depth - 1))
     return 3;
-  result |= consume(&copy);
-  va_end(copy);
   va_start(ap, depth);
   result |= consume(&ap);
   va_end(ap);
+  // Restarting ap must preserve the encoding of the backing storage in copy.
+  result |= consume(&copy);
+  va_end(copy);
   return result;
 }
 

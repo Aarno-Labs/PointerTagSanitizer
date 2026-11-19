@@ -6,6 +6,8 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -pthread -o cleanup-o2 %s
 // RUN: ./cleanup-o2
+// RUN: %clang_ptsan_id32 -O2 -pthread -o cleanup-id32 %s
+// RUN: ./cleanup-id32
 
 #include <pthread.h>
 #include <stdatomic.h>

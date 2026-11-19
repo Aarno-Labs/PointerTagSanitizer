@@ -6010,7 +6010,7 @@ INTERCEPTOR(int, flopen, const char *path, int flags, ...) {
   void *ctx;
   va_list ap;
   va_start(ap, flags);
-  u16 mode = static_cast<u16>(va_arg(ap, u32));
+  u16 mode = (u16)va_arg(ap, u32);
   va_end(ap);
   COMMON_INTERCEPTOR_ENTER(ctx, flopen, path, flags, mode);
   if (path) {
@@ -6023,7 +6023,7 @@ INTERCEPTOR(int, flopenat, int dirfd, const char *path, int flags, ...) {
   void *ctx;
   va_list ap;
   va_start(ap, flags);
-  u16 mode = static_cast<u16>(va_arg(ap, u32));
+  u16 mode = (u16)va_arg(ap, u32);
   va_end(ap);
   COMMON_INTERCEPTOR_ENTER(ctx, flopen, path, flags, mode);
   if (path) {

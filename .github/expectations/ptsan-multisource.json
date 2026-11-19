@@ -1,0 +1,216 @@
+{
+  "schema": 1,
+  "observed_revision": "ca3890204a7bb7d3ccc20a7a24ea3d18c187a933",
+  "test_suite_tag": "llvmorg-18.1.8",
+  "benchmarking_only": true,
+  "run_type": "train",
+  "id_bits": "16 software / 15 LAM / 31 in ID32 mode",
+  "lam": "configuration-dependent",
+  "notes": [
+    "ID32 rules retain the workload failures seen in the earlier PR3 campaign, but not ID16 exhaustion expectations. The current strong-stack configuration is provisional; review deviations rather than learning expectations. HPCCG has since passed in CI and has no expected-failure entry.",
+    "Expect failure categories and phases, not merely failing test names.",
+    "Any PTSan access complaint is accepted for complaint cases; optimization-dependent check type, check number and function ID are not matched.",
+    "Strict ClamAV and PENNANT exhaust IDs before their other failure modes.",
+    "consumer-typeset produces a PTSan complaint in both musl modes.",
+    "CLAMR requires a build failure belonging to its target directory, without matching individual objects or compiler diagnostics.",
+    "LAM expectations were checked against CI revision 4da6f0531eda41adbc10e3573f9933f84e570aa1. Strict LAM additionally exhausts IDs in Bullet, 17-bintr, bh and bc; all other outcomes match the software-decoding expectations."
+  ],
+  "rules": [
+    {
+      "category": "ptsan-complaint",
+      "configurations": ["glibc-id32", "musl-nonstrict-id32", "musl-strict-id32"],
+      "tests": [
+        "Applications/hbd/hbd",
+        "Applications/siod/siod",
+        "Benchmarks/DOE-ProxyApps-C++/PENNANT/PENNANT",
+        "Benchmarks/MallocBench/gs/gs",
+        "Benchmarks/Trimaran/netbench-url/netbench-url"
+      ]
+    },
+    {
+      "category": "ptsan-complaint",
+      "configurations": ["musl-nonstrict-id32", "musl-strict-id32"],
+      "tests": ["Benchmarks/MiBench/consumer-typeset/consumer-typeset"]
+    },
+    {
+      "category": "other",
+      "phase": "verify",
+      "configurations": ["musl-nonstrict-id32", "musl-strict-id32"],
+      "tests": [
+        "Applications/ClamAV/clamscan",
+        "Applications/obsequi/Obsequi",
+        "Benchmarks/Prolangs-C++/city/city",
+        "Benchmarks/Ptrdist/ft/ft"
+      ]
+    },
+    {
+      "category": "other",
+      "phase": "build",
+      "configurations": ["musl-nonstrict-id32", "musl-strict-id32"],
+      "tests": ["Benchmarks/DOE-ProxyApps-C++/CLAMR/CLAMR"],
+      "build_directory": "MultiSource/Benchmarks/DOE-ProxyApps-C++/CLAMR/"
+    },
+    {
+      "category": "ptsan-complaint",
+      "configurations": [
+        "glibc",
+        "musl-nonstrict",
+        "musl-strict",
+        "glibc-lam",
+        "musl-nonstrict-lam",
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Applications/hbd/hbd"
+      ]
+    },
+    {
+      "category": "ptsan-complaint",
+      "configurations": [
+        "glibc",
+        "musl-nonstrict",
+        "musl-strict",
+        "glibc-lam",
+        "musl-nonstrict-lam",
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Applications/siod/siod"
+      ]
+    },
+    {
+      "category": "ptsan-complaint",
+      "configurations": [
+        "glibc",
+        "musl-nonstrict",
+        "musl-strict",
+        "glibc-lam",
+        "musl-nonstrict-lam",
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Benchmarks/MallocBench/gs/gs"
+      ]
+    },
+    {
+      "category": "ptsan-complaint",
+      "configurations": [
+        "glibc",
+        "musl-nonstrict",
+        "musl-strict",
+        "glibc-lam",
+        "musl-nonstrict-lam",
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Benchmarks/Trimaran/netbench-url/netbench-url"
+      ]
+    },
+    {
+      "category": "ptsan-complaint",
+      "configurations": [
+        "glibc",
+        "musl-nonstrict",
+        "glibc-lam",
+        "musl-nonstrict-lam"
+      ],
+      "tests": [
+        "Benchmarks/DOE-ProxyApps-C++/PENNANT/PENNANT"
+      ]
+    },
+    {
+      "category": "ptsan-complaint",
+      "configurations": [
+        "musl-nonstrict",
+        "musl-strict",
+        "musl-nonstrict-lam",
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Benchmarks/MiBench/consumer-typeset/consumer-typeset"
+      ]
+    },
+    {
+      "category": "out-of-ids",
+      "configurations": [
+        "musl-strict",
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Applications/ClamAV/clamscan",
+        "Applications/SIBsim4/SIBsim4",
+        "Applications/lua/lua",
+        "Applications/minisat/minisat",
+        "Applications/spiff/spiff",
+        "Benchmarks/ASCI_Purple/SMG2000/smg2000",
+        "Benchmarks/DOE-ProxyApps-C++/PENNANT/PENNANT",
+        "Benchmarks/DOE-ProxyApps-C/miniAMR/miniAMR",
+        "Benchmarks/McCat/09-vor/vor",
+        "Benchmarks/MiBench/network-patricia/network-patricia",
+        "Benchmarks/Olden/bisort/bisort",
+        "Benchmarks/Olden/health/health",
+        "Benchmarks/Olden/perimeter/perimeter",
+        "Benchmarks/Olden/treeadd/treeadd",
+        "Benchmarks/Olden/tsp/tsp",
+        "Benchmarks/Olden/voronoi/voronoi",
+        "Benchmarks/Prolangs-C++/ocean/ocean",
+        "Benchmarks/Ptrdist/ft/ft",
+        "Benchmarks/VersaBench/dbms/dbms",
+        "Benchmarks/llubenchmark/llu",
+        "Benchmarks/mafft/pairlocalalign"
+      ]
+    },
+    {
+      "category": "out-of-ids",
+      "configurations": [
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Benchmarks/Bullet/bullet",
+        "Benchmarks/McCat/17-bintr/bintr",
+        "Benchmarks/Olden/bh/bh",
+        "Benchmarks/Ptrdist/bc/bc"
+      ]
+    },
+    {
+      "category": "other",
+      "phase": "verify",
+      "configurations": [
+        "musl-nonstrict",
+        "musl-nonstrict-lam"
+      ],
+      "tests": [
+        "Applications/ClamAV/clamscan",
+        "Applications/obsequi/Obsequi",
+        "Benchmarks/Prolangs-C++/city/city",
+        "Benchmarks/Ptrdist/ft/ft"
+      ]
+    },
+    {
+      "category": "other",
+      "phase": "verify",
+      "configurations": [
+        "musl-strict",
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Applications/obsequi/Obsequi",
+        "Benchmarks/Prolangs-C++/city/city"
+      ]
+    },
+    {
+      "category": "other",
+      "phase": "build",
+      "configurations": [
+        "musl-nonstrict",
+        "musl-strict",
+        "musl-nonstrict-lam",
+        "musl-strict-lam"
+      ],
+      "tests": [
+        "Benchmarks/DOE-ProxyApps-C++/CLAMR/CLAMR"
+      ],
+      "build_directory": "MultiSource/Benchmarks/DOE-ProxyApps-C++/CLAMR/"
+    }
+  ]
+}

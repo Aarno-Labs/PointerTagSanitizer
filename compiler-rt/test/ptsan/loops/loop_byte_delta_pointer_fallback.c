@@ -8,7 +8,7 @@
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
 // RUN:   -mllvm -ptsan-preanalyze-loops=0 \
 // RUN:   -mllvm -ptsan-reoptimize=0 \
-// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR
+// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefixes=IR,DEFAULT
 // RUN: %clang_ptsan -O2 \
 // RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
 // RUN:   -mllvm -ptsan-preanalyze-loops=0 \
@@ -16,8 +16,14 @@
 // RUN:   -o %exe %s
 // RUN: ./%exe 4 2> good.err
 // RUN: FileCheck %s --check-prefix=GOOD < good.err
-// RUN: ./%exe 5 2> bad.err
+// RUN: not ./%exe 5 2> bad.err
 // RUN: FileCheck %s --check-prefix=BAD < bad.err
+
+// RUN: %clang_ptsan_id32 -O2 \
+// RUN:   -fno-vectorize -fno-slp-vectorize -fno-unroll-loops \
+// RUN:   -mllvm -ptsan-preanalyze-loops=0 \
+// RUN:   -mllvm -ptsan-reoptimize=0 \
+// RUN:   -S -emit-llvm -o - %s | FileCheck %s --check-prefixes=IR,ID32
 
 // The row pointer and column stride are both recurrences of the outer loop.
 // Consequently, the last address visited by the inner loop contains a pointer
@@ -28,9 +34,10 @@
 // address bits rather than by subtracting full-width tagged pointers.
 //
 // IR-LABEL: define {{.*}}@varying_inner_stride(
-// IR: [[FIRST:%.*]] = ptrtoint ptr %row_base.
-// IR: %ptsan.last.int = ptrtoint ptr
-// IR: [[FIRST48:%.*]] = trunc i64 [[FIRST]] to i48
+// DEFAULT: [[FIRST:%.*]] = ptrtoint ptr %row_base.
+// DEFAULT: %ptsan.last.int = ptrtoint ptr
+// DEFAULT: [[FIRST48:%.*]] = trunc i64 [[FIRST]] to i48
+// ID32: [[FIRST48:%.*]] = trunc i64 {{%.*}} to i48
 // IR: %ptsan.first.low = zext i48 [[FIRST48]] to i64
 // IR: %ptsan.last.low = zext i48
 // IR: %ptsan.forward.delta = sub i64 %ptsan.last.low, %ptsan.first.low

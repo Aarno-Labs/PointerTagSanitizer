@@ -4,7 +4,7 @@
 // RUN: %clang_ptsan -g -O2 -o %exe %s
 // RUN: ./%exe 20 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
-// RUN: ./%exe 21 2> out.txt
+// RUN: not ./%exe 21 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 
 // BAD: Found bad

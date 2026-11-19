@@ -1389,26 +1389,16 @@ void tools::linkSanitizerRuntimeDeps(const ToolChain &TC,
     CmdArgs.push_back("-lresolv");
 }
 
-static StringRef getPTSanRuntimeName(const ToolChain &TC, const ArgList &Args) {
-  bool LAM = false;
-  bool Validate = false;
-  for (const Arg *A : Args.filtered(options::OPT_mllvm)) {
-    StringRef Value = A->getValue();
-    LAM |= Value == "-ptsan-lam";
-    Validate |= Value == "-ptsan-runtime-validate";
+static StringRef getPTSanRuntimeName(const SanitizerArgs &SanArgs) {
+  const bool Validate = SanArgs.needsPTSanValidationRt();
+  if (SanArgs.usesPTSan32BitIDs()) {
+    if (SanArgs.usesPTSanStrictMode())
+      return Validate ? "ptsan_32bit_strict_validate" : "ptsan_32bit_strict";
+    return Validate ? "ptsan_32bit_validate" : "ptsan_32bit";
   }
-
-  if (LAM && TC.getTriple().getArch() != llvm::Triple::x86_64)
-    TC.getDriver().Diag(diag::err_drv_unsupported_opt_for_target)
-        << "-mllvm -ptsan-lam" << TC.getTripleString();
-
-  if (LAM && Validate)
-    return "ptsan_lam_validate";
-  if (LAM)
-    return "ptsan_lam";
-  if (Validate)
-    return "ptsan_validate";
-  return "ptsan";
+  if (SanArgs.usesPTSanLAM())
+    return Validate ? "ptsan_lam_validate" : "ptsan_lam";
+  return Validate ? "ptsan_validate" : "ptsan";
 }
 
 static void
@@ -1497,7 +1487,7 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
   if (SanArgs.needsDfsanRt())
     StaticRuntimes.push_back("dfsan");
   if (SanArgs.needsPTSanRt())
-    StaticRuntimes.push_back(getPTSanRuntimeName(TC, Args));
+    StaticRuntimes.push_back(getPTSanRuntimeName(SanArgs));
   if (SanArgs.needsLsanRt())
     StaticRuntimes.push_back("lsan");
   if (SanArgs.needsMsanRt()) {
@@ -1573,7 +1563,7 @@ bool tools::addSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
       TC.getDriver().Diag(diag::err_drv_ptsan_unsupported_gold);
       return false;
     }
-    SmallString<128> Script(TC.getCompilerRT(Args, getPTSanRuntimeName(TC, Args)));
+    SmallString<128> Script(TC.getCompilerRT(Args, getPTSanRuntimeName(SanArgs)));
     llvm::sys::path::remove_filename(Script);
     llvm::sys::path::append(Script, "ptsan-init-ro.ld");
     CmdArgs.push_back("-T");
@@ -1587,7 +1577,7 @@ bool tools::addSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
       (TC.getTriple().getArch() == llvm::Triple::x86_64 ||
        TC.getTriple().getArch() == llvm::Triple::aarch64) &&
       TC.getTriple().isMusl() &&
-      Args.hasArg(options::OPT_static)) {
+      Args.hasArg(options::OPT_static, options::OPT_static_pie)) {
     for (StringRef Function : {
              "malloc", "calloc", "__libc_malloc", "__libc_calloc",
              "aligned_alloc", "posix_memalign", "realloc", "__libc_realloc",
@@ -1646,6 +1636,16 @@ bool tools::addSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
   // to be dynamic to be sure we export sanitizer interface functions.
   if (AddExportDynamic)
     CmdArgs.push_back("--export-dynamic");
+
+  // musl's static-PIE startup relocator processes relative relocations only.
+  // PTSan's dynamic export list would otherwise leave its runtime TLS symbols
+  // with unresolved TPOFF relocations during early startup.
+  if (SanArgs.needsPTSanRt() && TC.getTriple().isMusl() &&
+      Args.hasArg(options::OPT_static_pie)) {
+    StringRef Runtime = llvm::sys::path::filename(
+        TC.getCompilerRT(Args, getPTSanRuntimeName(SanArgs)));
+    CmdArgs.push_back(Args.MakeArgString(Twine("--exclude-libs=") + Runtime));
+  }
 
   if (SanArgs.hasCrossDsoCfi() && !AddExportDynamic)
     CmdArgs.push_back("--export-dynamic-symbol=__cfi_check");

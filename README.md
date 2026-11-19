@@ -7,7 +7,7 @@ Labs](https://www.aarno-labs.com). Protected code is recompiled with
 `-fsanitize=ptsan` and runs unchanged; no source modifications are
 required.
 
-PTSan stores a compact object identifier in the upper 16 bits of each
+By default, PTSan stores a compact object identifier in the upper 16 bits of each
 pointer and keeps every object's base and size in small, fixed runtime
 tables indexed by that identifier. Before a memory access, PTSan
 checks that the entire access range lies within the bounds of the
@@ -40,34 +40,6 @@ SoftBound+CETS) at a fraction of its overhead. PTSan tracks allocation
 objects (heap, stack, globals, mmap); intra-object field overflows are
 out of scope.
 
-## Performance
-
-The measurements below describe the paper's evaluated release. They have not
-been rerun for the subsequent implementation changes in this tree.
-
-Because the identifier travels inside the pointer value, ordinary
-dataflow propagates it for free, and checks remain plain LLVM IR that
-the optimizer can hoist, merge, and elide:
-
-- **SPEC CPU 2017**: 57% x86-64 and 55% ARM64 geomean runtime overhead
-  in the default software-stripping configuration; 46% on x86 with
-  Intel LAM hardware address masking.
-
-- **LLVM test-suite MultiSource**
-  - x86-64 (149 programs that execute > 10ms on baseline): 31.5%
-    geomean; 27% with LAM.
-  - ARM64 (148 programs that execute > 10ms on baseline): 41%
-    geomean.
-
-- **Memory**: 1.014x geomean peak physical memory on SPEC (worst case
-  1.121x), versus 3.33x for ASan and 3.01x for RangeSanitizer. PTSan
-  uses no redzones, no shadow memory, and no quarantine; its metadata
-  is about 1.2 MiB of fixed tables.
-
-- **Servers**: seven real-world server and cryptographic workloads
-  (Redis, PostgreSQL, NGINX, OpenSSL, memcached, Apache, SQLite) with
-  overheads ranging from near-native to 44% on x86-64, each within the
-  2^16 identifier budget (peak demand 16,411).
 
 ## Requirements and configurations
 
@@ -92,8 +64,43 @@ the optimizer can hoist, merge, and elide:
   software tag stripping (15-bit identifiers, 2^15 objects). It
   requires the LAM_U48 kernel variant, which is not in mainline
   Linux; our measurements use a patched Linux 6.1 kernel.
+- **ID32** uses 32-bit allocation IDs and object-relative pointer
+  encoding with software decoding. It requires matching application and library
+  configurations and cannot be combined with LAM. The
+  [build guide](clang/docs/PointerTagSanitizer.rst) describes the generated ID32
+  configurations.
 - **Optimized builds** are required for PTSan-enabled builds of your
   source code.  Please use at least `-O1`.
+
+## Performance
+
+The measurements below describe the paper's evaluated release: they were
+run with ID16 in permissive mode, with stack temporal protection disabled.
+They have not been rerun for the subsequent implementation changes in this tree.
+
+Because the identifier travels inside the pointer value, ordinary
+dataflow propagates it for free, and checks remain plain LLVM IR that
+the optimizer can hoist, merge, and elide:
+
+- **SPEC CPU 2017**: 57% x86-64 and 55% ARM64 geomean runtime overhead
+  in the default software-stripping configuration; 46% on x86 with
+  Intel LAM hardware address masking.
+
+- **LLVM test-suite MultiSource**
+  - x86-64 (149 programs that execute > 10ms on baseline): 31.5%
+    geomean; 27% with LAM.
+  - ARM64 (148 programs that execute > 10ms on baseline): 41%
+    geomean.
+
+- **Memory**: 1.014x geomean peak physical memory on SPEC (worst case
+  1.121x), versus 3.33x for ASan and 3.01x for RangeSanitizer. PTSan
+  uses no redzones, no shadow memory, and no quarantine; its metadata
+  is about 1.2 MiB of fixed tables.
+
+- **Servers**: seven real-world server and cryptographic workloads
+  (Redis, PostgreSQL, NGINX, OpenSSL, memcached, Apache, SQLite) with
+  overheads ranging from near-native to 44% on x86-64, each within the
+  2^16 identifier budget (peak demand 16,411).
 
 ## Building and using PTSan
 
@@ -136,6 +143,9 @@ ninja -C build check-ptsan
 See the [build and dependency guide](clang/docs/PointerTagSanitizer.rst) for
 musl, libc++, libc++abi, and libunwind recipes, matching configuration flags,
 strict mode, the separate `check-ptsan-musl` suite, and current limitations.
+
+See the [security analysis](clang/docs/PointerTagSanitizerSecurityAnalysis.md)
+for the threat model, deployment assumptions, and security limitations.
 
 ## Paper
 

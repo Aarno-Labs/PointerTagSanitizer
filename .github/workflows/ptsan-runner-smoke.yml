@@ -1,0 +1,37 @@
+name: PTSan runner smoke test
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  smoke:
+    if: github.repository == 'Aarno-Labs/PointerTagSanitizer-private'
+    runs-on:
+      group: ptsan-ci
+      labels: [self-hosted, linux, x64]
+    timeout-minutes: 5
+
+    steps:
+      - name: Verify runner account and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(id -un)" = ptsan-ci
+
+          echo "Runner: $RUNNER_NAME"
+          echo "Repository: $GITHUB_REPOSITORY"
+          id
+          hostname
+          uname -m
+          nproc
+          df -h "$GITHUB_WORKSPACE"
+
+          git --version
+          cmake --version
+          ninja --version
+          python3 --version
+          cc --version
+          c++ --version

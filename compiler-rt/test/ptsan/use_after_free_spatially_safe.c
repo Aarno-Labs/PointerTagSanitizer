@@ -2,11 +2,18 @@
 
 // Check both O0 and O2
 // RUN: %clang_ptsan -g -O0 -o %exe.O0 %s
-// RUN: ./%exe.O0 2> err.O0.txt
+// RUN: not ./%exe.O0 2> err.O0.txt
 // RUN: cat err.O0.txt | FileCheck %s
 
 // RUN: %clang_ptsan -g -O2 -o %exe.O2 %s
-// RUN: ./%exe.O2 2> err.O2.txt
+// RUN: not ./%exe.O2 2> err.O2.txt
+// RUN: cat err.O2.txt | FileCheck %s
+
+// RUN: %clang_ptsan_id32 -g -O0 -o %exe.O0 %s
+// RUN: not ./%exe.O0 2> err.O0.txt
+// RUN: cat err.O0.txt | FileCheck %s
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe.O2 %s
+// RUN: not ./%exe.O2 2> err.O2.txt
 // RUN: cat err.O2.txt | FileCheck %s
 
 // CHECK: Found bad
@@ -17,23 +24,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define u16 uint16_t
-#define u32 uint32_t
-#define u64 uint64_t
-
-extern uint64_t ptsan_get_bound(uint16_t id);
-extern uint64_t ptsan_get_base(uint16_t id);
-extern uint64_t ptsan_get_size(uint16_t id);
-
+#include "Inputs/ptsan_test_interface.h"
 
 __attribute__((noinline))
-u16 get_id(char* ptr) {
-    return (u16)((u64)ptr >> 48);
-}
-
-__attribute__((noinline))
-u64 get_addr(char* ptr) {
-    return ((u64)ptr & 0x0000ffffffffffff);
+uint64_t get_addr(char* ptr) {
+    return ptsan_get_address(ptr);
 }
 
 __attribute__((noinline))

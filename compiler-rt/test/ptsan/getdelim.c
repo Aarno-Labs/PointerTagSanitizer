@@ -3,6 +3,10 @@
 // RUN: ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 
+// RUN: %clang_ptsan_id32 -g -O2 -I%crt_src/include -I%crt_src/lib -o %exe %s
+// RUN: ./%exe 2> err.txt
+// RUN: cat err.txt | FileCheck %s --check-prefix=ERR
+
 // ERR: Unreclaimed IDs at exit: 0
 
 // Thanks chatgpt!
@@ -41,7 +45,7 @@ int main(void)
     dump("CASE A", buf, sz, len);
     print_id(buf);
     assert(ptsan_get_size(get_id(buf)) == sz);
-    uint16_t buf_id = get_id(buf);
+    PTSanID buf_id = get_id(buf);
 
     /* ---------------  Case B : buffer big enough  --------------- */
     len = getdelim(&buf, &sz, ',', fp);                /* re‑use buffer */
@@ -55,12 +59,15 @@ int main(void)
     free(buf);
     buf = (char *)malloc(2);      /* tiny buffer               */
     char *old_buf = buf;
-    assert(buf_id + 1 == get_id(buf));
+    assert(get_id(buf) != 0 && get_id(buf) != ptsan_default_id());
+    uint16_t old_id = get_id(buf);
     sz  = 2;
     len = getdelim(&buf, &sz, ',', fp);                /* triggers realloc */
     dump("CASE C", buf, sz, len);
     print_id(buf);
-    assert(buf_id + 2 == get_id(buf) || buf == old_buf);
+    assert(get_id(buf) != 0 && get_id(buf) != ptsan_default_id());
+    assert(buf == old_buf || get_id(buf) != old_id);
+    assert(ptsan_get_size(get_id(buf)) == sz);
 
     /* ---------------  Case D : use getline() (newline delim) ---- */
     len = getline(&buf, &sz, fp);                      /* may reuse / realloc */

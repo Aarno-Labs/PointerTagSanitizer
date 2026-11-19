@@ -26,6 +26,21 @@
 //
 // STALE: STALE-READY
 // STALE: Found bad
+//
+// RUN: %ptsan_musl_id32_strict -Wall -Wextra -Werror -o %t.id32 %s
+// RUN: %run %t.id32 libc-shrink
+// RUN: %run %t.id32 syscall-shrink
+// RUN: %run %t.id32 libc-grow
+// RUN: %run %t.id32 syscall-grow
+// RUN: %run %t.id32 libc-move
+// RUN: %run %t.id32 syscall-move
+// RUN: %run %t.id32 libc-failed
+// RUN: %run %t.id32 syscall-failed
+// RUN: %run %t.id32 realloc
+// RUN: not %run %t.id32 libc-stale 2> %t.id32.libc-stale
+// RUN: FileCheck %s --check-prefix=STALE < %t.id32.libc-stale
+// RUN: not %run %t.id32 syscall-stale 2> %t.id32.syscall-stale
+// RUN: FileCheck %s --check-prefix=STALE < %t.id32.syscall-stale
 
 #define _GNU_SOURCE
 
@@ -51,20 +66,18 @@ static size_t pageSize(void) {
   return (size_t)result;
 }
 
-static void *clearPointerID(const void *pointer) {
-  const uintptr_t address_mask = UINT64_C(0x0000ffffffffffff);
-  return (void *)((uintptr_t)pointer & address_mask);
-}
-
-static void checkLiveBounds(uint16_t id, const void *base, size_t size) {
+static void checkLiveBounds(PTSanID id, const void *base, size_t size) {
   assert(id != 0);
+#ifdef PTSAN_TEST_32_BIT_IDS
+  assert(ptsan_get_base(id) == ptsan_get_address(base));
+#else
   assert(ptsan_get_base(id) == (uint64_t)(uintptr_t)base);
+#endif
   assert(ptsan_get_size(id) == size);
 }
 
-static void checkRetiredBounds(uint16_t id) {
+static void checkRetiredBounds(PTSanID id) {
   assert(id != 0);
-  assert(ptsan_get_base(id) == 0);
   assert(ptsan_get_size(id) == 0);
 }
 
@@ -100,17 +113,19 @@ static int mapAdjacentPages(size_t page_size, char **mapping, char **blocker) {
     return 1;
   }
 
-  void *base = clearPointerID(reservation);
+  // Retired pointers retain their decoding metadata for address-only APIs.
+  void *base = reservation;
   if (munmap(reservation, 2 * page_size) != 0) {
     return 2;
   }
 
-  *mapping = mapMemory(base, page_size - 1, MAP_FIXED);
+  *mapping = mapMemory(base, page_size - 1, MAP_FIXED_NOREPLACE);
   if (*mapping == NULL) {
     return 3;
   }
 
-  *blocker = mapMemory((char *)base + page_size, page_size, MAP_FIXED);
+  *blocker = mapMemory((char *)base + page_size, page_size,
+                       MAP_FIXED_NOREPLACE);
   if (*blocker == NULL) {
     return 4;
   }
@@ -127,16 +142,17 @@ static int testGrowth(bool use_syscall) {
   if (reservation == NULL) {
     return 2;
   }
-  void *base = clearPointerID(reservation);
+  // Retired pointers retain their decoding metadata for address-only APIs.
+  void *base = reservation;
   if (munmap(reservation, 2 * page_size) != 0) {
     return 3;
   }
 
-  char *mapping = mapMemory(base, page_size - 1, MAP_FIXED);
+  char *mapping = mapMemory(base, page_size - 1, MAP_FIXED_NOREPLACE);
   if (mapping == NULL) {
     return 4;
   }
-  const uint16_t old_id = get_id(mapping);
+  const PTSanID old_id = get_id(mapping);
   checkLiveBounds(old_id, mapping, page_size);
   mapping[0] = 42;
 
@@ -144,7 +160,7 @@ static int testGrowth(bool use_syscall) {
       (char *)remapMemory(use_syscall, mapping, page_size - 1,
                          page_size + 1, 0);
   if (result == MAP_FAILED ||
-      clearPointerID(result) != clearPointerID(mapping)) {
+      ptsan_get_address(result) != ptsan_get_address(mapping)) {
     return 5;
   }
 
@@ -170,13 +186,13 @@ static int testShrink(bool use_syscall) {
   if (mapping == NULL) {
     return 2;
   }
-  const uint16_t old_id = get_id(mapping);
+  const PTSanID old_id = get_id(mapping);
   checkLiveBounds(old_id, mapping, 2 * page_size);
 
   char *result =
       (char *)remapMemory(use_syscall, mapping, page_size + 1, 1, 0);
   if (result == MAP_FAILED ||
-      clearPointerID(result) != clearPointerID(mapping)) {
+      ptsan_get_address(result) != ptsan_get_address(mapping)) {
     return 3;
   }
 
@@ -204,7 +220,7 @@ static int testFailedGrowth(bool use_syscall) {
     return 10 + setup_result;
   }
 
-  const uint16_t mapping_id = get_id(mapping);
+  const PTSanID mapping_id = get_id(mapping);
   checkLiveBounds(mapping_id, mapping, page_size);
   mapping[0] = 42;
 
@@ -224,7 +240,7 @@ static int testFailedGrowth(bool use_syscall) {
 }
 
 static char *moveMapping(bool use_syscall, size_t page_size, char **old_mapping,
-                         uint16_t *old_id, char **blocker) {
+                         PTSanID *old_id, char **blocker) {
   if (mapAdjacentPages(page_size, old_mapping, blocker) != 0) {
     return NULL;
   }
@@ -236,11 +252,11 @@ static char *moveMapping(bool use_syscall, size_t page_size, char **old_mapping,
   char *result = (char *)remapMemory(use_syscall, *old_mapping, page_size - 1,
                                      page_size + 1, MREMAP_MAYMOVE);
   if (result == MAP_FAILED ||
-      clearPointerID(result) == clearPointerID(*old_mapping)) {
+      ptsan_get_address(result) == ptsan_get_address(*old_mapping)) {
     return NULL;
   }
 
-  const uint16_t new_id = get_id(result);
+  const PTSanID new_id = get_id(result);
   assert(new_id != *old_id);
   checkRetiredBounds(*old_id);
   checkLiveBounds(new_id, result, 2 * page_size);
@@ -256,7 +272,7 @@ static int testMove(bool use_syscall, bool test_stale_pointer) {
 
   char *old_mapping;
   char *blocker;
-  uint16_t old_id;
+  PTSanID old_id;
   char *result =
       moveMapping(use_syscall, page_size, &old_mapping, &old_id, &blocker);
   if (result == NULL) {
@@ -271,11 +287,11 @@ static int testMove(bool use_syscall, bool test_stale_pointer) {
   }
 
   char *replacement =
-      mapMemory(clearPointerID(old_mapping), page_size, MAP_FIXED);
+      mapMemory(old_mapping, page_size, MAP_FIXED_NOREPLACE);
   if (replacement == NULL) {
     return 4;
   }
-  const uint16_t replacement_id = get_id(replacement);
+  const PTSanID replacement_id = get_id(replacement);
   assert(replacement_id != old_id);
   checkRetiredBounds(old_id);
   checkLiveBounds(replacement_id, replacement, page_size);
@@ -295,8 +311,8 @@ static int testRealloc(void) {
     return 1;
   }
 
-  const uint16_t old_id = get_id(allocation);
-  void *old_address = clearPointerID(allocation);
+  const PTSanID old_id = get_id(allocation);
+  uint64_t old_address = ptsan_get_address(allocation);
   checkLiveBounds(old_id, allocation, old_size);
   allocation[0] = 42;
 
@@ -306,7 +322,7 @@ static int testRealloc(void) {
   }
   assert(result[0] == 42);
   checkLiveBounds(get_id(result), result, new_size);
-  if (clearPointerID(result) == old_address) {
+  if (ptsan_get_address(result) == old_address) {
     assert(get_id(result) == old_id);
   } else {
     assert(get_id(result) != old_id);

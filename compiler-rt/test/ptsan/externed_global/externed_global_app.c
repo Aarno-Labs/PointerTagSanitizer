@@ -3,11 +3,11 @@
 // RUN: %clang_ptsan -g -O2 -c %S/lib/externed_global_lib.c -o lib.o
 // RUN: %clang_ptsan -g -O2 app.o lib.o -o %exe
 
-// RUN: ./%exe 30 2> out.txt
+// RUN: not ./%exe 30 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 21 2> out.txt
+// RUN: not ./%exe 21 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 20 2> out.txt
+// RUN: not ./%exe 20 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 // RUN: ./%exe 19 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
@@ -15,11 +15,11 @@
 // Link order shouldn't matter!
 // RUN: %clang_ptsan -g -O2 lib.o app.o -o %exe
 
-// RUN: ./%exe 30 2> out.txt
+// RUN: not ./%exe 30 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 21 2> out.txt
+// RUN: not ./%exe 21 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 20 2> out.txt
+// RUN: not ./%exe 20 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 // RUN: ./%exe 19 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
@@ -28,11 +28,11 @@
 // RUN: %clang_ptsan -g -O2 -c %S/lib/externed_global_alias.c -o lib.o
 // RUN: %clang_ptsan -g -O2 app.o lib.o -o %exe
 
-// RUN: ./%exe 30 2> out.txt
+// RUN: not ./%exe 30 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 21 2> out.txt
+// RUN: not ./%exe 21 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 20 2> out.txt
+// RUN: not ./%exe 20 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 // RUN: ./%exe 19 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD

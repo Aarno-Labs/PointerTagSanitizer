@@ -11,8 +11,14 @@
 // RUN:   -mllvm -ptsan-no-opts -o %t.noopts %s
 // RUN: %t.noopts
 // RUN: %ptsan_musl_strict \
-// RUN:   -mllvm -ptsan-stack-ids-per-bucket=1 -o %t.smallbucket %s
-// RUN: %t.smallbucket
+// RUN:   -mllvm -ptsan-stack-id-thread-buckets=0 -o %t.nobuckets %s
+// RUN: %t.nobuckets
+//
+// ID32 va_list storage needs decoding metadata, including without optimization.
+// RUN: %ptsan_musl_id32_strict -o %t.id32 %s
+// RUN: %t.id32
+// RUN: %ptsan_musl_id32_strict -O0 -o %t.id32.o0 %s
+// RUN: %t.id32.o0
 
 // Run the shared mixed-argument test against instrumented musl too. At -O0,
 // stack-ID cleanup can become a memset libcall; musl's raw-memory entry points

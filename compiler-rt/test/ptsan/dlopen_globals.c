@@ -5,7 +5,7 @@
 //
 // RUN: split-file %s %t
 // RUN: %clang_ptsan -O2 -fPIC -shared %t/library.c -o %t/library.so
-// RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error %t/main.c -ldl -o %t/test
+// RUN: %clang_ptsan -O2 -I%S -mllvm -ptsan-abort-on-error %t/main.c -ldl -o %t/test
 // RUN: %t/test %t/library.so
 // REQUIRES: x86_64-target-arch
 
@@ -23,6 +23,7 @@ int *get_values(void) {
 #include <assert.h>
 #include <dlfcn.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 
 int main(int argc, char **argv) {
   assert(argc == 2);
@@ -31,9 +32,9 @@ int main(int argc, char **argv) {
   int *(*get_values)(void) = (int *(*)(void))dlsym(library, "get_values");
   assert(get_values);
   int *values = get_values();
-  unsigned id = (uintptr_t)values >> 48;
-  assert(id && id != 0xffff);
+  unsigned id = get_id(values);
+  assert(id && id != ptsan_default_id());
   assert(values[0] == 3 && values[3] == 13);
-  assert(((uintptr_t)get_values() >> 48) == id);
+  assert(get_id(get_values()) == id);
   return 0;
 }

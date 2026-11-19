@@ -15,6 +15,10 @@
 // RUN: FileCheck %s < %t.int
 // RUN: not %run %t bad-ifreq 2> %t.ifreq
 // RUN: FileCheck %s < %t.ifreq
+// RUN: not %run %t bad-ethtool 2> %t.ethtool
+// RUN: FileCheck %s < %t.ethtool
+// RUN: not %run %t bad-hwtstamp 2> %t.hwtstamp
+// RUN: FileCheck %s < %t.hwtstamp
 //
 // CHECK: Found bad
 
@@ -22,12 +26,47 @@
 
 #include <fcntl.h>
 #include <net/if.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <termios.h>
 #include <unistd.h>
+
+// Stable Linux UAPI values and layouts that are not installed with musl's
+// libc headers.
+#define SIOCETHTOOL 0x8946
+#define ETHTOOL_GLINK 0x0000000a
+#define ETHTOOL_GTSO 0x0000001e
+#define ETHTOOL_GUFO 0x00000021
+#define ETHTOOL_GGSO 0x00000023
+#define ETHTOOL_GFLAGS 0x00000025
+#define ETHTOOL_GGRO 0x0000002b
+#define ETHTOOL_GET_TS_INFO 0x00000041
+#define SIOCSHWTSTAMP 0x89b0
+#define SIOCGHWTSTAMP 0x89b1
+
+struct TestEthtoolValue {
+  uint32_t command;
+  uint32_t data;
+};
+
+struct TestEthtoolTimestampInfo {
+  uint32_t command;
+  uint32_t so_timestamping;
+  int32_t phc_index;
+  uint32_t tx_types;
+  uint32_t tx_reserved[3];
+  uint32_t rx_filters;
+  uint32_t rx_reserved[3];
+};
+
+struct TestHardwareTimestampConfig {
+  int flags;
+  int tx_type;
+  int rx_filter;
+};
 
 static int openPty(int *master, int *slave) {
   *master = posix_openpt(O_RDWR | O_NOCTTY);
@@ -98,12 +137,55 @@ static int testGood(void) {
     return 8;
   }
 
+  struct ifreq interface;
+  memset(&interface, 0, sizeof(interface));
+  memcpy(interface.ifr_name, "lo", 3);
+  (void)ioctl(-1, SIOCGIFADDR, &interface);
+  (void)ioctl(-1, SIOCGIFNETMASK, &interface);
+  (void)ioctl(-1, SIOCGIFFLAGS, &interface);
+  (void)ioctl(-1, SIOCSIFFLAGS, &interface);
+  (void)ioctl(-1, SIOCGIFMTU, &interface);
+  (void)ioctl(-1, SIOCGIFHWADDR, &interface);
+
+  struct TestEthtoolValue ethtool_value;
+  memset(&ethtool_value, 0, sizeof(ethtool_value));
+  interface.ifr_data = (char *)&ethtool_value;
+  const uint32_t value_commands[] = {
+      ETHTOOL_GLINK, ETHTOOL_GTSO,   ETHTOOL_GUFO,
+      ETHTOOL_GGSO,  ETHTOOL_GFLAGS, ETHTOOL_GGRO,
+  };
+  for (size_t index = 0;
+       index != sizeof(value_commands) / sizeof(value_commands[0]); ++index) {
+    ethtool_value.command = value_commands[index];
+    (void)ioctl(-1, SIOCETHTOOL, &interface);
+    if (interface.ifr_data != (char *)&ethtool_value) {
+      return 9;
+    }
+  }
+
+  struct TestEthtoolTimestampInfo timestamp_info;
+  memset(&timestamp_info, 0, sizeof(timestamp_info));
+  timestamp_info.command = ETHTOOL_GET_TS_INFO;
+  interface.ifr_data = (char *)&timestamp_info;
+  (void)ioctl(-1, SIOCETHTOOL, &interface);
+  if (interface.ifr_data != (char *)&timestamp_info) {
+    return 10;
+  }
+
+  struct TestHardwareTimestampConfig hardware_timestamp = {0, 0, 0};
+  interface.ifr_data = (char *)&hardware_timestamp;
+  (void)ioctl(-1, SIOCSHWTSTAMP, &interface);
+  (void)ioctl(-1, SIOCGHWTSTAMP, &interface);
+  if (interface.ifr_data != (char *)&hardware_timestamp) {
+    return 11;
+  }
+
   int sockets[2];
   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) != 0) {
-    return 9;
+    return 12;
   }
   if (sockatmark(sockets[0]) < 0) {
-    return 10;
+    return 13;
   }
 
   close(sockets[0]);
@@ -168,6 +250,32 @@ static int testBadIfreq(void) {
   return 0;
 }
 
+static int testBadEthtool(void) {
+  struct ifreq interface;
+  memset(&interface, 0, sizeof(interface));
+  void *storage = malloc(sizeof(struct TestEthtoolValue) - 1);
+  if (!storage) {
+    return 1;
+  }
+  uint32_t command = ETHTOOL_GLINK;
+  memcpy(storage, &command, sizeof(command));
+  interface.ifr_data = storage;
+  (void)ioctl(-1, SIOCETHTOOL, &interface);
+  return 0;
+}
+
+static int testBadHardwareTimestamp(void) {
+  struct ifreq interface;
+  memset(&interface, 0, sizeof(interface));
+  interface.ifr_data =
+      malloc(sizeof(struct TestHardwareTimestampConfig) - 1);
+  if (!interface.ifr_data) {
+    return 1;
+  }
+  (void)ioctl(-1, SIOCSHWTSTAMP, &interface);
+  return 0;
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) {
     return 1;
@@ -186,6 +294,12 @@ int main(int argc, char **argv) {
   }
   if (strcmp(argv[1], "bad-ifreq") == 0) {
     return testBadIfreq();
+  }
+  if (strcmp(argv[1], "bad-ethtool") == 0) {
+    return testBadEthtool();
+  }
+  if (strcmp(argv[1], "bad-hwtstamp") == 0) {
+    return testBadHardwareTimestamp();
   }
   return 1;
 }

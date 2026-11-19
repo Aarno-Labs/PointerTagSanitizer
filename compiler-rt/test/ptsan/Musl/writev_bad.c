@@ -10,6 +10,12 @@
 // RUN: not %run %t 2> %t.err
 // RUN: FileCheck %s < %t.err
 
+// ID32 nested source bounds must be checked before entering the kernel.
+// RUN: %ptsan_musl_id32_nonstrict %s -o %t.id32
+// RUN: not %run %t.id32 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32.strict
+// RUN: not %run %t.id32.strict 2>&1 | FileCheck %s
+
 // CHECK: Found bad
 
 #include <stdlib.h>

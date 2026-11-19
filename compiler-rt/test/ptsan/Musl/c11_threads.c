@@ -5,6 +5,10 @@
 // RUN: %ptsan_musl_strict -pthread -o %t %s
 // RUN: %run %t
 
+// Strict ID32 thread startup must initialize TLS and preserve integer/pointer returns.
+// RUN: %ptsan_musl_id32_strict -pthread %s -o %t.id32
+// RUN: %run %t.id32
+
 #include <assert.h>
 #include <limits.h>
 #include <pthread.h>

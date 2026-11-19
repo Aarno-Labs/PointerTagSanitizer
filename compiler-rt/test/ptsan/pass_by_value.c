@@ -5,6 +5,12 @@
 // RUN: ./%exe 2047 > last.txt 2>&1
 // RUN: FileCheck %s --check-prefix=GOOD < last.txt
 
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe 0 > first.txt 2>&1
+// RUN: FileCheck %s --check-prefix=GOOD < first.txt
+// RUN: ./%exe 2047 > last.txt 2>&1
+// RUN: FileCheck %s --check-prefix=GOOD < last.txt
+
 // GOOD-NOT: Found bad {{.*}} access
 // GOOD: value =
 

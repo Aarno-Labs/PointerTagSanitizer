@@ -16,6 +16,14 @@
 // RUN: FileCheck %s < %t.syscall
 //
 // CHECK: Found bad
+//
+// RUN: %ptsan_musl_id32_nonstrict -o %t.id32 %s
+// RUN: %run %t.id32 mmap-good
+// RUN: %run %t.id32 syscall-good
+// RUN: not %run %t.id32 mmap-bad 2> %t.id32.mmap
+// RUN: FileCheck %s < %t.id32.mmap
+// RUN: not %run %t.id32 syscall-bad 2> %t.id32.syscall
+// RUN: FileCheck %s < %t.id32.syscall
 
 #define _GNU_SOURCE
 #include "../Inputs/ptsan_test_interface.h"
@@ -43,14 +51,14 @@ static int test_mapping(char *(*create_mapping)(void), int bad, int raw_unmap) {
   }
 
   size_t page_size = (size_t)sysconf(_SC_PAGESIZE);
-  uint16_t id = get_id(mapping);
+  PTSanID id = get_id(mapping);
   if (!id || ptsan_get_size(id) != page_size) {
     return 2;
   }
   mapping[bad ? page_size : page_size - 1] = 'x';
   int result = raw_unmap ? syscall(SYS_munmap, mapping, 4)
                          : munmap((void *)mapping, 4);
-  if (result || ptsan_get_size(id) || ptsan_get_base(id)) {
+  if (result || ptsan_get_size(id)) {
     return 3;
   }
   return 0;

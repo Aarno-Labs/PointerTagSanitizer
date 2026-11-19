@@ -1,4 +1,4 @@
-// RUN: %clangxx_raw -fsanitize=ptsan -g -m64 -O3 -std=c++03 -fexceptions \
+// RUN: %clangxx_ptsan_plain -g -m64 -O3 -std=c++03 -fexceptions \
 // RUN:   -mllvm -ptsan-reoptimize \
 // RUN:   -mllvm -ptsan-clear-ids-on-arith=0 \
 // RUN:   -mllvm -ptsan-clear-ids-on-cmp=0 \

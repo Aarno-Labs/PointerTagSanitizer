@@ -21,7 +21,6 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Hashing.h"
@@ -51,6 +50,7 @@
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/MD5.h"
+#include "llvm/Support/MathExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Regex.h"
 #include "llvm/Support/raw_ostream.h"
@@ -124,18 +124,6 @@ cl::opt<bool> ClNoChecks(
   cl::init(false)
 );
 
-cl::opt<bool> ClNoIDs(
-  "ptsan-noids",
-  cl::desc("Don't generate ids. Metadata will propagate as normal, and checks will happen, but all ids will be 0"),
-  cl::init(false)
-);
-
-cl::opt<bool> ClNoStrip(
-  "ptsan-nostrip",
-  cl::desc("Don't strip ids. This will break things unless you're using properly set up lam or ptsan-noids"),
-  cl::init(false)
-);
-
 static cl::opt<bool> ClX86InlineStrip(
     "ptsan-x86-inline-strip", cl::Hidden, cl::init(true),
     cl::desc("Use inline AND for scalar PTSan strips on x86-64"));
@@ -147,15 +135,53 @@ cl::opt<bool> ClLAM(
   cl::init(false)
 );
 
-static unsigned getEffectiveIDBits() { return ClLAM ? 15 : 16; }
+cl::opt<bool> Cl32BitIDs(
+    "ptsan-32-bit-ids",
+    cl::desc("Use 32-bit-ID pointer encoding with additive origins"),
+    cl::init(false));
 
-static unsigned getDefaultIDNo() { return (1U << getEffectiveIDBits()) - 1; }
+cl::opt<bool> ClSupportIndicatorBit(
+    "ptsan-support-indicator-bit",
+    cl::desc("Reserve the high ID bit for mixed-pointer decoding in strict ID32"),
+    cl::init(false));
+cl::opt<bool> ClMayDecodeRaw(
+    "ptsan-may-decode-raw",
+    cl::desc("Allow raw as well as encoded pointers in this file's ID32 conversions"),
+    cl::init(false));
+
+cl::opt<unsigned> ClRandomSeed(
+    "ptsan-random-seed", cl::Hidden,
+    cl::desc("Use a fixed PTSan random seed for testing"), cl::init(0));
+
+cl::opt<bool> ClRandomizeIDs(
+    "ptsan-randomize-ids", cl::Hidden,
+    cl::desc("Randomize PTSan ID allocation"), cl::init(true));
+
+cl::opt<unsigned> ClID32OriginQuantum(
+    "ptsan-32-bit-ids-origin-quantum",
+    cl::desc("Preserve address bits within this ID32 origin quantum in bytes"),
+    cl::init(4096));
+
+static unsigned getEffectiveIDBits() {
+  if (Cl32BitIDs) {
+    return 32;
+  }
+  return ClLAM ? 15 : 16;
+}
 
 cl::opt<bool> ClInstrumentGlobals(
   "ptsan-instrument-globals",
   cl::desc("Instrument Globals"),
   cl::init(true)
 );
+
+// XXX: This grants one ID access to the entire named section. If we use it for
+// larger sections, consider randomizing global IDs to make forgery harder.
+static cl::list<std::string> ClGlobalSections(
+    "ptsan-global-section",
+    cl::desc("Register an ELF section as one global through __start_/__stop_ "
+             "symbols; specify only in its owning translation unit"),
+    cl::ZeroOrMore);
 
 cl::opt<bool> ClValidate(
   "ptsan-runtime-validate",
@@ -188,6 +214,36 @@ cl::opt<bool> ClClearIdsOnCmp(
   cl::desc("Clear IDs on pointer comparisons. This is necessary if either a.) somehow zero ids "
           "are being compared to nonzero or b.) The app is comparing pointers to differen buffers (UB!!)"),
   cl::init(true)
+);
+
+cl::opt<bool> ClStripPtrToInt(
+  "ptsan-strip-ptrtoint",
+  cl::desc("Convert pointers to raw integer addresses (integer storage loses pointer IDs)"),
+  cl::init(false)
+);
+
+cl::list<std::string> ClStripPtrToIntFunctions(
+    "ptsan-strip-ptrtoint-function",
+    cl::desc("Strip ptrtoint in the named function at PTSan discovery time "
+             "(repeatable; does not follow previously inlined copies)"));
+
+cl::list<std::string> ClClearIdsOnArithFunctions(
+    "ptsan-clear-ids-on-arith-function",
+    cl::desc("Strip pointer subtraction operands in the named function at "
+             "PTSan discovery time (repeatable; does not follow previously "
+             "inlined copies)"));
+
+cl::list<std::string> ClClearIdsOnCmpFunctions(
+    "ptsan-clear-ids-on-cmp-function",
+    cl::desc("Strip pointer comparison operands in the named function at "
+             "PTSan discovery time (repeatable; does not follow previously "
+             "inlined copies)"));
+
+cl::opt<int> ClStripPointerBitTwiddles(
+  "ptsan-strip-pointer-bit-twiddles",
+  cl::desc("Strip pointer IDs for address-bit operations, except within this "
+           "many low bits (-1 disables)"),
+  cl::init(-1)
 );
 
 cl::opt<bool> ClQuietErrors(
@@ -250,16 +306,19 @@ cl::opt<bool> ClStackTemporalSafety(
   cl::init(true)
 );
 
-cl::opt<unsigned> ClStackIDsPerBucket(
-  "ptsan-stack-ids-per-bucket",
-  cl::desc("Number of fast-path stack IDs reserved for each PTSan stack bucket"),
-  cl::init(512)
+cl::opt<unsigned> ClIDBucketSize(
+  "ptsan-id-bucket-size",
+  cl::desc("Power-of-two number of IDs per PTSan bucket (at least 64)")
+);
+
+static cl::opt<unsigned> ClStackIDLogCapacity(
+  "ptsan-stack-id-log-capacity",
+  cl::desc("Maximum outstanding runtime stack-ID log entries per thread")
 );
 
 cl::opt<unsigned> ClStackIDThreadBuckets(
   "ptsan-stack-id-thread-buckets",
-  cl::desc("Number of threads that can hold a fast-path PTSan stack ID bucket"),
-  cl::init(12)
+  cl::desc("Number of threads that can hold a fast-path PTSan stack ID bucket (zero disables reservations)")
 );
 
 cl::opt<bool> ClAddOverflowChecks(
@@ -268,8 +327,10 @@ cl::opt<bool> ClAddOverflowChecks(
   cl::init(true)
 );
 
-// PTSan assumes all linked modules are built with the same PTSan mode flags.
-// Mixing ptsan-stack-temporal-safety settings is unsupported.
+cl::opt<unsigned> ClIDReuseDistance(
+  "ptsan-id-reuse-distance",
+  cl::desc("Target number of candidates for recycled-ID selection (default: up to 65536, limited by the ID namespace); capacity pressure may shorten it")
+);
 
 cl::opt<int> ClPatchAllWith(
   "ptsan-patch-all-with",
@@ -293,8 +354,66 @@ cl::opt<std::string> ClStopAfter(
 
 
 
+static void validateCLIArguments(unsigned IDBucketSize,
+                                 unsigned StackIDThreadBuckets) {
+  if (IDBucketSize < 64 || !isPowerOf2_64(IDBucketSize)) {
+    report_fatal_error("PTSan ID bucket size must be a power of two and at least 64");
+  }
+  const uint64_t NumIDs = 1ULL << getEffectiveIDBits();
+  const uint64_t IDSpaceBegin =
+      Cl32BitIDs && (!ClStrictMode || ClSupportIndicatorBit) ? 0x80000000ULL : 0;
+  if (StackIDThreadBuckets >
+      (NumIDs - IDSpaceBegin) / IDBucketSize) {
+    report_fatal_error("PTSan reserved stack ID buckets exceed ID space");
+  }
+  if (ClStackIDLogCapacity > (1ULL << getEffectiveIDBits())) {
+    report_fatal_error("PTSan stack ID log capacity cannot exceed the ID space");
+  }
+  if (!isPowerOf2_64(ClID32OriginQuantum) ||
+      ClID32OriginQuantum > (1ULL << 31)) {
+    report_fatal_error(
+        "PTSan ID32 origin quantum must be a power of two no larger than 2 GiB");
+  }
+  if (!ClGlobalSections.empty() && !ClInstrumentGlobals) {
+    report_fatal_error("ptsan-global-section requires global instrumentation");
+  }
+  if (Cl32BitIDs && ClLAM) {
+    report_fatal_error("PTSan 32-bit IDs and LAM are mutually exclusive");
+  }
+  if (ClSupportIndicatorBit && (!Cl32BitIDs || !ClStrictMode))
+    report_fatal_error("ptsan-support-indicator-bit requires strict 32-bit IDs");
+  if (ClMayDecodeRaw && !ClSupportIndicatorBit)
+    report_fatal_error("ptsan-may-decode-raw requires ptsan-support-indicator-bit");
+  if (ClStripPointerBitTwiddles < -1 || ClStripPointerBitTwiddles > 64) {
+    report_fatal_error("PTSan pointer-bit threshold must be between -1 and 64");
+  }
+  if (!ClStopAfter.empty() && ClStopAfter != "prepare" &&
+      ClStopAfter != "discovery" && ClStopAfter != "optimization" &&
+      ClStopAfter != "metadata-lowering" && ClStopAfter != "late-optimization" &&
+      ClStopAfter != "lowering") {
+    report_fatal_error(Twine("unknown -ptsan-stop-after phase: ") + ClStopAfter);
+  }
+}
+
 PointerTagSanitizer::PointerTagSanitizer(Module &M) :
   M(M), Ctx(M.getContext()), DL(M.getDataLayout()),  DIB(M, true) {
+  StackIDLogCapacity = std::min(1ULL << 20, 1ULL << getEffectiveIDBits());
+  if (ClStackIDLogCapacity.getNumOccurrences()) {
+    StackIDLogCapacity = ClStackIDLogCapacity;
+  }
+  IDBucketSize = Cl32BitIDs ? 65536 : 512;
+  if (ClIDBucketSize.getNumOccurrences()) {
+    IDBucketSize = ClIDBucketSize;
+  }
+  StackIDThreadBuckets = Cl32BitIDs ? 128 : 12;
+  if (ClStackIDThreadBuckets.getNumOccurrences()) {
+    StackIDThreadBuckets = ClStackIDThreadBuckets;
+  }
+  validateCLIArguments(IDBucketSize, StackIDThreadBuckets);
+
+  if (Cl32BitIDs) {
+    ClAbortOnError = true;
+  }
 
   auto *File = DIB.createFile("<ptsan>", "");
   CU = DIB.createCompileUnit(dwarf::DW_LANG_C, File,
@@ -304,17 +423,28 @@ PointerTagSanitizer::PointerTagSanitizer(Module &M) :
   UptrTy = DL.getIntPtrType(Ctx);
   U16Ty = IntegerType::get(Ctx, 16);
   U32Ty = IntegerType::get(Ctx, 32);
+  IDTy = Cl32BitIDs ? U32Ty : U16Ty;
   U64Ty = IntegerType::get(Ctx, 64);
   U8Ty = IntegerType::get(Ctx, 8);
   BoolTy = IntegerType::get(Ctx, 1);
 
-  AddrMask = ConstantInt::get(U64Ty, 0x0000FFFFFFFFFFFFULL);
-  IDMask = ConstantInt::get(U64Ty, 0xffff000000000000);
-  DefaultIDNo = ConstantInt::get(U16Ty, getDefaultIDNo());
+  AddrMask = ConstantInt::get(
+      U64Ty, Cl32BitIDs ? 0x00000000FFFFFFFFULL : 0x0000FFFFFFFFFFFFULL);
+  if (Cl32BitIDs) {
+    IDMask = ConstantInt::get(U64Ty, 0xffffffff00000000ULL);
+  } else {
+    IDMask = ConstantInt::get(U64Ty, 0xffff000000000000ULL);
+  }
+  // Only non-strict ID16 allocation can fall back to a default ID.
+  if (Cl32BitIDs || ClStrictMode) {
+    DefaultIDNo = nullptr;
+  } else {
+    DefaultIDNo = ConstantInt::get(IDTy, (1U << getEffectiveIDBits()) - 1);
+  }
 
   {
   SmallVector<Type*, 2> Fields = {
-    U16Ty, // Id
+    IDTy, // Id
     PtrTy, // Pointer to next Node
     };
   IDNodeStructTy =
@@ -351,6 +481,7 @@ PointerTagSanitizer::PointerTagSanitizer(Module &M) :
   initializeModule();
 }
 
+// Used by ID16 strip lowering; ID32 decoding does not use an address mask.
 // X86 can select BEXTR/BZHI for our low-address mask. Inline AND has performed
 // better for frequent PTSan tag strips, so prefer it independently of CPU
 // features without changing instruction selection for application code.
@@ -384,91 +515,65 @@ void PointerTagSanitizer::initializeModule() {
       "ptsan_init_va_list_aarch64", AL, VoidTy, PtrTy, U64Ty, U64Ty, U64Ty);
   markAsInstr(InitVAListAArch64.getCallee());
 
-  GetStackIDsN = M.getOrInsertFunction("ptsan_get_stack_ids_n", AL,
+  ChooseStackOrigin = M.getOrInsertFunction(
+      "ptsan_choose_stack_origin", AL, U32Ty, U64Ty);
+  markAsInstr(ChooseStackOrigin.getCallee());
+
+  RefillStackOrigins =
+      M.getOrInsertFunction("ptsan_refill_stack_origins", AL, U32Ty);
+  markAsInstr(RefillStackOrigins.getCallee());
+
+  GetStackIDs = M.getOrInsertFunction("ptsan_get_stack_ids", AL,
     VoidTy, PtrTy, U64Ty);
-  markAsInstr(GetStackIDsN.getCallee()->stripPointerCasts());
+  markAsInstr(GetStackIDs.getCallee()->stripPointerCasts());
 
-  GetStackIDs1 = M.getOrInsertFunction("ptsan_get_stack_ids_1", AL,
-    U16Ty, PtrTy, U64Ty);
-  markAsInstr(GetStackIDs1.getCallee()->stripPointerCasts());
+  FreeStackIDs = M.getOrInsertFunction("ptsan_free_stack_ids", AL,
+    VoidTy, U64Ty);
+  markAsInstr(FreeStackIDs.getCallee()->stripPointerCasts());
 
-  GetStackIDs2 = M.getOrInsertFunction("ptsan_get_stack_ids_2", AL,
-    U32Ty, PtrTy, PtrTy, U64Ty);
-  markAsInstr(GetStackIDs2.getCallee()->stripPointerCasts());
-
-  GetStackIDs3 = M.getOrInsertFunction("ptsan_get_stack_ids_3", AL,
-    U64Ty, PtrTy, PtrTy, PtrTy, U64Ty, U32Ty);
-  markAsInstr(GetStackIDs3.getCallee()->stripPointerCasts());
-
-  GetStackIDs4 = M.getOrInsertFunction("ptsan_get_stack_ids_4", AL,
-    U64Ty, PtrTy, PtrTy, PtrTy, PtrTy, U64Ty, U64Ty);
-  markAsInstr(GetStackIDs4.getCallee()->stripPointerCasts());
-
-  FreeStackIDsN = M.getOrInsertFunction("ptsan_free_stack_ids_n", AL,
-    VoidTy, PtrTy, U64Ty);
-  markAsInstr(FreeStackIDsN.getCallee()->stripPointerCasts());
-
-  GetRepeatableAllocaIDsContainer = M.getOrInsertFunction(
-      "ptsan_get_repeatable_alloca_ids_container", AL, PtrTy);
-  markAsInstr(GetRepeatableAllocaIDsContainer.getCallee()->stripPointerCasts());
   GetRepeatableAllocaID = M.getOrInsertFunction(
-      "ptsan_get_repeatable_alloca_id", AL, U16Ty, PtrTy, PtrTy, U64Ty);
+      "ptsan_get_repeatable_alloca_id", AL, IDTy, PtrTy, U64Ty, U64Ty);
   markAsInstr(GetRepeatableAllocaID.getCallee()->stripPointerCasts());
-  FreeRepeatableAllocaIDs = M.getOrInsertFunction(
-      "ptsan_free_repeatable_alloca_ids", AL, VoidTy, PtrTy);
-  markAsInstr(FreeRepeatableAllocaIDs.getCallee()->stripPointerCasts());
 
-  SaveStackIDCheckpoint = M.getOrInsertFunction(
-      "ptsan_save_stack_id_checkpoint", AL, VoidTy, PtrTy);
-  markAsInstr(SaveStackIDCheckpoint.getCallee());
-  RestoreStackIDCheckpoint = M.getOrInsertFunction(
-      "ptsan_restore_stack_id_checkpoint", AL, VoidTy, PtrTy);
-  markAsInstr(RestoreStackIDCheckpoint.getCallee());
-
-  FreeStackIDs1 = M.getOrInsertFunction("ptsan_free_stack_ids_1", AL,
-    VoidTy, U16Ty);
-  // Match the runtime's unsigned short argument ABI, even on existing decls.
-  cast<Function>(FreeStackIDs1.getCallee()->stripPointerCasts())
-      ->addParamAttr(0, Attribute::ZExt);
-  markAsInstr(FreeStackIDs1.getCallee()->stripPointerCasts());
-
-  FreeStackIDs2 = M.getOrInsertFunction("ptsan_free_stack_ids_2", AL,
-    VoidTy, U32Ty);
-  markAsInstr(FreeStackIDs2.getCallee()->stripPointerCasts());
-
-  FreeStackIDs3 = M.getOrInsertFunction("ptsan_free_stack_ids_3", AL,
-    VoidTy, U64Ty);
-  markAsInstr(FreeStackIDs3.getCallee()->stripPointerCasts());
-
-  FreeStackIDs4 = M.getOrInsertFunction("ptsan_free_stack_ids_4", AL,
-    VoidTy, U64Ty);
-  markAsInstr(FreeStackIDs4.getCallee()->stripPointerCasts());
+  RestoreStackIDs = M.getOrInsertFunction(
+      "ptsan_restore_stack_ids", AL, VoidTy, U64Ty, U64Ty, IDTy, U8Ty);
+  auto *RestoreStackIDsFn =
+      cast<Function>(RestoreStackIDs.getCallee()->stripPointerCasts());
+  RestoreStackIDsFn->addParamAttr(3, Attribute::ZExt);
+  if (IDTy->isIntegerTy(16)) {
+    RestoreStackIDsFn->addParamAttr(2, Attribute::ZExt);
+  }
+  markAsInstr(RestoreStackIDsFn);
 
   LogAllocaInfo = M.getOrInsertFunction("ptsan_log_alloca_info", AL,
-    VoidTy, PtrTy, U16Ty, BoolTy, BoolTy);
-  // The runtime takes an unsigned short ID and two bool arguments.
+    VoidTy, PtrTy, IDTy, BoolTy, BoolTy);
+  // The C ABI zero-extends unsigned short IDs and bools, but not unsigned int IDs.
   auto *LogAllocaInfoFn =
       cast<Function>(LogAllocaInfo.getCallee()->stripPointerCasts());
-  for (unsigned Arg : {1, 2, 3})
+  if (IDTy->isIntegerTy(16)) {
+    LogAllocaInfoFn->addParamAttr(1, Attribute::ZExt);
+  }
+  for (unsigned Arg : {2, 3}) {
     LogAllocaInfoFn->addParamAttr(Arg, Attribute::ZExt);
+  }
   markAsInstr(LogAllocaInfo.getCallee()->stripPointerCasts());
 
   LogCheckCalled = M.getOrInsertFunction("ptsan_log_check_called", AL, VoidTy, U32Ty);
   markAsInstr(LogCheckCalled.getCallee()->stripPointerCasts());
 
   GetNextGlobalID = M.getOrInsertFunction("ptsan_get_next_global_id", AL,
-    U16Ty, PtrTy, U64Ty);
+    IDTy, PtrTy, U64Ty, U64Ty);
   markAsInstr(GetNextGlobalID.getCallee()->stripPointerCasts());
 
   GetConstantGlobalID = M.getOrInsertFunction("ptsan_get_constant_global_id",
-                                              AL, U16Ty, PtrTy, U64Ty);
+                                              AL, IDTy, PtrTy, U64Ty, U64Ty);
   markAsInstr(GetConstantGlobalID.getCallee()->stripPointerCasts());
 
   RegisterTLS = M.getOrInsertFunction("ptsan_register_tls", VoidTy,
                                      PtrTy, PtrTy, PtrTy);
   markAsInstr(RegisterTLS.getCallee());
   InitTLS = M.getOrInsertFunction("ptsan_initialize_tls", VoidTy,
-                                 PtrTy, PtrTy, U64Ty);
+                                 PtrTy, PtrTy, U64Ty, U64Ty);
   markAsInstr(InitTLS.getCallee());
   DestroyTLS = M.getOrInsertFunction("ptsan_destroy_tls", VoidTy, PtrTy, PtrTy);
   markAsInstr(DestroyTLS.getCallee());
@@ -494,7 +599,11 @@ void PointerTagSanitizer::initializeModule() {
                             MakecontextStripTy, AL);
   configureMakecontextStripHelper(MakecontextStripAfter);
 
-  ReportGenericError = M.getOrInsertFunction("ptsan_complain", AL,
+  AttributeList ReportAttrs = AL.removeFnAttribute(Ctx, Attribute::WillReturn);
+  if (ClAbortOnError) {
+    ReportAttrs = ReportAttrs.addFnAttribute(Ctx, Attribute::NoReturn);
+  }
+  ReportGenericError = M.getOrInsertFunction("ptsan_complain", ReportAttrs,
     VoidTy, // return type: void
     U32Ty,  // check_id
     U64Ty,  // function_id
@@ -503,14 +612,17 @@ void PointerTagSanitizer::initializeModule() {
     U64Ty,  // min
     U64Ty   // size
   );
-  markAsInstr(ReportGenericError.getCallee()->stripPointerCasts());
 
-  ReportVectorError = M.getOrInsertFunction("ptsan_complain_vector", AL,
+  ReportVectorError = M.getOrInsertFunction("ptsan_complain_vector", ReportAttrs,
     VoidTy, // return type: void
     U32Ty,  // check_id
     U64Ty   // function_id
   );
-  markAsInstr(ReportVectorError.getCallee()->stripPointerCasts());
+  for (FunctionCallee Callee : {ReportGenericError, ReportVectorError}) {
+    auto *Report = cast<Function>(Callee.getCallee()->stripPointerCasts());
+    Report->setAttributes(ReportAttrs);
+    markAsInstr(Report);
+  }
 
   EnableLibcInstr = M.getOrInsertFunction("ptsan_enable_libc_instr", AL, VoidTy);
   markAsInstr(EnableLibcInstr.getCallee()->stripPointerCasts());
@@ -531,22 +643,34 @@ void PointerTagSanitizer::initializeModule() {
       M.getOrInsertFunction("__ptsan_load_base", AL, U64Ty, U64Ty);
   PTSanLoadSpan =
       M.getOrInsertFunction("__ptsan_load_span", AL, U64Ty, U64Ty);
+  PTSanLoadOrigin =
+      M.getOrInsertFunction("__ptsan_load_origin", AL, U32Ty, U64Ty);
   PTSanStaticBase =
       M.getOrInsertFunction("__ptsan_static_base", AL, U64Ty, PtrTy);
   PTSanStaticSpan =
       M.getOrInsertFunction("__ptsan_static_span", AL, U64Ty, U64Ty);
-  PTSanStrip =
+  PTSanID16Strip =
       M.getOrInsertFunction("__ptsan_strip", AL, PtrTy, PtrTy);
-  PTSanStripI64 =
+  PTSanID16StripI64 =
       M.getOrInsertFunction("__ptsan_strip_i64", AL, U64Ty, U64Ty);
+  PTSanID32Strip =
+      M.getOrInsertFunction("__ptsan_strip_id32", AL, PtrTy, PtrTy, U64Ty, U64Ty);
+  PTSanID32StripI64 = M.getOrInsertFunction(
+      "__ptsan_strip_i64_id32", AL, U64Ty, U64Ty, U64Ty, U64Ty);
   PTSanTagged =
       M.getOrInsertFunction("__ptsan_tagged", AL, PtrTy, PtrTy);
-  PTSanTag =
+  PTSanID16Tag =
       M.getOrInsertFunction("__ptsan_tag", AL, PtrTy, PtrTy, U64Ty);
+  PTSanID32Tag =
+      M.getOrInsertFunction("__ptsan_tag_id32", AL, PtrTy, PtrTy, U64Ty, U64Ty);
   PTSanFunctionExit =
       M.getOrInsertFunction("__ptsan_function_exit", VoidOperationTy, AL);
   PTSanSetjmp =
       M.getOrInsertFunction("__ptsan_setjmp", VoidOperationTy, AL);
+  PTSanVAStart =
+      M.getOrInsertFunction("__ptsan_va_start", VoidOperationTy, AL);
+  PTSanVarargCall =
+      M.getOrInsertFunction("__ptsan_vararg_call", VoidOperationTy, AL);
   PTSanValidateArith =
       M.getOrInsertFunction("__ptsan_validate_arith", VoidOperationTy, AL);
   PTSanLibcCall =
@@ -556,9 +680,11 @@ void PointerTagSanitizer::initializeModule() {
 
   for (FunctionCallee Callee :
        {PTSanSource, PTSanAccess, PTSanLoopPreanalysis, PTSanGetID,
-        PTSanLoadBase, PTSanLoadSpan, PTSanStaticBase, PTSanStaticSpan,
-        PTSanStrip, PTSanStripI64, PTSanTagged, PTSanTag,
-        PTSanFunctionExit, PTSanSetjmp, PTSanValidateArith, PTSanLibcCall,
+        PTSanLoadBase, PTSanLoadSpan, PTSanLoadOrigin, PTSanStaticBase, PTSanStaticSpan,
+        PTSanID16Strip, PTSanID16StripI64, PTSanID32Strip, PTSanID32StripI64,
+        PTSanTagged, PTSanID16Tag, PTSanID32Tag,
+        PTSanFunctionExit, PTSanSetjmp, PTSanVAStart, PTSanVarargCall,
+        PTSanValidateArith, PTSanLibcCall,
         PTSanSpecialStrip}) {
     Value *V = Callee.getCallee();
     // getOrInsertFunction leaves attributes on existing declarations alone.
@@ -579,15 +705,30 @@ void PointerTagSanitizer::initializeModule() {
       M.getOrInsertGlobal("__ptsan_va_sentinel", ArrayType::get(U64Ty, 2)));
   markAsInstr(PTSanVarargSentinel);
 
-  TypesArray = cast<GlobalValue>(
-    M.getOrInsertGlobal("ptsan_obj_types", ArrayType::get(U8Ty, 0x10000)));
-  TypesArray->setLinkage(GlobalValue::ExternalLinkage);
-  markAsInstr(TypesArray);
+  auto CreateMetadataArray = [&](StringRef Name, Type *ElementTy) {
+    Type *TableTy;
+    if (Cl32BitIDs) {
+      TableTy = PtrTy;
+    } else {
+      TableTy = ArrayType::get(ElementTy,
+                              1ULL << std::max(getEffectiveIDBits(), 16U));
+    }
+    auto *Array = cast<GlobalVariable>(M.getOrInsertGlobal(Name, TableTy));
+    Array->setLinkage(GlobalValue::ExternalLinkage);
+    markAsInstr(Array);
+    return Array;
+  };
+  TypesArray = CreateMetadataArray("ptsan_obj_types", U8Ty);
+  BoundsArray = CreateMetadataArray("ptsan_bounds", BoundsStructTy);
+  OriginsArray = Cl32BitIDs ? CreateMetadataArray("ptsan_origins", U32Ty) : nullptr;
 
-  BoundsArray = cast<GlobalValue>(
-    M.getOrInsertGlobal("ptsan_bounds", ArrayType::get(BoundsStructTy, 0x10000)));
-  BoundsArray->setLinkage(GlobalValue::ExternalLinkage);
-  markAsInstr(BoundsArray);
+  if (Cl32BitIDs && ClStackTemporalSafety) {
+    StackOriginNextPtr = cast<GlobalValue>(
+        M.getOrInsertGlobal("ptsan_stack_origin_next", PtrTy));
+    StackOriginNextPtr->setLinkage(GlobalValue::ExternalLinkage);
+    StackOriginNextPtr->setThreadLocalMode(GlobalVariable::InitialExecTLSModel);
+    markAsInstr(StackOriginNextPtr);
+  }
 
   OverflowIDBoundsPtr = cast<GlobalValue>(
     M.getOrInsertGlobal("ptsan_default_id_bounds", BoundsStructTy));
@@ -595,18 +736,32 @@ void PointerTagSanitizer::initializeModule() {
   markAsInstr(OverflowIDBoundsPtr);
 
   NextStackIDPtr = cast<GlobalValue>(
-    M.getOrInsertGlobal("ptsan_next_stack_id", U16Ty));
+    M.getOrInsertGlobal("ptsan_next_stack_id", U64Ty));
   NextStackIDPtr->setLinkage(GlobalValue::ExternalLinkage);
   NextStackIDPtr->setThreadLocalMode(GlobalVariable::InitialExecTLSModel);
   markAsInstr(NextStackIDPtr);
 
-  if (ClStackTemporalSafety) {
-    PendingStackIdsPtr = cast<GlobalValue>(
-      M.getOrInsertGlobal("ptsan_pending_stack_ids", U16Ty));
-    PendingStackIdsPtr->setLinkage(GlobalValue::ExternalLinkage);
-    PendingStackIdsPtr->setThreadLocalMode(GlobalVariable::InitialExecTLSModel);
-    markAsInstr(PendingStackIdsPtr);
-  }
+  // StackIDLog begins with its cursor, followed by the runtime's storage
+  // pointer. Loading the first word keeps checkpoints a direct TLS load.
+  StackIDCursorPtr = cast<GlobalValue>(M.getOrInsertGlobal(
+      "ptsan_stack_id_log", StructType::get(U64Ty, PtrTy)));
+  StackIDCursorPtr->setLinkage(GlobalValue::ExternalLinkage);
+  StackIDCursorPtr->setThreadLocalMode(GlobalVariable::InitialExecTLSModel);
+  markAsInstr(StackIDCursorPtr);
+
+  // Longjmp checkpoints preserve this counter even when fast-path returns
+  // are allowed to omit temporal cleanup.
+  PendingStackIdsPtr = cast<GlobalValue>(
+    M.getOrInsertGlobal("ptsan_pending_stack_ids", IDTy));
+  PendingStackIdsPtr->setLinkage(GlobalValue::ExternalLinkage);
+  PendingStackIdsPtr->setThreadLocalMode(GlobalVariable::InitialExecTLSModel);
+  markAsInstr(PendingStackIdsPtr);
+
+  InSignalContextPtr = cast<GlobalValue>(
+      M.getOrInsertGlobal("ptsan_in_signal_context", U8Ty));
+  InSignalContextPtr->setLinkage(GlobalValue::ExternalLinkage);
+  InSignalContextPtr->setThreadLocalMode(GlobalVariable::InitialExecTLSModel);
+  markAsInstr(InSignalContextPtr);
 
   PTSanInLibc = cast<GlobalValue>(
     M.getOrInsertGlobal("ptsan_in_libc", U32Ty));
@@ -616,15 +771,36 @@ void PointerTagSanitizer::initializeModule() {
   markAsInstr(PTSanInLibc);
 
   StackIDLimitPtr = cast<GlobalValue>(
-    M.getOrInsertGlobal("ptsan_stack_id_limit", U16Ty));
+    M.getOrInsertGlobal("ptsan_stack_id_limit", U64Ty));
   StackIDLimitPtr->setLinkage(GlobalValue::ExternalLinkage);
   StackIDLimitPtr->setThreadLocal(true);
 
   markAsInstr(StackIDLimitPtr);
 
-  setRuntimeFlags();
 }
 
+Value *PointerTagSanitizer::getBoundsPtr(PTSanIRB &IRB, Value *ID,
+                                        optional<unsigned> Field) {
+  if (Cl32BitIDs) {
+    ID = IRB.CreateZExtOrTrunc(ID, ID->getType()->getWithNewType(U64Ty));
+    Value *Table = IRB.CreateLoad(PtrTy, BoundsArray);
+    SmallVector<Value *> Indices = {ID};
+    if (Field) {
+      Indices.push_back(IRB.getInt32(*Field));
+    }
+    return IRB.CreateInBoundsGEP(BoundsStructTy, Table, Indices);
+  }
+  SmallVector<Value *> Indices = {IRB.getInt64(0), ID};
+  if (Field) {
+    Indices.push_back(IRB.getInt32(*Field));
+  }
+  return IRB.CreateInBoundsGEP(BoundsArray->getValueType(), BoundsArray, Indices);
+}
+
+Value *PointerTagSanitizer::getOriginPtr(PTSanIRB &IRB, Value *ID) {
+  ID = IRB.CreateZExtOrTrunc(ID, ID->getType()->getWithNewType(U64Ty));
+  return IRB.CreateInBoundsGEP(U32Ty, IRB.CreateLoad(PtrTy, OriginsArray), ID);
+}
 
 #define SET_RUNTIME_FLAG(Name)                                                 \
   {                                                                            \
@@ -637,11 +813,11 @@ void PointerTagSanitizer::initializeModule() {
     markAsInstr(GV);                                                           \
   }
 
-#define SET_RUNTIME_U32(Name)                                                  \
+#define SET_RUNTIME_U32(Name, Value)                                           \
   {                                                                            \
     GlobalVariable *GV =                                                       \
         cast<GlobalVariable>(M.getOrInsertGlobal(#Name, U32Ty));               \
-    Constant *NewInit = ConstantInt::get(GV->getValueType(), Name);            \
+    Constant *NewInit = ConstantInt::get(GV->getValueType(), Value);           \
     GV->setInitializer(NewInit);                                               \
     GV->setLinkage(GlobalValue::WeakODRLinkage);                               \
     GV->setConstant(true);                                                     \
@@ -649,8 +825,6 @@ void PointerTagSanitizer::initializeModule() {
   }
 
 void PointerTagSanitizer::setRuntimeFlags() {
-  SET_RUNTIME_FLAG(ClNoIDs);
-  SET_RUNTIME_FLAG(ClNoStrip);
   SET_RUNTIME_FLAG(ClLAM);
   SET_RUNTIME_FLAG(ClUseReturnedMallocSize);
   SET_RUNTIME_FLAG(ClValidate);
@@ -658,9 +832,21 @@ void PointerTagSanitizer::setRuntimeFlags() {
   SET_RUNTIME_FLAG(ClQuietErrors);
   SET_RUNTIME_FLAG(ClAbortOnError);
   SET_RUNTIME_FLAG(ClStrictMode);
-  SET_RUNTIME_U32(ClStackIDsPerBucket);
-  SET_RUNTIME_U32(ClStackIDThreadBuckets);
-  SET_RUNTIME_U32(ClPatchAllWith);
+  SET_RUNTIME_FLAG(ClRandomizeIDs);
+  SET_RUNTIME_U32(ClRandomSeed, ClRandomSeed);
+  SET_RUNTIME_U32(ClIDBucketSize, IDBucketSize);
+  SET_RUNTIME_U32(ClStackIDLogCapacity, StackIDLogCapacity);
+  SET_RUNTIME_U32(ClStackIDThreadBuckets, StackIDThreadBuckets);
+  SET_RUNTIME_U32(ClIDReuseDistance, ClIDReuseDistance.getNumOccurrences()
+                                       ? (unsigned)ClIDReuseDistance
+                                       : std::min<uint64_t>(
+                                             65536, (1ULL << getEffectiveIDBits()) -
+                                                        (Cl32BitIDs ? 1 : 2)));
+  SET_RUNTIME_U32(ClPatchAllWith, ClPatchAllWith);
+  if (Cl32BitIDs) {
+    SET_RUNTIME_FLAG(ClSupportIndicatorBit);
+    SET_RUNTIME_U32(ClID32OriginQuantum, ClID32OriginQuantum);
+  }
 }
 #undef SET_RUNTIME_U32
 #undef SET_RUNTIME_FLAG
@@ -689,7 +875,35 @@ GlobalValue *PointerTagSanitizer::getGlobalProxy(Value *V) const {
 }
 
 static bool isLLVMInternalGlobal(const GlobalVariable &GV) {
-  return GV.getName().starts_with("llvm.");
+  // Annotation strings can have ordinary names but are not emitted as storage.
+  return GV.getName().starts_with("llvm.") || GV.getSection() == "llvm.metadata";
+}
+
+static SmallVector<std::pair<GlobalVariable *, GlobalVariable *>, 2>
+createGlobalSectionBoundaries(
+    Module &M, SmallPtrSetImpl<GlobalVariable *> &SectionBoundaries) {
+  SmallVector<std::pair<GlobalVariable *, GlobalVariable *>, 2> GlobalSections;
+  for (StringRef Section : ClGlobalSections) {
+    SmallVector<GlobalVariable *, 2> Boundaries;
+    for (StringRef Prefix : {"__start_", "__stop_"}) {
+      std::string Name = (Prefix + Section).str();
+      GlobalVariable *Boundary;
+      if (GlobalValue *Existing = M.getNamedValue(Name)) {
+        Boundary = dyn_cast<GlobalVariable>(Existing);
+        if (!Boundary || !Boundary->isDeclaration() || Boundary->isThreadLocal() ||
+            !Boundary->hasExternalLinkage()) {
+          report_fatal_error("PTSan section boundary must be an external global");
+        }
+      } else {
+        Boundary = new GlobalVariable(M, Type::getInt8Ty(M.getContext()), true,
+                                      GlobalValue::ExternalLinkage, nullptr, Name);
+      }
+      SectionBoundaries.insert(Boundary);
+      Boundaries.push_back(Boundary);
+    }
+    GlobalSections.emplace_back(Boundaries[0], Boundaries[1]);
+  }
+  return GlobalSections;
 }
 
 bool PointerTagSanitizer::sanitizeModule() {
@@ -700,7 +914,10 @@ bool PointerTagSanitizer::sanitizeModule() {
   // versions are raw, because intrinsic lowering can produce them and
   // intrinsics are already checked/stripped.
   if (Triple(M.getTargetTriple()).isMusl()) {
-    StringRef Prefix = ClNoChecks ? "ptsan_strip_" : "__wrap_";
+    StringRef Prefix = "__wrap_";
+    if (ClNoChecks) {
+      Prefix = ClMayDecodeRaw ? "ptsan_raw_strip_" : "ptsan_strip_";
+    }
     for (StringRef Name : {"memcpy", "memmove", "memset"}) {
       Function *F = M.getFunction(Name);
       if (!F || !F->isDeclaration() || F->use_empty()) {
@@ -711,7 +928,19 @@ bool PointerTagSanitizer::sanitizeModule() {
       F->replaceAllUsesWith(Wrapper.getCallee());
       Modified = true;
     }
+    // Explicit C calls carry an encoded descriptor. Backend-generated TLS
+    // calls instead use the native ABI and must keep the raw resolver symbol.
+    if (Function *F = M.getFunction("__tls_get_addr");
+        F && F->isDeclaration() && !F->use_empty()) {
+      FunctionCallee Wrapper = M.getOrInsertFunction(
+          "ptsan_musl_tls_get_addr", F->getFunctionType());
+      F->replaceAllUsesWith(Wrapper.getCallee());
+      Modified = true;
+    }
   }
+
+  SmallPtrSet<GlobalVariable *, 4> SectionBoundaries;
+  auto GlobalSections = createGlobalSectionBoundaries(M, SectionBoundaries);
 
   SmallPtrSet<GlobalVariable *, 16> ToTag;
   SmallVector<GlobalVariable *, 16> GlobalsToHandle;
@@ -762,9 +991,7 @@ bool PointerTagSanitizer::sanitizeModule() {
       if (auto *Owner = dyn_cast<GlobalVariable>(C)) {
         // ELF constants are made writable for replay and sealed afterward.
         if (Owner->hasInitializer() && !Owner->isThreadLocal() &&
-            !isLLVMInternalGlobal(*Owner) &&
-            (!Owner->isConstant() ||
-             Triple(M.getTargetTriple()).isOSBinFormatELF())) {
+            !isLLVMInternalGlobal(*Owner)) {
           GlobalsToReinitialize.insert(Owner);
         }
         continue;
@@ -796,6 +1023,11 @@ bool PointerTagSanitizer::sanitizeModule() {
     GlobalValue::LinkageTypes proxyLink =
     ToTag.contains(GV) ? GV->getLinkage()
                         : GlobalValue::WeakAnyLinkage;
+    if (SectionBoundaries.contains(GV)) {
+      // One owner supplies the tagged proxies; other TUs retain weak extern
+      // proxies. Multiple owners deliberately produce a duplicate-symbol error.
+      proxyLink = GlobalValue::ExternalLinkage;
+    }
     // Common linkage requires a zero initializer, but the proxy starts with
     // the global's address. Weak linkage still coalesces duplicate proxies;
     // the original global retains its common linkage.
@@ -805,7 +1037,7 @@ bool PointerTagSanitizer::sanitizeModule() {
 
     if (GV->isThreadLocal()) {
       TLSIDs[GV] = new GlobalVariable(
-          M, U16Ty, false, proxyLink, ConstantInt::get(U16Ty, 0),
+          M, IDTy, false, proxyLink, ConstantInt::get(IDTy, 0),
           GV->getName() + ".ptsan.id", nullptr, GV->getThreadLocalMode());
       continue;
     }
@@ -832,23 +1064,27 @@ bool PointerTagSanitizer::sanitizeModule() {
 
     GlobalVariable *AliasedVar = dyn_cast<GlobalVariable>(AliaseeObj);
     if (AliasedVar && TLSIDs.contains(AliasedVar)) {
-      TLSIDs[&GA] = GlobalAlias::create(GA.getName() + ".ptsan.id",
-                                      TLSIDs.at(AliasedVar));
+      auto *ID = GlobalAlias::create(GA.getLinkage(),
+                                    GA.getName() + ".ptsan.id",
+                                    TLSIDs.at(AliasedVar));
+      ID->copyAttributesFrom(&GA);
+      TLSIDs[&GA] = ID;
       continue;
     }
     if (!(AliasedVar && GlobalVariableProxies.contains(AliasedVar))) {
       continue;
     }
 
-    // We don't just directly redirect to the underlyng aliased thing
-    // because linkages can differ and doing that might cause hard-to-
-    // diagnose Problems
+    // The proxy must follow the alias's linker resolution, not its aliasee's.
     auto *Proxy = GlobalAlias::create(
-      GA.getName() + ".ptsan.ptr",
+      GA.getLinkage(), GA.getName() + ".ptsan.ptr",
       GlobalVariableProxies.at(AliasedVar));
+    Proxy->copyAttributesFrom(&GA);
 
     GlobalAliasProxies[&GA] = Proxy;
-    GlobalProxyTargets[Proxy] = AliasedVar;
+    if (!GA.isInterposable()) {
+      GlobalProxyTargets[Proxy] = AliasedVar;
+    }
   }
 
   // Create the global constructor
@@ -869,6 +1105,10 @@ bool PointerTagSanitizer::sanitizeModule() {
 
   PTSanIRB TagsIRB(*this, BasicBlock::Create(C, "entry", InitTags));
   PTSanIRB ExternsIRB(*this, BasicBlock::Create(C, "entry", InitExterns));
+
+  const bool EarlyGlobals = Triple(M.getTargetTriple()).isMusl();
+  if (EarlyGlobals)
+    InitInitializers->addFnAttr("ptsan-pre-tls");
 
   Function *TLSExterns = nullptr;
   Function *TLSTags = nullptr;
@@ -893,24 +1133,62 @@ bool PointerTagSanitizer::sanitizeModule() {
     TLSTagsIRB.SetInsertPoint(&TLSTags->getEntryBlock());
     TLSCleanupIRB.SetInsertPoint(&TLSCleanup->getEntryBlock());
     ExternsIRB.CreateCall(RegisterTLS, {TLSExterns, TLSTags, TLSCleanup});
-    ExternsIRB.CreateCall(TLSExterns);
-    TagsIRB.CreateCall(TLSTags);
+    if (!EarlyGlobals) {
+      ExternsIRB.CreateCall(TLSExterns);
+      TagsIRB.CreateCall(TLSTags);
+    }
   }
 
   // Once we're running constructors, we're not longer in libc
   // This is idempotent (sets to 0), so it doesn't matter if it
   // happens once per module
-  ExternsIRB.CreateCall(EnableLibcInstr);
+  if (!EarlyGlobals)
+    ExternsIRB.CreateCall(EnableLibcInstr);
+
+  auto StoreTaggedGlobal = [&](GlobalVariable *Real, Value *ID) {
+    Value *Raw = TagsIRB.CreatePtrToInt(Real, U64Ty);
+    Value *ID64 = TagsIRB.CreateZExt(ID, U64Ty);
+    Value *Tag = TagsIRB.CreateShl(ID64, TagsIRB.getInt64(Cl32BitIDs ? 32 : 48));
+    Value *Sum;
+    if (Cl32BitIDs) {
+      // Shared globals and section endpoints need not be the registered base.
+      Value *Bias = TagsIRB.CreateLoad(U64Ty, getBoundsPtr(TagsIRB, ID64, 0));
+      Value *Payload = TagsIRB.CreateSub(Raw, Bias);
+      Sum = TagsIRB.CreateOr(Tag, Payload);
+      if (!ClStrictMode) {
+        Sum = TagsIRB.CreateSelect(TagsIRB.CreateICmpEQ(ID64, TagsIRB.getInt64(0)),
+                                  Raw, Sum);
+      }
+    } else {
+      Sum = TagsIRB.CreateAdd(Raw, Tag);
+    }
+    Value *TaggedPtr = TagsIRB.CreateIntToPtr(Sum, Real->getType());
+    TagsIRB.CreateStore(TaggedPtr, GlobalVariableProxies.at(Real));
+  };
+
+  for (auto [Start, Stop] : GlobalSections) {
+    Value *Size = TagsIRB.CreateSub(TagsIRB.CreatePtrToInt(Stop, U64Ty),
+                                  TagsIRB.CreatePtrToInt(Start, U64Ty));
+    Value *ID = TagsIRB.CreateCall(GetNextGlobalID,
+                                  {Start, Size, TagsIRB.getInt64(1)});
+    StoreTaggedGlobal(Start, ID);
+    StoreTaggedGlobal(Stop, ID);
+  }
 
   for (GlobalVariable *Real : GlobalsToHandle) {
+    if (SectionBoundaries.contains(Real)) {
+      continue;
+    }
     if (Real->isThreadLocal()) {
       GlobalValue *ID = TLSIDs.at(Real);
       // Match global constructor ordering: all zero-ID fallbacks precede IDs.
-      TLSExternsIRB.CreateStore(ConstantInt::get(U16Ty, 0), ID);
+      TLSExternsIRB.CreateStore(ConstantInt::get(IDTy, 0), ID);
       if (ToTag.contains(Real)) {
         TLSTagsIRB.CreateCall(InitTLS,
             {ID, Real, TLSTagsIRB.getInt64(
-                              DL.getTypeAllocSize(Real->getValueType()))});
+                              DL.getTypeAllocSize(Real->getValueType())),
+             TLSTagsIRB.getInt64(DL.getValueOrABITypeAlignment(
+                 Real->getAlign(), Real->getValueType()).value())});
         TLSCleanupIRB.CreateCall(DestroyTLS, {ID, Real});
       }
       continue;
@@ -918,17 +1196,14 @@ bool PointerTagSanitizer::sanitizeModule() {
     GlobalVariable *Proxy = GlobalVariableProxies.at(Real);
     if (ToTag.contains(Real)) {
       // errs() << "Creating proxy initializer for " << *Real << "\n";
-      Value *Raw = TagsIRB.CreatePtrToInt(Real, U64Ty);
       uint64_t SizeBytes   = DL.getTypeAllocSize(Real->getValueType());
       Constant *Sz   = ConstantInt::get(U64Ty, SizeBytes);
       FunctionCallee IDGetter =
           Real->isConstant() ? GetConstantGlobalID : GetNextGlobalID;
-      Value *Id16  = TagsIRB.CreateCall(IDGetter, {Real, Sz});
-      Value *Id64 = TagsIRB.CreateZExt(Id16, U64Ty);
-      Value *Tag = TagsIRB.CreateShl(Id64, TagsIRB.getInt64(48));
-      Value *Sum = TagsIRB.CreateAdd(Raw, Tag);
-      Value *TaggedPtr = TagsIRB.CreateIntToPtr(Sum, Real->getType());
-      TagsIRB.CreateStore(TaggedPtr, Proxy);
+      Value *ID = TagsIRB.CreateCall(
+          IDGetter, {Real, Sz, TagsIRB.getInt64(DL.getValueOrABITypeAlignment(
+                                  Real->getAlign(), Real->getValueType()).value())});
+      StoreTaggedGlobal(Real, ID);
     } else {
       // errs() << "Creating extern initializer for " << *Real << "\n";
       ExternsIRB.CreateStore(Real, Proxy);
@@ -950,9 +1225,23 @@ bool PointerTagSanitizer::sanitizeModule() {
   }
   InitializersIRB.CreateRetVoid();
 
-  appendToGlobalCtors(M, InitTags, /*priority=*/0x1);
-  appendToGlobalCtors(M, InitExterns, /*priority=*/0x0);
-  appendToGlobalCtors(M, InitInitializers, /*priority=*/0x2);
+  if (EarlyGlobals) {
+    // Musl's raw startup wrapper runs each phase across all modules before TLS.
+    // TLS callbacks are registered here but run only after musl establishes TLS.
+    auto *RecordTy = StructType::get(PtrTy, PtrTy, PtrTy);
+    auto *Record = new GlobalVariable(
+        M, RecordTy, true, GlobalValue::InternalLinkage,
+        ConstantStruct::get(RecordTy, {InitExterns, InitTags, InitInitializers}),
+        "__ptsan_global_init");
+    Record->setSection("ptsan_global_init");
+    Record->setAlignment(DL.getPointerABIAlignment(0));
+    markAsInstr(Record);
+    appendToUsed(M, {Record});
+  } else {
+    appendToGlobalCtors(M, InitTags, /*priority=*/0x1);
+    appendToGlobalCtors(M, InitExterns, /*priority=*/0x0);
+    appendToGlobalCtors(M, InitInitializers, /*priority=*/0x2);
+  }
 
   if (HasReadOnlyInitializers) {
     // The linker isolates these globals on whole pages. Match ASan's ctor
@@ -1009,17 +1298,6 @@ PointerTagSanitizer::getNextRealInstruction(Anchor Anchor) const {
   return nullptr;
 }
 
-Instruction *
-PointerTagSanitizer::getFirstRealInsertionPt(BasicBlock &BB) const {
-  for (Instruction &I : make_range(BB.getFirstInsertionPt(), BB.end())) {
-    if (!isAnchor(&I)) {
-      return &I;
-    }
-  }
-
-  return BB.getTerminator();
-}
-
 void PointerTagSanitizer::verifyNoAnchors() const {
   for (Function &F : M) {
     for (BasicBlock &BB : F) {
@@ -1058,20 +1336,14 @@ static void runOptimizations(Module &M) {
   MPM.run(M, MAM);
 }
 
-static void validatePTSanTarget(Module &M) {
-  if (ClDisable) {
-    return;
-  }
-
+void validatePTSanTarget(Module &M) {
   Triple Target(M.getTargetTriple());
   StringRef Error;
   if (M.getDataLayout().getPointerSizeInBits() != 64 || Target.isX32()) {
     Error = "PTSan requires 64-bit pointers";
-  } else if (ClStrictMode &&
-             ((Target.getArch() != Triple::x86_64 && !Target.isAArch64()) ||
-              !Target.isOSLinux() ||
-              !Target.isOSBinFormatELF())) {
-    Error = "PTSan strict mode requires an x86-64 or AArch64 Linux ELF target";
+  } else if ((Target.getArch() != Triple::x86_64 && !Target.isAArch64()) ||
+             !Target.isOSLinux() || !Target.isOSBinFormatELF()) {
+    Error = "PTSan requires an x86-64 or AArch64 Linux ELF target";
   } else if (ClLAM && Target.getArch() != Triple::x86_64) {
     Error = "PTSan LAM mode requires an x86-64 target";
   } else {
@@ -1092,14 +1364,17 @@ PointerTagSanitizerPass::run(Module &M, ModuleAnalysisManager &AM) {
 
   DBG(errs() << "#################################\n"<< M << "\n##########################\n");
   // Reject unsupported targets before the constructor modifies the module.
-  validatePTSanTarget(M);
+  if (!ClDisable)
+    validatePTSanTarget(M);
 
   // Expose relative loads before discovering checks and strips.
   bool Modified = !ClDisable && lowerLoadRelativeIntrinsics(M);
-  if (Modified)
+  if (Modified) {
     AM.invalidate(M, PreservedAnalyses::none());
+  }
 
   PointerTagSanitizer PTSan(M);
+  PTSan.setRuntimeFlags();
   if(ClDisable) {
     INFO(llvm::errs() << "Disabled. Bailing\n");
     return PreservedAnalyses::all();
@@ -1108,15 +1383,6 @@ PointerTagSanitizerPass::run(Module &M, ModuleAnalysisManager &AM) {
   Modified |= PTSan.sanitizeModule();
 
   auto shouldStopAfter = [](StringRef Phase) {
-    if (ClStopAfter.empty())
-      return false;
-    if (ClStopAfter != "prepare" && ClStopAfter != "discovery" &&
-        ClStopAfter != "optimization" &&
-        ClStopAfter != "metadata-lowering" &&
-        ClStopAfter != "late-optimization" && ClStopAfter != "lowering") {
-      report_fatal_error(Twine("unknown -ptsan-stop-after phase: ") +
-                         ClStopAfter);
-    }
     return ClStopAfter == Phase;
   };
 
@@ -1128,13 +1394,20 @@ PointerTagSanitizerPass::run(Module &M, ModuleAnalysisManager &AM) {
   PTSanLateOptimizationPass LateOptimization;
   PTSanLoweringPass Lowering;
 
+  // Prepare raw signal entries after global instrumentation and before the
+  // function pipeline, which skips the generated uninstrumented wrappers.
+  Modified |= Preparation.run(M);
+
   for (Function &F : M) {
-    if (F.empty())
+    if (F.empty()) {
       continue;
-    if (F.hasFnAttribute(Attribute::DisableSanitizerInstrumentation))
+    }
+    if (F.hasFnAttribute(Attribute::DisableSanitizerInstrumentation)) {
       continue;
-    if (PTSan.isInstr(&F))
+    }
+    if (PTSan.isInstr(&F)) {
       continue;
+    }
 
     DBG(errs() << "\n\n-----------------------------------------\n");
     INFO(errs() << "Running PTSan phases on " << F.getName() << "\n");
@@ -1144,12 +1417,14 @@ PointerTagSanitizerPass::run(Module &M, ModuleAnalysisManager &AM) {
     {
       PTSanAnalysisState PTA(F, PTSan, TLI);
       Modified |= Preparation.run(PTA);
-      if (shouldStopAfter("prepare"))
+      if (shouldStopAfter("prepare")) {
         continue;
+      }
 
       Modified |= Discovery.run(PTA);
-      if (shouldStopAfter("discovery"))
+      if (shouldStopAfter("discovery")) {
         continue;
+      }
     }
 
     // Discovery rewrites pointer sources through SourceAnchors. Rebuild the
@@ -1157,17 +1432,26 @@ PointerTagSanitizerPass::run(Module &M, ModuleAnalysisManager &AM) {
     // expression rooted at the pre-anchor source.
     PTSanAnalysisState PTA(F, PTSan, TLI);
     Modified |= Optimization.run(PTA);
-    if (shouldStopAfter("optimization"))
+    if (shouldStopAfter("optimization")) {
       continue;
+    }
 
     Modified |= MetadataLowering.run(PTA);
-    if (shouldStopAfter("metadata-lowering"))
+    if (shouldStopAfter("metadata-lowering")) {
       continue;
+    }
 
     Modified |= LateOptimization.run(PTA);
-    if (shouldStopAfter("late-optimization"))
+    if (shouldStopAfter("late-optimization")) {
       continue;
+    }
 
+    // Generated musl initializer replay precedes TLS. Its memory accesses still
+    // get normal checks, but the libc nesting counter does not exist yet.
+    if (ClValidate && !F.hasFnAttribute("ptsan-pre-tls")) {
+      PTSanIRB IRB(PTSan, &*F.getEntryBlock().getFirstInsertionPt());
+      IRB.CreateCall(PTSan.ValidateFunctionStart);
+    }
     Modified |= Lowering.run(PTA, FAM);
   }
 

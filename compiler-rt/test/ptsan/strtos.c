@@ -4,6 +4,11 @@
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 // RUN: cat out.txt | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -g -O2 -I%crt_src/include -I%crt_src/lib -o %exe %s
+// RUN: ./%exe 2> err.txt 1> out.txt
+// RUN: cat err.txt | FileCheck %s --check-prefix=ERR
+// RUN: cat out.txt | FileCheck %s
+
 // ERR: Unreclaimed IDs at exit: 0
 
 // Thanks chatGPT!
@@ -15,12 +20,6 @@
 #include <assert.h>
 
 
-// Need to undef this so we can noinline it for optimization-fighting purposes
-#undef get_id
-uint64_t __attribute__((noinline)) get_id(void *ptr) {
-  return (uint64_t)ptr >> 48;
-}
-
 /* ──────────────────────────────────────────────────────────── */
 /* 1) strtol / strtoul / strtoll / strtoull                     */
 /* ──────────────────────────────────────────────────────────── */
@@ -31,7 +30,7 @@ static void test_strtol_literals(void)
 
   char s1[] = "12345xyz";
   char *end;
-  uint16_t s1ID = get_id(s1);
+  PTSanID s1ID = get_id(s1);
   assert(s1ID > 0);
   long l = strtol(s1, &end, 10);
   assert(s1ID == get_id(s1) && s1ID == get_id(end));
@@ -39,7 +38,7 @@ static void test_strtol_literals(void)
   // CHECK: strtol  : l  = 12345,           tail="xyz"
 
   char s2[] = "0xFFdead+beef";
-  uint16_t s2ID = get_id(s2);
+  PTSanID s2ID = get_id(s2);
   assert(s2ID > 0);
   unsigned long ul = strtoul(s2, &end, 0);
   assert(s2ID == get_id(s2) && s2ID == get_id(end));
@@ -47,7 +46,7 @@ static void test_strtol_literals(void)
   // CHECK: strtoul : ul = 0xffdead,        tail="+beef"
 
   char s3[] = "-0777junk";
-  uint16_t s3ID = get_id(s3);
+  PTSanID s3ID = get_id(s3);
   assert(s3ID > 0);
   long long ll = strtoll(s3, &end, 0);
   assert(s3ID == get_id(s3) && s3ID == get_id(end));
@@ -55,7 +54,7 @@ static void test_strtol_literals(void)
   // CHECK: strtoll : ll = -511 (oct),  tail="junk"
 
   char s4[] = "18446744073709551615END";
-  uint16_t s4ID = get_id(s4);
+  PTSanID s4ID = get_id(s4);
   assert(s4ID > 0);
   unsigned long long ull = strtoull(s4, &end, 10);
   assert(s4ID == get_id(s4) && s4ID == get_id(end));
@@ -73,7 +72,7 @@ static void test_strtod_variants(void)
 
   char s5[] = "3.14159pi";
   char *end;
-  uint16_t id5 = get_id(s5);
+  PTSanID id5 = get_id(s5);
   assert(id5 > 0);
   double d = strtod(s5, &end);
   assert(id5 == get_id(s5) && id5 == get_id(end));
@@ -81,7 +80,7 @@ static void test_strtod_variants(void)
   // CHECK: strtod  : d = 3.14159, tail="pi"
 
   char s6[] = "6.02e23junk";
-  uint16_t id6 = get_id(s6);
+  PTSanID id6 = get_id(s6);
   assert(id6 > 0);
   float f = strtof(s6, &end);
   assert(id6 == get_id(s6) && id6 == get_id(end));
@@ -98,7 +97,7 @@ static void test_chained_strtol_add(void)
   puts("\n=== chained strtol():  \"123+456\" ===");
 
   char expr[] = "123+456";
-  uint16_t id = get_id(expr);
+  PTSanID id = get_id(expr);
   assert(id > 0);
   char *p    = NULL;
 
@@ -121,7 +120,7 @@ static void test_mixed_bases_strtoull(void)
   puts("\n=== chained strtoull() with mixed bases ===");
 
   char buf[] = "0xFF,0755,42";
-  uint16_t id = get_id(buf);
+  PTSanID id = get_id(buf);
   assert(id > 0);
   char *p = buf;
 

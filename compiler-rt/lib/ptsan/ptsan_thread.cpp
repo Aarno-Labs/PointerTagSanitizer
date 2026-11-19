@@ -18,12 +18,14 @@
 #include "ptsan_constants.h"
 #include "ptsan_bounds.h"
 #include "ptsan_ptr_utils.h"
+#include "ptsan_signal.h"
 #include "sanitizer_common/sanitizer_tls_get_addr.h"
-#ifdef PTSAN_MUSL_INTERCEPTION
-#include "ptsan_musl_internal.h"
-#endif
 
 namespace __ptsan {
+
+extern "C" {
+SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL StackIDLog ptsan_stack_id_log;
+}
 
 volatile u64 num_threads = 0;
 bool multithreaded = false;
@@ -35,7 +37,7 @@ struct TLSCallbacks {
 };
 
 // Zero-initialized storage, with no dynamic constructor that could reset early
-// registrations. Module constructors register before application threads start.
+// registrations. Musl registers before TLS; host libc uses module constructors.
 static InternalMmapVectorNoCtor<TLSCallbacks> TLSInitializers;
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
@@ -53,17 +55,23 @@ void PTSanThread::InitTLS() {
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
-void ptsan_initialize_tls(u16 *id, void *base, u64 size) {
+void ptsan_initialize_tls(PTSanID *id, void *base, u64 size, u64 alignment) {
   // Coalesced definitions can initialize the same ID slot more than once.
   if (*id != 0) {
     return;
   }
 
-  *id = ptsan_get_next_nonstack_id(base, size, FREE_TY::NONE);
+  // Main thread tls initialization can come before our cache machinery
+  // is set up; in that case, get ids straight from the pool
+  if (!GetCurrentThread()) {
+    *id = get_id_direct(base, size, FREE_TY::NONE, alignment);
+  } else {
+    *id = ptsan_get_next_nonstack_id(base, size, FREE_TY::NONE, alignment);
+  }
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE
-void ptsan_destroy_tls(u16 *id, void *base) {
+void ptsan_destroy_tls(PTSanID *id, void *base) {
   if (*id == 0) {
     return;
   }
@@ -73,57 +81,58 @@ void ptsan_destroy_tls(u16 *id, void *base) {
   *id = 0;
 }
 
-static int InitStackIDBucket() {
-  for (u32 i = 0; i < ptsan_active_stack_id_buckets; i++) {
-    StackIDBucket &B = StackIDBuckets[i];
+static StackIDBucket *InitStackIDBucket(RandomStream &Random) {
+  if (!ClStackIDThreadBuckets) {
+    return nullptr;
+  }
+  u32 Index = ClRandomizeIDs
+                  ? Random.bounded(ClStackIDThreadBuckets)
+                  : 0;
+  for (u32 Remaining = ClStackIDThreadBuckets; Remaining; --Remaining) {
+    StackIDBucket *Bucket = &StackIDBuckets[Index];
     // Claim exclusively and acquire the previous owner's cleanup.
-    if (__atomic_exchange_n(&B.avaliable, false, __ATOMIC_ACQUIRE)) {
-      return (int)i;
+    if (__atomic_exchange_n(&Bucket->avaliable, false, __ATOMIC_ACQUIRE)) {
+      return Bucket;
+    }
+    if (++Index == ClStackIDThreadBuckets) {
+      Index = 0;
     }
   }
-
-  // No more buckets :(
-  return -1;
+  return nullptr;
 }
 
 PTSanThread *PTSanThread::Create(thread_callback_t start_routine,
                                  void *arg) {
   u64 old_num_threads = __atomic_fetch_add(&num_threads, 1, __ATOMIC_RELAXED);
   if (old_num_threads > 0) {
+    if (!multithreaded &&
+        MultithreadedIDCacheCapacity != NormalIDCacheCapacity) {
+      // Before publishing the second thread, return the sole thread's larger
+      // single-thread batches so every cache starts the multithreaded phase at
+      // its smaller capacity.
+      ScopedSignalBlock block;
+      PTSanThread *current = GetCurrentThread();
+      CHECK(current);
+      current->IdCache.release();
+      current->IdCache.setActiveCapacity(MultithreadedIDCacheCapacity);
+    }
     multithreaded = true;
   }
 
   uptr PageSize = GetPageSizeCached();
   uptr size = RoundUpTo(sizeof(PTSanThread), PageSize);
   PTSanThread *thread = (PTSanThread*)MmapOrDie(size, __func__);
+  thread->IdCache.initialize(multithreaded ? MultithreadedIDCacheCapacity
+                                           : NormalIDCacheCapacity);
+  thread->Random.initialize();
   thread->start_routine_ = start_routine;
   thread->arg_ = arg;
   thread->destructor_iterations_ = GetPthreadDestructorIterations();
-  thread->stack_id_bucket_no = InitStackIDBucket();
+  PTSanThread *Current = GetCurrentThread();
+  thread->stack_id_bucket =
+      InitStackIDBucket(Current ? Current->Random : thread->Random);
 
   return thread;
-}
-
-void PTSanThread::SetThreadStack() {
-#ifdef PTSAN_MUSL_INTERCEPTION
-  if (!IsMainThread()) {
-    // Avoid passing a raw runtime-local pthread_attr_t to instrumented musl.
-    void *top;
-    uptr size;
-    ptsan_musl_thread_stack(&top, &size);
-    stack_.top = get_addr(top);
-    stack_.bottom = stack_.top - size;
-  } else
-#endif
-  {
-    GetThreadStackTopAndBottom(IsMainThread(), &stack_.top, &stack_.bottom);
-  }
-  int local;
-  CHECK(AddrIsInStack((uptr)&local));
-}
-
-void PTSanThread::Init() {
-  SetThreadStack();
 }
 
 void PTSanThread::TSDDtor(void *tsd) {
@@ -132,15 +141,27 @@ void PTSanThread::TSDDtor(void *tsd) {
 }
 
 void PTSanThread::Destroy() {
+  // Exit hooks keep signals blocked and this thread current through ID cleanup.
   // The glibc final-iteration TSD hook still has an ordering hole for user
   // destructors that re-register themselves through that same iteration.
   for (const auto &module : TLSInitializers) {
     module.destroy();
   }
   // Nonlocal exits can leave frame IDs live until thread teardown.
-  RestoreStackIDCheckpoint(*this, {});
-  slow_stack_ids.Destroy();
-  repeatable_alloca_ids.Destroy();
+  ptsan_free_stack_ids(0);
+  // pthread_exit can bypass fast-frame epilogues. Retire their spans before
+  // another thread claims this bucket, retaining decode bases and origins.
+  if (stack_id_bucket) {
+    for (u64 id = stack_id_bucket->start; id < ptsan_next_stack_id; ++id) {
+      ptsan_bounds[id].span = 0;
+    }
+  }
+  IdCache.release();
+#ifdef PTSAN_MUSL_INTERCEPTION
+  SignalIdCache.release();
+#endif
+  ClearCurrentThread();
+  ptsan_stack_id_log.release();
   Release();
   DTLS_Destroy();
 }
@@ -148,8 +169,8 @@ void PTSanThread::Destroy() {
 void PTSanThread::Release() {
   __atomic_fetch_sub(&num_threads, 1, __ATOMIC_RELAXED);
 
-  if (stack_id_bucket_no >= 0) {
-    __atomic_store_n(&StackIDBuckets[stack_id_bucket_no].avaliable, true,
+  if (stack_id_bucket) {
+    __atomic_store_n(&stack_id_bucket->avaliable, true,
                      __ATOMIC_RELEASE);
   }
 
@@ -173,21 +194,6 @@ thread_return_t PTSanThread::ThreadStart() {
 int PTSanThread::ThreadStartC11() {
   // musl passes C11 callbacks through __pthread_create's pthread signature.
   return reinterpret_cast<int (*)(void *)>(start_routine_)(arg_);
-}
-
-PTSanThread::StackBounds PTSanThread::GetStackBounds() const {
-  return {stack_.bottom, stack_.top};
-}
-
-uptr PTSanThread::stack_top() { return GetStackBounds().top; }
-
-uptr PTSanThread::stack_bottom() { return GetStackBounds().bottom; }
-
-bool PTSanThread::AddrIsInStack(uptr addr) {
-  const auto bounds = GetStackBounds();
-  // Stack membership depends on addresses, not the IDs carried by pointers.
-  return get_addr(addr) >= get_addr(bounds.bottom) &&
-         get_addr(addr) < get_addr(bounds.top);
 }
 
 } // namespace __ptsan

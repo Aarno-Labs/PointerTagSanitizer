@@ -18,6 +18,7 @@
 // Both must access the same raw storage while escaped pointers retain its ID.
 #include <assert.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 #include <stdio.h>
 
 struct matrices {
@@ -27,7 +28,7 @@ struct matrices {
 static volatile unsigned column = 7;
 
 __attribute__((noinline)) static unsigned id_of(const void *p) {
-  return (uintptr_t)p >> 48;
+  return get_id(p);
 }
 
 __attribute__((noinline)) static void copy_column(unsigned i) {

@@ -14,7 +14,7 @@
 // initial static implementation mostly uses the linker's --wrap support;
 // memcpy/memmove/memset references are redirected by the PTSan pass instead.
 // This avoids dlsym-based interception and its dependency on a dynamic loader.
-// Raw musl syscall boundaries live in ptsan_musl_syscalls.cpp.
+// Raw musl syscall boundaries live in ptsan_linux_syscalls.cpp.
 //
 //===----------------------------------------------------------------------===//
 
@@ -22,6 +22,7 @@
 #include "../ptsan_bounds.h"
 #include "../ptsan_ptr_utils.h"
 #include "../ptsan_thread.h"
+#include "../ptsan_signal.h"
 #include "../ptsan_musl_internal.h"
 
 #include "sanitizer_common/sanitizer_linux.h"
@@ -62,17 +63,10 @@ DECLARE_REAL(void *, __libc_realloc, void *ptr, uptr size)
 DECLARE_REAL(void, free, void *ptr)
 DECLARE_REAL(void, __libc_free, void *ptr)
 DECLARE_REAL(uptr, malloc_usable_size, void *ptr)
-DECLARE_REAL(int, memcmp, const void *left, const void *right, uptr size)
-DECLARE_REAL(void *, memchr, const void *source, int character, uptr size)
 DECLARE_REAL(void *, memccpy, void *dest, const void *source, int character,
              uptr size)
-DECLARE_REAL(uptr, strlen, const char *source)
-DECLARE_REAL(int, strcmp, const char *left, const char *right)
-DECLARE_REAL(int, strncmp, const char *left, const char *right, uptr size)
 DECLARE_REAL(char *, stpcpy, char *dest, const char *source)
 DECLARE_REAL(char *, __stpcpy, char *dest, const char *source)
-DECLARE_REAL(char *, strchrnul, const char *source, int character)
-DECLARE_REAL(char *, __strchrnul, const char *source, int character)
 DECLARE_REAL(uptr, strlcpy, char *dest, const char *source, uptr size)
 DECLARE_REAL(char *, stpncpy, char *dest, const char *source, uptr size)
 DECLARE_REAL(char *, __stpncpy, char *dest, const char *source, uptr size)
@@ -95,6 +89,7 @@ extern char *__progname_full;
 extern char **__environ;
 extern volatile int __thread_list_lock;
 extern void *ThreadListLockProxy asm("__thread_list_lock.ptsan.ptr");
+extern void *MainTSDProxy asm("__pthread_tsd_main.ptsan.ptr");
 
 void _init() __attribute__((weak));
 extern void (*const __init_array_start)(void);
@@ -108,12 +103,38 @@ extern "C" {
 void *REAL(memcpy)(void *dest, const void *src, uptr size) asm("memcpy");
 void *REAL(memmove)(void *dest, const void *src, uptr size) asm("memmove");
 void *REAL(memset)(void *dest, int value, uptr size) asm("memset");
+void *REAL(__tls_get_addr)(const uptr *index) asm("__tls_get_addr");
 }
 
 static int CapturedArgc;
 static char **CapturedArgv;
 static int (*CapturedMain)(int, char **, char **);
 static char **InitialEnvironment;
+
+struct GlobalInitializer {
+  void (*externs)();
+  void (*tags)();
+  void (*pointers)();
+};
+extern "C" {
+extern const GlobalInitializer __start_ptsan_global_init[]
+    __attribute__((weak, visibility("hidden")));
+extern const GlobalInitializer __stop_ptsan_global_init[]
+    __attribute__((weak, visibility("hidden")));
+}
+
+static void initializeGlobals() {
+  InitializeSharedConstantRanges();
+  for (auto *module = __start_ptsan_global_init;
+       module != __stop_ptsan_global_init; ++module)
+    module->externs();
+  for (auto *module = __start_ptsan_global_init;
+       module != __stop_ptsan_global_init; ++module)
+    module->tags();
+  for (auto *module = __start_ptsan_global_init;
+       module != __stop_ptsan_global_init; ++module)
+    module->pointers();
+}
 
 static int callMain(int argc, char **argv, char **envp) {
   // Musl saved this raw envp before __libc_start_init. Reuse its startup ID,
@@ -124,7 +145,9 @@ static int callMain(int argc, char **argv, char **envp) {
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE int __wrap___libc_start_main(
     int (*main)(int, char **, char **), int argc, char **argv, void (*init)(),
     void (*fini)(), void (*ldso_fini)()) {
-  // TLS and the ID tables do not exist yet. Keep musl's startup inputs raw:
+  __ptsan_init_ids();
+  initializeGlobals();
+  // TLS does not exist yet. Keep musl's startup inputs raw:
   // its uninstrumented __init_libc reads argv[0] to initialize program names.
   CapturedArgc = argc;
   CapturedArgv = argv;
@@ -132,19 +155,39 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE int __wrap___libc_start_main(
   return REAL(__libc_start_main)(callMain, argc, argv, init, fini, ldso_fini);
 }
 
-static void initializeArgumentStrings() {
-  // The kernel supplied writable strings whose lifetime is the whole process.
-  // Register them like globals, independently of main's argv-array source ID.
+static void initializeStartupStrings() {
+  // Treat the initial argument/environment strings as one process-lifetime
+  // object, asserting contiguity below. Perl computes its length across strings
+  // and overwrites it for $0; both operations need a shared ID and bounds.
+  // XXX: If it ever matters, we can add a cli arg to give each entry
+  // its own bounds
+  char **env = __environ;
+  char *begin = CapturedArgc > 0 ? CapturedArgv[0] : env[0];
+  uptr end = (uptr)begin;
   for (int i = 0; i < CapturedArgc; ++i) {
     char *str = CapturedArgv[i];
-    u16 id = ptsan_get_next_global_id(str, internal_strlen(str) + 1);
+    CHECK_EQ((uptr)str, end);
+    end += internal_strlen(str) + 1;
+  }
+  uptr count = 0;
+  for (; env[count]; ++count) {
+    CHECK_EQ((uptr)env[count], end);
+    end += internal_strlen(env[count]) + 1;
+  }
+
+  PTSanID id = begin ? ptsan_get_next_global_id(begin, end - (uptr)begin) : 0;
+  for (int i = 0; i < CapturedArgc; ++i) {
+    char *str = CapturedArgv[i];
     CapturedArgv[i] = set_id(str, id);
+  }
+  for (uptr i = 0; i < count; ++i) {
+    env[i] = set_id(env[i], id);
   }
 
   // __init_libc already saved raw aliases of argv[0]. The short name points
   // inside the full name, so both must retain that string's ID. With no argv
   // entries musl instead uses AT_EXECFN (or an empty-string fallback).
-  u16 nameID;
+  PTSanID nameID;
   if (CapturedArgc > 0) {
     CHECK(__progname_full == clear_id(CapturedArgv[0]));
     nameID = get_id(CapturedArgv[0]);
@@ -154,38 +197,28 @@ static void initializeArgumentStrings() {
   }
   __progname_full = set_id(__progname_full, nameID);
   __progname = set_id(__progname, nameID);
-}
-
-static void initializeEnvironment() {
-  // __init_libc saved the kernel's environment array in __environ. Like argv
-  // strings, its entries live for the whole process and include a terminator.
-  char **env = __environ;
-  uptr count = 0;
-  for (; env[count]; ++count) {
-    char *str = env[count];
-    u16 id = ptsan_get_next_global_id(str, internal_strlen(str) + 1);
-    env[count] = set_id(str, id);
-  }
 
   // Include the terminating null slot, even for an empty environment. Public
   // environ aliases this same variable, so both names see the tagged array.
-  u16 id = ptsan_get_next_global_id(env, (count + 1) * sizeof(char *));
-  __environ = set_id(env, id);
+  PTSanID arrayID = ptsan_get_next_global_id(env, (count + 1) * sizeof(char *));
+  __environ = set_id(env, arrayID);
   InitialEnvironment = __environ;
 }
 
 static void initializeAuxiliaryVector() {
   // The kernel placed key/value pairs after envp's null slot. __init_libc
-  // saved this array before IDs existed; register the terminating pair too.
+  // saved this array as a raw pointer; register the terminating pair too.
   size_t *auxv = ptsan_musl_get_auxv();
   uptr count = 0;
   uptr phnum = 0;
   uptr phent = 0;
   for (; auxv[count] != AT_NULL; count += 2) {
-    if (auxv[count] == AT_PHNUM)
+    if (auxv[count] == AT_PHNUM) {
       phnum = auxv[count + 1];
-    if (auxv[count] == AT_PHENT)
+    }
+    if (auxv[count] == AT_PHENT) {
       phent = auxv[count + 1];
+    }
   }
 
   // Entry order is not significant; collect the table dimensions before
@@ -215,16 +248,15 @@ static void initializeAuxiliaryVector() {
     default:
       continue;
     }
-    u16 id = ptsan_get_next_global_id(ptr, size);
+    PTSanID id = ptsan_get_next_global_id(ptr, size);
     auxv[i + 1] = (size_t)set_id(ptr, id);
   }
-  u16 id = ptsan_get_next_global_id(auxv, (count + 2) * sizeof(size_t));
+  PTSanID id = ptsan_get_next_global_id(auxv, (count + 2) * sizeof(size_t));
   ptsan_musl_set_auxv(set_id(auxv, id));
 }
 
 static void initializeStartupMemory() {
-  initializeArgumentStrings();
-  initializeEnvironment();
+  initializeStartupStrings();
   initializeAuxiliaryVector();
 }
 
@@ -234,7 +266,7 @@ struct PhdrCallbackContext {
 };
 
 static int callPhdrCallback(struct dl_phdr_info *info, size_t size, void *data) {
-  auto *context = static_cast<PhdrCallbackContext *>(data);
+  auto *context = (PhdrCallbackContext *)data;
   auto *raw_info = clear_id(info);
   const auto *phdrs = clear_id(raw_info->dlpi_phdr);
   for (uptr i = 0; i < raw_info->dlpi_phnum; ++i) {
@@ -260,39 +292,43 @@ __wrap_dl_iterate_phdr(PhdrCallback callback, void *data) {
   return REAL(dl_iterate_phdr)(callPhdrCallback, &context);
 }
 
-// PTSan global proxy constructors use priorities 0 and 1.  Finish runtime
-// initialization immediately after them, before ordinary application
-// constructors run.
+// Finish the libc-dependent runtime setup before ordinary application
+// constructors. Global proxies and initializer pointers are already tagged.
 __attribute__((constructor(2))) static void finishPTSanInitialization() {
   // This global is defined in the uninstrumented __init_tls object. Publish
-  // its ID after ordinary global constructors have initialized extern proxies.
+  // its ID after early global initialization has populated extern proxies.
   void *lock = (void *)&__thread_list_lock;
   ThreadListLockProxy = set_id(
       lock, ptsan_get_next_global_id(lock, sizeof(__thread_list_lock)));
-  // __init_tp saved this address before global proxies were initialized.
+  // The uninstrumented __init_tp saved a raw global-locale address.
   // Let instrumented musl install the normal tagged global-locale pointer.
   uselocale(LC_GLOBAL_LOCALE);
   __ptsan_finish_instrumented_libc_init();
 }
 
 // musl does not process .preinit_array.  __libc_start_init runs after musl has
-// initialized TLS and its own process state, but before it invokes application
-// constructors, which is the point at which the PTSan runtime must start.
+// initialized TLS and its own process state, but before application constructors.
+// The allocator and ordinary globals were initialized before __init_libc;
+// initialize thread-local IDs and the libc-dependent runtime here.
 //
 // This is musl's libc_start_init, with the PTSan initialization call added.
 // Keep the constructor iteration in sync with musl src/env/__libc_start_main.c.
 extern "C" __attribute__((visibility("hidden"))) void __libc_start_init() {
+  PTSanThread::InitTLS();
+  ptsan_enable_libc_instr();
   __ptsan_init();
   void *self = ptsan_musl_self();
   ptsan_musl_init_main_thread(
       set_id(self, ptsan_get_next_global_id(self, ptsan_musl_thread_size())));
   initializeStartupMemory();
-  if (_init)
+  if (_init) {
     _init();
+  }
   uptr current = (uptr)&__init_array_start;
   const uptr end = (uptr)&__init_array_end;
-  for (; current < end; current += sizeof(void (*)()))
+  for (; current < end; current += sizeof(void (*)())) {
     (*(void (**)())current)();
+  }
 }
 
 static bool bypassAllocatorMetadata() {
@@ -300,20 +336,19 @@ static bool bypassAllocatorMetadata() {
   return !ptsan_initialized || ptsan_init_is_running || ptsan_in_libc;
 }
 
-static void *tagAllocation(void *ptr, uptr size) {
+static void *tagAllocation(void *ptr, uptr size, uptr alignment) {
   if (!ptr || bypassAllocatorMetadata()) {
     return ptr;
   }
 
   // Keep the backing mapping's ID alive for allocator metadata. Callers get
   // a separate ID covering only the allocation returned by malloc.
-  return tag_with_next_id(clear_id(ptr), size, FREE_TY::MALLOC);
+  return tag_with_next_id(clear_id(ptr), size, FREE_TY::MALLOC, alignment);
 }
 
 static void checkMemoryRange(const void *ptr, uptr size, const char *kind) {
-  if (!ptsan_initialized || ptsan_init_is_running) {
-    return;
-  }
+  // Metadata is ready before musl startup, in both strict and non-strict modes.
+  // These checks do not depend on the later libc-dependent runtime setup.
   check_range_and_report(0, ptr, size, kind);
 }
 
@@ -330,7 +365,7 @@ static void *wrapMalloc(uptr size, MallocExecutor executor) {
   u32 old_in_libc = ptsan_in_libc++;
   void *ptr = executor(size);
   ptsan_in_libc = old_in_libc;
-  return tagAllocation(ptr, size);
+  return tagAllocation(ptr, size, alignof(max_align_t));
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void *__wrap_malloc(uptr size) {
@@ -354,7 +389,7 @@ static void *wrapCalloc(uptr nmemb, uptr size, CallocExecutor executor) {
   if (__builtin_mul_overflow(nmemb, size, &total)) {
     return ptr;
   }
-  return tagAllocation(ptr, total);
+  return tagAllocation(ptr, total, alignof(max_align_t));
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void *__wrap_calloc(uptr nmemb,
@@ -376,7 +411,7 @@ __wrap_aligned_alloc(uptr alignment, uptr size) {
   u32 old_in_libc = ptsan_in_libc++;
   void *ptr = REAL(aligned_alloc)(alignment, size);
   ptsan_in_libc = old_in_libc;
-  return tagAllocation(ptr, size);
+  return tagAllocation(ptr, size, alignment);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE int
@@ -396,7 +431,7 @@ __wrap_posix_memalign(void **result, uptr alignment, uptr size) {
   }
 
   void **raw_result = (void **)clear_id(result);
-  *raw_result = tagAllocation(*raw_result, size);
+  *raw_result = tagAllocation(*raw_result, size, alignment);
   return 0;
 }
 
@@ -418,12 +453,12 @@ static void *wrapRealloc(void *ptr, uptr size, ReallocExecutor executor) {
   // Keep the application ID here while musl resizes or replaces the storage.
   // tag_realloc updates its lifetime after the no-checks implementation returns.
   if (bypassAllocatorMetadata()) {
-    return executor(clear_id(ptr), size);
+    return executor(ptr, size);
   }
 
   ptsan_validate_allocation(ptr, FREE_TY::MALLOC);
   u32 old_in_libc = ptsan_in_libc++;
-  void *new_ptr = executor(clear_id(ptr), size);
+  void *new_ptr = executor(ptr, size);
   ptsan_in_libc = old_in_libc;
   return tag_realloc(clear_id(new_ptr), ptr, size);
 }
@@ -439,21 +474,21 @@ __wrap___libc_realloc(void *ptr, uptr size) {
 }
 
 static void wrapFree(void *ptr, FreeExecutor executor) {
-  // The wrapper retires the application ID; musl's no-checks implementation
-  // receives the raw address to release the storage.
+  // Musl consumes encoded pointers even in its trusted allocator TUs.
   if (!ptr) {
     return;
   }
   if (bypassAllocatorMetadata()) {
-    executor(clear_id(ptr));
+    executor(ptr);
     return;
   }
 
-  if (ptsan_mark_ptr_freed(ptr, FREE_TY::MALLOC)) {
-    u32 old_in_libc = ptsan_in_libc++;
-    executor(clear_id(ptr));
-    ptsan_in_libc = old_in_libc;
-  }
+  // Do not recycle the decode bias while musl still consumes this encoding.
+  ptsan_validate_allocation(ptr, FREE_TY::MALLOC);
+  u32 old_in_libc = ptsan_in_libc++;
+  executor(ptr);
+  ptsan_in_libc = old_in_libc;
+  ptsan_mark_ptr_freed(ptr, FREE_TY::MALLOC);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __wrap_free(void *ptr) {
@@ -466,25 +501,16 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void __wrap___libc_free(void *ptr) {
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE int __wrap_munmap(void *address,
                                                            uptr size) {
-  if (ptsan_initialized && !ptsan_init_is_running) {
-    ptsan_validate_munmap(address, size);
-  }
-  // Preserve the mapping ID until the syscall handler retires it on success.
+  // The syscall handler validates and retires metadata only after Linux
+  // accepts the request, so failed calls retain their normal errno behavior.
   return REAL(munmap)(address, size);
-}
-
-static bool hasTrackedBounds(const void *ptr) {
-  const u16 id = get_id(ptr);
-  return id != 0 && id != DefaultIDNo;
 }
 
 using LongjmpFunction = NORETURN void (*)(jmp_buf, int);
 
 static NORETURN void wrapLongjmp(LongjmpFunction function, jmp_buf environment,
                                  int value) {
-  if (ptsan_initialized && hasTrackedBounds(environment)) {
-    checkMemoryRange(environment, sizeof(jmp_buf), "read");
-  }
+  checkMemoryRange(environment, sizeof(jmp_buf), "read");
   function(clear_id(environment), value);
 }
 
@@ -500,7 +526,9 @@ __wrap__longjmp(jmp_buf environment, int value) {
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE NORETURN void
 __wrap_siglongjmp(sigjmp_buf environment, int value) {
-  wrapLongjmp(REAL(siglongjmp), environment, value);
+  // Musl's C siglongjmp forwards to the wrapped assembly longjmp boundary.
+  // Keep the encoding until that boundary performs validation and decoding.
+  REAL(siglongjmp)(environment, value);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE int
@@ -511,6 +539,15 @@ __wrap___sigsetjmp_tail(sigjmp_buf environment, int value) {
   internal_sigprocmask(SIG_SETMASK, value ? mask : nullptr,
                       value ? nullptr : mask);
   return value;
+}
+
+// The descriptor is an instrumented C object; the resolver and its DTV use
+// native addresses. The result remains a raw TLS ABI address (for example,
+// dlpi_tls_data), not a capability granting access to an entire TLS module.
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void *
+ptsan_musl_tls_get_addr(const uptr *index) {
+  checkMemoryRange(index, 2 * sizeof(*index), "read");
+  return REAL(__tls_get_addr)(clear_id(index));
 }
 
 // No-checks callers own any necessary validation. Preserve the destination
@@ -532,6 +569,31 @@ ptsan_strip_memset(void *dest, int value, uptr size) {
   REAL(memset)(clear_id(dest), value, size);
   return dest;
 }
+
+#ifdef PTSAN_32_BIT_IDS
+// Selected only by mixed-decoding, no-checks callers. Ordinary callers retain
+// the encoded-only helpers above; the destination representation is unchanged.
+static void *decode_maybe_raw(const void *ptr) {
+  uptr bits = (uptr)ptr;
+  return (bits >> 63) == 0 || bits == ~(uptr)0
+             ? (void *)ptr : (void *)clear_id(ptr);
+}
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void *
+ptsan_raw_strip_memcpy(void *dest, const void *src, uptr size) {
+  REAL(memcpy)(decode_maybe_raw(dest), decode_maybe_raw(src), size);
+  return dest;
+}
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void *
+ptsan_raw_strip_memmove(void *dest, const void *src, uptr size) {
+  REAL(memmove)(decode_maybe_raw(dest), decode_maybe_raw(src), size);
+  return dest;
+}
+extern "C" SANITIZER_INTERFACE_ATTRIBUTE void *
+ptsan_raw_strip_memset(void *dest, int value, uptr size) {
+  REAL(memset)(decode_maybe_raw(dest), value, size);
+  return dest;
+}
+#endif
 
 // musl's architecture-specific memory primitives are assembly and therefore
 // cannot be PTSan-instrumented.  Keep these three narrow boundary wrappers even
@@ -564,10 +626,6 @@ __wrap_memset(void *dest, int value, uptr size) {
 // result or termination point.
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE int
 __wrap_memcmp(const void *left, const void *right, uptr size) {
-  if (!ptsan_initialized) {
-    return REAL(memcmp)(clear_id(left), clear_id(right), size);
-  }
-
   const uptr left_bytes = bytes_remaining(left);
   const uptr right_bytes = bytes_remaining(right);
   if (size > left_bytes) {
@@ -589,10 +647,6 @@ __wrap_memcmp(const void *left, const void *right, uptr size) {
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE int __wrap_strcmp(const char *left,
                                                            const char *right) {
-  if (!ptsan_initialized) {
-    return REAL(strcmp)(clear_id(left), clear_id(right));
-  }
-
   const unsigned char *raw_left = (const unsigned char *)clear_id(left);
   const unsigned char *raw_right = (const unsigned char *)clear_id(right);
   const uptr left_bytes = bytes_remaining(left);
@@ -616,10 +670,6 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE int __wrap_strcmp(const char *left,
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE int
 __wrap_strncmp(const char *left, const char *right, uptr size) {
-  if (!ptsan_initialized) {
-    return REAL(strncmp)(clear_id(left), clear_id(right), size);
-  }
-
   const unsigned char *raw_left = (const unsigned char *)clear_id(left);
   const unsigned char *raw_right = (const unsigned char *)clear_id(right);
   const uptr left_bytes = bytes_remaining(left);
@@ -647,9 +697,6 @@ __wrap_strncmp(const char *left, const char *right, uptr size) {
 // keep those implementation reads outside PTSan's object model.
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr
 __wrap_strlen(const char *source) {
-  if (!ptsan_initialized) {
-    return REAL(strlen)(clear_id(source));
-  }
   return find_cstring_character(source, '\0');
 }
 
@@ -659,10 +706,6 @@ static char *wrapStpcpy(StpcpyFunction function, char *dest,
                         const char *source) {
   // The no-checks body handles word overreads; preserve IDs through the copy
   // and on its returned destination pointer.
-  if (!ptsan_initialized) {
-    return function(dest, source);
-  }
-
   const uptr length = find_cstring_character(source, 0);
   checkMemoryRange(dest, length + 1, "write");
   return function(dest, source);
@@ -678,35 +721,25 @@ __wrap___stpcpy(char *dest, const char *source) {
   return wrapStpcpy(REAL(__stpcpy), dest, source);
 }
 
-using StrchrnulFunction = char *(*)(const char *, int);
-
-static char *wrapStrchrnul(StrchrnulFunction function, const char *source,
-                           int character) {
-  if (!ptsan_initialized) {
-    return function(clear_id(source), character);
-  }
-
+static char *wrapStrchrnul(const char *source, int character) {
   const uptr offset = find_cstring_character(source, character);
   return set_id((char *)(get_addr(source) + offset), get_id(source));
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE char *
 __wrap_strchrnul(const char *source, int character) {
-  return wrapStrchrnul(REAL(strchrnul), source, character);
+  return wrapStrchrnul(source, character);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE char *
 __wrap___strchrnul(const char *source, int character) {
-  return wrapStrchrnul(REAL(__strchrnul), source, character);
+  return wrapStrchrnul(source, character);
 }
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __wrap_strlcpy(char *dest,
                                                              const char *source,
                                                              uptr size) {
   // Preserve IDs in the no-checks body, including its call to checked strlen.
-  if (!ptsan_initialized) {
-    return REAL(strlcpy)(dest, source, size);
-  }
   const uptr source_length = find_cstring_character(source, 0);
   const uptr write_size = size < source_length + 1 ? size : source_length + 1;
   checkMemoryRange(dest, write_size, "write");
@@ -715,10 +748,6 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE uptr __wrap_strlcpy(char *dest,
 
 extern "C" SANITIZER_INTERFACE_ATTRIBUTE void *
 __wrap_memchr(const void *source, int character, uptr size) {
-  if (!ptsan_initialized) {
-    return REAL(memchr)(clear_id(source), character, size);
-  }
-
   const uptr offset = find_bounded_character(source, character, size);
   if (offset == size) {
     return nullptr;
@@ -730,10 +759,6 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE void *
 __wrap_memccpy(void *dest, const void *source, int character, uptr size) {
   // The no-checks body may read whole words past the matching byte. It still
   // preserves the destination ID on a non-null result.
-  if (!ptsan_initialized) {
-    return REAL(memccpy)(dest, source, character, size);
-  }
-
   const uptr offset = find_bounded_character(source, character, size);
   const uptr copy_size = offset == size ? size : offset + 1;
   checkMemoryRange(dest, copy_size, "write");
@@ -746,10 +771,6 @@ static char *wrapStpncpy(StpncpyFunction function, char *dest,
                          const char *source, uptr size) {
   // Preserve IDs through the no-checks copy. Its padding memset uses the
   // no-checks memory wrapper; the full destination range is checked here.
-  if (!ptsan_initialized) {
-    return function(dest, source, size);
-  }
-
   find_bounded_character(source, '\0', size);
   checkMemoryRange(dest, size, "write");
   return function(dest, source, size);
@@ -816,27 +837,25 @@ __wrap___clone(int (*callback)(void *), void *stack, int flags, void *arg,
   }
   va_end(arguments);
 
-  if (ptsan_initialized) {
-    // musl clone assembly stores arg on x86-64, and callback plus arg on
-    // AArch64, below the aligned stack pointer.
-    const uptr aligned_stack = get_addr(stack) & ~(uptr)15;
+  // musl clone assembly stores arg on x86-64, and callback plus arg on
+  // AArch64, below the aligned stack pointer.
+  const uptr aligned_stack = get_addr(stack) & ~(uptr)15;
 #if defined(__aarch64__)
-    constexpr uptr saved_bytes = 2 * sizeof(void *);
+  constexpr uptr saved_bytes = 2 * sizeof(void *);
 #elif defined(__x86_64__)
-    constexpr uptr saved_bytes = sizeof(void *);
+  constexpr uptr saved_bytes = sizeof(void *);
 #else
 #error "Unsupported architecture for the PTSan musl clone boundary"
 #endif
-    void *argument_slot =
-        set_id((void *)(aligned_stack - saved_bytes), get_id(stack));
-    checkMemoryRange(argument_slot, saved_bytes, "write");
+  void *argument_slot =
+      set_id((void *)(aligned_stack - saved_bytes), get_id(stack));
+  checkMemoryRange(argument_slot, saved_bytes, "write");
 
-    if (flags & (CLONE_PIDFD | CLONE_PARENT_SETTID)) {
-      checkMemoryRange(parent_tid, sizeof(pid_t), "write");
-    }
-    if (flags & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID)) {
-      checkMemoryRange(child_tid, sizeof(pid_t), "write");
-    }
+  if (flags & (CLONE_PIDFD | CLONE_PARENT_SETTID)) {
+    checkMemoryRange(parent_tid, sizeof(pid_t), "write");
+  }
+  if (flags & (CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID)) {
+    checkMemoryRange(child_tid, sizeof(pid_t), "write");
   }
 
   if (is_musl_pthread) {
@@ -866,22 +885,26 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE NORETURN void
 __wrap___unmapself(void *base, uptr size) {
   // Detached threads unmap their own stack and exit directly in assembly.
   // There is no return path on which to retire the backing allocation's ID.
+  // This blocks singals permanently for this thread -- until its final exit
   FinishMuslThread();
-  ptsan_retire_mmap_if_exact(base, size);
-  REAL(__unmapself)(clear_id(base), size);
+  // Decode before retirement makes that ID available to another thread.
+  void *raw = clear_id(base);
+  ptsan_retire_mmap_if_exact_direct(base, size);
+  REAL(__unmapself)(raw, size);
 }
 
 static PTSanThread *PTSanThreadInit(void *arg, bool c11) {
   ptsan_in_libc++;
   PTSanThread *thread = (PTSanThread *)arg;
-  thread->Init();
   SetCurrentThread(thread);
   thread->InitTLS();
   // musl's C11 trampoline leaves application signals blocked.
-  if (!c11)
+  if (!c11) {
     SetSigProcMask(&thread->starting_sigset_, nullptr);
-  if (ClLAM)
+  }
+  if (ClLAM) {
     ptsan_enable_lam_u48();
+  }
   ptsan_in_libc--;
   return thread;
 }
@@ -898,6 +921,11 @@ extern "C" SANITIZER_INTERFACE_ATTRIBUTE int
 __wrap___pthread_create(void *thread, void *attr, void *(*callback)(void *),
                        void *arg) {
   ptsan_in_libc++;
+  // pthread_create's object provides a weak, one-slot TSD array for programs
+  // that do not use pthread keys. If key support is linked, its strong proxy
+  // has the full array bounds. Preserve those bounds when musl installs the
+  // array in the main thread during its first transition to threaded mode.
+  const bool initialize_main_tsd = !ptsan_musl_is_threaded();
 
   // AdjustStackSize uses dl_iterate_phdr.  Its callback is part of this
   // uninstrumented runtime, while musl passes it a pointer to an instrumented
@@ -911,17 +939,32 @@ __wrap___pthread_create(void *thread, void *attr, void *(*callback)(void *),
         thread, attr,
         reinterpret_cast<void *(*)(void *)>(PTSanThreadStartC11Func),
         ptsan_thread);
-    if (result != 0)
+    if (initialize_main_tsd && ptsan_musl_is_threaded()) {
+      ptsan_musl_set_current_tsd(MainTSDProxy);
+    }
+    if (result != 0) {
       ptsan_thread->Release();
+    }
     ptsan_in_libc--;
     return result;
   }
 
-  ScopedBlockSignals block(&ptsan_thread->starting_sigset_);
+  // Construction immediately blocks signals in the parent, so the child starts
+  // with application handlers deferred, including asynchronously sent SIGSEGV/
+  // SIGBUS. Scope exit restores the parent's original mask.
+  ScopedSignalBlock block;
+
+  // Pass the pre-blocking mask to the child. PTSanThreadInit restores it after
+  // installing the child's PTSan thread record and initializing tagged TLS.
+  block.copySavedMask(&ptsan_thread->starting_sigset_);
   int result = REAL(__pthread_create)(thread, attr, PTSanThreadStartFunc,
                                      ptsan_thread);
-  if (result != 0)
+  if (initialize_main_tsd && ptsan_musl_is_threaded()) {
+    ptsan_musl_set_current_tsd(MainTSDProxy);
+  }
+  if (result != 0) {
     ptsan_thread->Release();
+  }
   ptsan_in_libc--;
   return result;
 }

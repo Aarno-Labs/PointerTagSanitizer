@@ -5,12 +5,25 @@
 //
 // RUN: %clang_ptsan -O2 -pthread -mllvm -ptsan-stack-temporal-safety=0 %s -o %t
 // RUN: %t 2>&1 | FileCheck %s
-// RUN: %clang_ptsan -O2 -pthread -DTEST_TEMPORAL=1 %s -o %t.temporal
+// RUN: %clang_ptsan -O2 -pthread %s -o %t.temporal
 // RUN: %t.temporal 2>&1 | FileCheck %s
-// RUN: %clang_ptsan -O2 -pthread -DTEST_TEMPORAL=1 -mllvm -ptsan-no-stack-id-fast-path %s -o %t.slow
+// RUN: %clang_ptsan -O2 -pthread -mllvm -ptsan-no-stack-id-fast-path %s -o %t.slow
 // RUN: %t.slow 2>&1 | FileCheck %s
-// RUN: %clang_ptsan -O2 -pthread -DTEST_TEMPORAL=1 -mllvm -ptsan-stack-ids-per-bucket=1 %s -o %t.small
-// RUN: %t.small 2>&1 | FileCheck %s
+// RUN: %clang_ptsan -O2 -pthread -mllvm -ptsan-stack-id-thread-buckets=0 %s -o %t.nobuckets
+// RUN: %t.nobuckets 2>&1 | FileCheck %s
+
+// RUN: %clang_ptsan_id32 -O2 -pthread -mllvm -ptsan-stack-temporal-safety=0 %s -o %t
+// RUN: %t 2>&1 | FileCheck %s
+// RUN: %clang_ptsan_id32 -O2 -pthread %s -o %t.temporal
+// RUN: %t.temporal 2>&1 | FileCheck %s
+// RUN: %clang_ptsan_id32 -O2 -pthread -mllvm -ptsan-no-stack-id-fast-path %s -o %t.slow
+// RUN: %t.slow 2>&1 | FileCheck %s
+// RUN: %clang_ptsan_id32 -O2 -pthread -mllvm -ptsan-stack-id-thread-buckets=0 %s -o %t.nobuckets
+// RUN: %t.nobuckets 2>&1 | FileCheck %s
+// RUN: %clang_raw -fsanitize=ptsan -O2 -pthread %s -o %t.normal
+// RUN: %run %t.normal
+// RUN: %clang_raw -fsanitize=ptsan -O0 -pthread %s -o %t.O0
+// RUN: %run %t.O0
 // CHECK-NOT: Found bad
 // CHECK: setjmp-cleanup-ok
 // CHECK-NOT: Found bad
@@ -24,22 +37,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "Inputs/ptsan_test_interface.h"
 
-extern __thread uint16_t ptsan_next_stack_id;
-extern struct Bounds {
-  uint64_t base, span;
-} ptsan_bounds[65536];
-
-// Read runtime metadata without requesting an application TLS ID for it.
-__attribute__((disable_sanitizer_instrumentation, noinline))
-static uint16_t stack_cursor(void) {
-  return ptsan_next_stack_id;
-}
-
-__attribute__((disable_sanitizer_instrumentation, noinline))
 static int retired(uintptr_t pointer) {
-  unsigned id = pointer >> 48;
-  return id != 0 && ptsan_bounds[id].base == 0 && ptsan_bounds[id].span == 0;
+  unsigned id = get_id(pointer);
+  return id != 0 && ptsan_get_size(id) == 0;
 }
 
 static volatile unsigned count = 5;
@@ -48,6 +50,7 @@ static unsigned iteration;
 static char *retained;
 static char *heap;
 static uintptr_t expired_fixed, expired_dynamic;
+static uintptr_t expired_here[5];
 
 __attribute__((noinline)) static void fill(char *p, unsigned n) {
   p[0] = 17;
@@ -107,11 +110,10 @@ __attribute__((noinline)) static void exercise(unsigned mode) {
   sigjmp_buf env;
   char fixed[32];
   fill(fixed, sizeof(fixed));
-  uint16_t before = stack_cursor();
+  uint64_t before = ptsan_get_stack_cursor();
   iteration = 0;
   for (;;) {
-    // This frame's container survives each jump, including IDs added since
-    // the entry checkpoint. The buffer itself predates setjmp's saved SP.
+    // This allocation predates this iteration's setjmp and must survive it.
     unsigned n = size;
     retained = (char *)alloca(n);
     fill(retained, n);
@@ -124,16 +126,25 @@ __attribute__((noinline)) static void exercise(unsigned mode) {
       value = sigsetjmp(env, mode == 3);
     }
     if (value == 0) {
+      // These allocations are in the destination frame, but after setjmp.
+      // Its saved stack pointer and ownership cursor must discard them.
+      for (unsigned i = 0; i < count; ++i) {
+        char *p = (char *)alloca(size);
+        fill(p, size);
+        expired_here[i] = (uintptr_t)p;
+      }
       frame1(env, 0);
       frame1(env, 1);
       assert(0);
     }
     assert(value == 42);
-    assert(stack_cursor() == before);
+    assert(ptsan_get_stack_cursor() == before);
     assert(retired(expired_dynamic));
-#ifdef TEST_TEMPORAL
+    for (unsigned i = 0; i != 5; ++i) {
+      assert(retired(expired_here[i]));
+    }
+    // Longjmp cleanup clears fixed fast IDs even with temporal safety disabled.
     assert(retired(expired_fixed));
-#endif
     check(fixed, sizeof(fixed));
     check(retained, size);
     check(heap, size);
@@ -144,7 +155,46 @@ __attribute__((noinline)) static void exercise(unsigned mode) {
   }
 }
 
+static uintptr_t before_outer[5], before_inner[5], after_inner[5];
+
+// Two live checkpoints in one frame must retain distinct cursors. Jump first
+// to the inner one, then to the outer one, retiring a different suffix each time.
+__attribute__((noinline)) static void nested_checkpoints(void) {
+  jmp_buf outer, inner;
+  for (unsigned i = 0; i < count; ++i) {
+    char *p = (char *)alloca(size);
+    fill(p, size);
+    before_outer[i] = (uintptr_t)p;
+  }
+  if (setjmp(outer) == 0) {
+    for (unsigned i = 0; i < count; ++i) {
+      char *p = (char *)alloca(size);
+      fill(p, size);
+      before_inner[i] = (uintptr_t)p;
+    }
+    if (setjmp(inner) == 0) {
+      for (unsigned i = 0; i < count; ++i) {
+        char *p = (char *)alloca(size);
+        fill(p, size);
+        after_inner[i] = (uintptr_t)p;
+      }
+      longjmp(inner, 1);
+    }
+    for (unsigned i = 0; i != 5; ++i) {
+      assert(retired(after_inner[i]));
+      check((char *)before_inner[i], size);
+      check((char *)before_outer[i], size);
+    }
+    longjmp(outer, 1);
+  }
+  for (unsigned i = 0; i != 5; ++i) {
+    assert(retired(before_inner[i]));
+    check((char *)before_outer[i], size);
+  }
+}
+
 static void *worker(void *unused) {
+  nested_checkpoints();
   for (unsigned mode = 0; mode != 4; ++mode) {
     exercise(mode);
   }

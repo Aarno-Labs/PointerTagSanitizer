@@ -1,6 +1,8 @@
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s --check-prefixes=CHECK,DEFAULT
 // RUN: %clang_ptsan -O1 -g -o %t %s %S/Inputs/extern_global_direct_bounds_def.c
 // RUN: %t
+
+// RUN: %clang_ptsan_plain -fsanitize-ptsan-32-bit-ids -DPTSAN_TEST_32_BIT_IDS -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s --check-prefixes=CHECK,ID32
 
 extern int G[16];
 extern int Incomplete[];
@@ -30,9 +32,9 @@ int main(void) {
 }
 
 // CHECK-LABEL: define {{.*}}@use_extern_global(
-// CHECK: [[TAGGED:%[A-Za-z0-9_.]+]] = load ptr, ptr @G.ptsan.ptr
 // CHECK-NOT: @ptsan_bounds
-// CHECK: icmp ugt i64 {{%[A-Za-z0-9_.]+}}, 60
+// CHECK-DAG: [[TAGGED:%[A-Za-z0-9_.]+]] = load ptr, ptr @G.ptsan.ptr
+// CHECK-DAG: icmp ugt i64 {{%[A-Za-z0-9_.]+}}, 60
 // CHECK-NOT: @ptsan_bounds
 // CHECK: ptrtoint ptr [[TAGGED]] to i64
 // CHECK-NOT: @ptsan_bounds
@@ -43,8 +45,9 @@ int main(void) {
 // CHECK-LABEL: define {{.*}}@use_incomplete_extern_global(
 // CHECK: [[TAGGED:%[A-Za-z0-9_.]+]] = load ptr, ptr @Incomplete.ptsan.ptr
 // CHECK: @ptsan_bounds
-// CHECK: getelementptr i8, ptr [[TAGGED]]
-// CHECK: ptrtoint ptr {{%[A-Za-z0-9_.]+}} to i64
+// DEFAULT: getelementptr i8, ptr [[TAGGED]]
+// DEFAULT: ptrtoint ptr {{%[A-Za-z0-9_.]+}} to i64
+// ID32: add i64 {{%.*}}, {{%.*}}
 // CHECK: call void @ptsan_complain
 // CHECK: ret void
 

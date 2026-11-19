@@ -4,7 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clangxx_raw -fsanitize=ptsan -O2 -g -S -emit-llvm -o - %s | FileCheck %s
+// RUN: %clangxx_ptsan_plain -O2 -g -S -emit-llvm -o - %s | FileCheck %s
 // RUN: %clangxx_ptsan -O2 -o %exe %s
 // RUN: ./%exe
 

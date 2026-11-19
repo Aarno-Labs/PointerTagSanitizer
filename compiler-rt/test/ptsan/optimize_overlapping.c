@@ -9,20 +9,20 @@
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
 // RUN: ./%exe 16 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
-// RUN: ./%exe 17 2> out.txt
-// RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 20 2> out.txt
-// RUN: cat out.txt | FileCheck %s --check-prefix=BAD
+// RUN: for idx in 17 20; do \
+// RUN:   not ./%exe $idx 1 2> out.txt && FileCheck %s --check-prefix=BAD-POINT < out.txt && \
+// RUN:   not ./%exe $idx 2 2> out.txt && FileCheck %s --check-prefix=BAD-COMPOUND < out.txt && \
+// RUN:   not ./%exe $idx 3 2> out.txt && FileCheck %s --check-prefix=BAD-COMPOUND < out.txt || exit 1; \
+// RUN: done
 
-// BAD: Found bad POINT access
-// BAD: Found bad COMPOUND access
-// BAD: Found bad COMPOUND access
+// BAD-POINT: Found bad POINT access
+// BAD-COMPOUND: Found bad COMPOUND access
 
 // GOOD-NOT: Found bad access
 
 // IR-COND-LABEL: define dso_local void @wider_conditional
-// IR-COND: @ptsan_complain(i32 0,
-// IR-COND: @ptsan_complain(i32 1,
+// IR-COND-DAG: @ptsan_complain(i32 0,
+// IR-COND-DAG: @ptsan_complain(i32 1,
 // IR-COND: define dso_local
 
 // IR-DOM-LABEL: define dso_local void @wider_above
@@ -67,14 +67,20 @@ void __attribute__((noinline)) wider_unconditional(size_t idx, char *buf) {
   *(int *)addr = 0;
 }
 
-void __attribute__((noinline)) outer(int idx) {
+void __attribute__((noinline)) outer(int idx, int which) {
   char buf[20];
   for (int i = 0; i < 20; i++) {
     buf[i] = '-' + i;
   }
-  wider_conditional(idx, buf, true);
-  wider_above(idx, buf, true);
-  wider_unconditional(idx, buf);
+  if (which == 0 || which == 1) {
+    wider_conditional(idx, buf, true);
+  }
+  if (which == 0 || which == 2) {
+    wider_above(idx, buf, true);
+  }
+  if (which == 0 || which == 3) {
+    wider_unconditional(idx, buf);
+  }
 }
 
 int main(int argc, char *argv[]) {
@@ -84,7 +90,7 @@ int main(int argc, char *argv[]) {
   }
 
   int idx = atoi(argv[1]);
-  outer(idx);
+  outer(idx, argc > 2 ? atoi(argv[2]) : 0);
 
   return 0;
 }

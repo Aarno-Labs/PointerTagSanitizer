@@ -9,8 +9,10 @@
 #pragma once
 
 #include "PTSanInternal.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/ValueHandle.h"
 
 namespace llvm::ptsan {
 
@@ -148,9 +150,8 @@ public:
     return Anchor->isCallTo(Anchor->DS.PTSanSource);
   }
 
-  static SourceAnchor create(PointerTagSanitizer &DS, PTSanUtils &PTU,
+  static SourceAnchor create(PointerTagSanitizer &DS, Instruction *IP,
                              Value *Source) {
-    Instruction *IP = PTU.getFirstIPAfter(Source).getIP();
     SourceAnchor Result(Anchor::create(DS, DS.PTSanSource, Source->getType(),
                                        IP, {Source}));
     Source->replaceUsesWithIf(Result.Call, [&](Use &U) {
@@ -168,9 +169,10 @@ public:
   }
 };
 
-// __ptsan_get_id(base) materializes the PTSan ID for a base pointer. For a
-// SourceAnchor this is the allocation's assigned ID; otherwise it is extracted
-// from the tagged pointer.
+// __ptsan_get_id(base) requests the allocation ID without constraining the
+// pointer's representation. Optimization resolves raw-pointer requests through
+// their allocation identity. Lowering handles SourceAnchor IDs and extraction
+// from tagged pointers or their pointer-sized integer representations.
 class GetIDAnchor : public Anchor {
 public:
   GetIDAnchor(Anchor A) : Anchor(A) {}
@@ -181,8 +183,9 @@ public:
 
   static GetIDAnchor create(PointerTagSanitizer &DS, Instruction *IP,
                             Value *Base) {
-    assert(Base->getType()->isPtrOrPtrVectorTy() &&
-           "get-id anchor expects pointer or pointer vector");
+    assert((Base->getType()->isPtrOrPtrVectorTy() ||
+            Base->getType() == DS.U64Ty) &&
+           "get-id anchor expects a pointer or pointer-sized integer");
     Type *IDTy = Base->getType()->getWithNewType(DS.U64Ty);
     return GetIDAnchor(Anchor::create(DS, DS.PTSanGetID, IDTy, IP, {Base}));
   }
@@ -190,7 +193,9 @@ public:
   Value *getBase() const { return Call->getArgOperand(0); }
 };
 
-// Bound anchors return bounds with the same scalar or vector shape as the ID.
+// Bound anchors carry the metadata needed to interpret an object's bounds. In
+// ID32 mode, base anchors return the decode bias D = B - O, and origin anchors
+// return O. All three match the scalar or vector shape of the ID.
 class BoundAnchor : public Anchor {
 public:
   BoundAnchor(Anchor A) : Anchor(A) {}
@@ -198,6 +203,7 @@ public:
   static bool classof(const Anchor *Anchor) {
     return Anchor->isCallTo(Anchor->DS.PTSanLoadBase) ||
            Anchor->isCallTo(Anchor->DS.PTSanLoadSpan) ||
+           Anchor->isCallTo(Anchor->DS.PTSanLoadOrigin) ||
            Anchor->isCallTo(Anchor->DS.PTSanStaticBase) ||
            Anchor->isCallTo(Anchor->DS.PTSanStaticSpan);
   }
@@ -208,20 +214,29 @@ public:
   bool isSpan() const {
     return isCallTo(DS.PTSanLoadSpan) || isCallTo(DS.PTSanStaticSpan);
   }
+  bool isOrigin() const { return isCallTo(DS.PTSanLoadOrigin); }
   HoistTarget getTarget() const { return {Call, AFTER}; }
 };
 
+// Scalar IDs take no mask; an omitted mask for vector IDs means all lanes.
+// Callers with masked accesses must pass their actual active-lane mask.
 class LoadBoundAnchor : public BoundAnchor {
   static LoadBoundAnchor create(PointerTagSanitizer &DS, FunctionCallee Callee,
-                                Instruction *IP, GetIDAnchor ID, Value *Mask) {
-    assert(ID.Call->getType()->isVectorTy() == (Mask != nullptr) &&
-           "vector bounds loads require a mask");
-    SmallVector<Value *> Args = {ID.Call};
+                                Type *ScalarTy, Instruction *IP, Value *ID,
+                                Value *Mask) {
+    assert(ID->getType()->getScalarType() == DS.U64Ty &&
+           "load-bound anchor expects an i64 ID");
+    if (ID->getType()->isVectorTy() && !Mask) {
+      Mask = Constant::getAllOnesValue(ID->getType()->getWithNewType(DS.BoolTy));
+    }
+    assert(ID->getType()->isVectorTy() == (Mask != nullptr) &&
+           "only vector bounds loads have a mask");
+    SmallVector<Value *> Args = {ID};
     if (Mask) {
       Args.push_back(Mask);
     }
-    return LoadBoundAnchor(
-        Anchor::create(DS, Callee, ID.Call->getType(), IP, Args));
+    Type *ReturnTy = ID->getType()->getWithNewType(ScalarTy);
+    return LoadBoundAnchor(Anchor::create(DS, Callee, ReturnTy, IP, Args));
   }
 
 public:
@@ -229,23 +244,30 @@ public:
 
   static bool classof(const Anchor *Anchor) {
     return Anchor->isCallTo(Anchor->DS.PTSanLoadBase) ||
-           Anchor->isCallTo(Anchor->DS.PTSanLoadSpan);
+           Anchor->isCallTo(Anchor->DS.PTSanLoadSpan) ||
+           Anchor->isCallTo(Anchor->DS.PTSanLoadOrigin);
   }
 
   static LoadBoundAnchor createBase(PointerTagSanitizer &DS, Instruction *IP,
-                                    GetIDAnchor ID, Value *Mask = nullptr) {
-    return create(DS, DS.PTSanLoadBase, IP, ID, Mask);
+                                    Value *ID, Value *Mask = nullptr) {
+    return create(DS, DS.PTSanLoadBase, DS.U64Ty, IP, ID, Mask);
   }
 
   static LoadBoundAnchor createSpan(PointerTagSanitizer &DS, Instruction *IP,
-                                    GetIDAnchor ID, Value *Mask = nullptr) {
-    return create(DS, DS.PTSanLoadSpan, IP, ID, Mask);
+                                    Value *ID, Value *Mask = nullptr) {
+    return create(DS, DS.PTSanLoadSpan, DS.U64Ty, IP, ID, Mask);
+  }
+
+  static LoadBoundAnchor createOrigin(PointerTagSanitizer &DS, Instruction *IP,
+                                      Value *ID, Value *Mask = nullptr) {
+    assert(Cl32BitIDs && "origin anchors are only used by ID32");
+    return create(DS, DS.PTSanLoadOrigin, DS.U32Ty, IP, ID, Mask);
   }
 
   // Load-bound IDs begin as GetIDAnchors, but late optimization may replace
   // them with materialized SSA values such as PHIs or selects.
   Value *getID() const { return Call->getArgOperand(0); }
-  bool isVector() const { return Call->arg_size() == 2; }
+  bool isVector() const { return getID()->getType()->isVectorTy(); }
   Value *getMask() const {
     return isVector() ? Call->getArgOperand(1) : nullptr;
   }
@@ -266,6 +288,14 @@ public:
                                             {Base}));
   }
 
+  static StaticBoundAnchor createBase(PointerTagSanitizer &DS, Instruction *IP,
+                                      Value *RawBase, Value *Origin) {
+    assert(Cl32BitIDs && Origin->getType() == DS.U32Ty &&
+           "ID32 static base requires a scalar origin");
+    return StaticBoundAnchor(Anchor::create(
+        DS, DS.PTSanStaticBase, DS.U64Ty, IP, {RawBase, Origin}));
+  }
+
   static StaticBoundAnchor createSpan(PointerTagSanitizer &DS, Instruction *IP,
                                       Value *Span) {
     return StaticBoundAnchor(Anchor::create(DS, DS.PTSanStaticSpan, IP,
@@ -275,6 +305,8 @@ public:
   Value *getStaticValue() const {
     return Call->getArgOperand(0);
   }
+
+  Value *getOrigin() const { return Call->getArgOperand(1); }
 };
 
 // Check anchors are either real memory access checks or loop-preanalysis checks.
@@ -302,6 +334,14 @@ public:
   BoundAnchor getSpanBound() const {
     return *DS.getAsAnchor<BoundAnchor>(Call->getArgOperand(SpanIndex));
   }
+  LoadBoundAnchor getOrigin() const {
+    assert(Cl32BitIDs && "only ID32 checks carry an origin");
+    auto Origin = DS.getAsAnchor<LoadBoundAnchor>(
+        Call->getArgOperand(Call->arg_size() - 1));
+    assert(Origin && Origin->isOrigin() &&
+           "ID32 check must carry an origin anchor");
+    return *Origin;
+  }
 
   bool hasMaterializedRange() const {
     return Call->getArgOperand(RangeMinIndex) != DS.PTSanUnmaterializedRange;
@@ -324,21 +364,18 @@ public:
   }
 
   HoistTarget getBoundsTarget(PTSanUtils &PTU) const {
-    HoistTarget BaseTarget = getBaseBound().getTarget();
-    HoistTarget SpanTarget = getSpanBound().getTarget();
-    bool BaseDominatesSpan =
-        PTU.hoistTargetDominates(BaseTarget, SpanTarget.getIP());
-    bool SpanDominatesBase =
-        PTU.hoistTargetDominates(SpanTarget, BaseTarget.getIP());
-    assert((BaseDominatesSpan || SpanDominatesBase) &&
-           "check bounds must have comparable insertion targets");
-    return BaseDominatesSpan ? SpanTarget : BaseTarget;
+    HoistTarget Target = PTU.getFirstCommonInsertionPoint(
+        {getBaseBound().getTarget(), getSpanBound().getTarget()});
+    if (Cl32BitIDs) {
+      Target = PTU.getFirstCommonInsertionPoint({Target, getOrigin().getTarget()});
+    }
+    return Target;
   }
 };
 
 // __ptsan_access(id, base, span, range_min, range_size, size, type, index,
-//                [mask]) describes a pointer use. Mask is present only for a
-// masked vector access.
+//                [mask], [origin]) describes a pointer use. Mask is present
+// only for a masked vector access; origin is the final operand in ID32 mode.
 class AccessAnchor : public CheckAnchor {
 public:
   AccessAnchor(Anchor A) : CheckAnchor(A) {}
@@ -349,7 +386,8 @@ public:
 
   static AccessAnchor create(PointerTagSanitizer &DS, Instruction *IP,
                              const PtrOp &Op, GetIDAnchor ID,
-                             BoundAnchor BaseBound, BoundAnchor SpanBound) {
+                             BoundAnchor BaseBound, BoundAnchor SpanBound,
+                             optional<LoadBoundAnchor> Origin = nullopt) {
     assert(Op.CheckTy != NO_CHECK && !isKnownZeroAccessSize(Op.Size) &&
            "access anchors should only represent real checks");
     Value *RangeMin = DS.PTSanUnmaterializedRange;
@@ -362,21 +400,26 @@ public:
     if (Op.Mask) {
       Args.push_back(Op.Mask);
     }
+    assert(Origin.has_value() == Cl32BitIDs &&
+           "only ID32 access anchors carry an origin");
+    if (Origin) {
+      assert(Origin->isOrigin() && "access requires an origin anchor");
+      Args.push_back(Origin->Call);
+    }
     return AccessAnchor(Anchor::create(DS, DS.PTSanAccess, IP, Args));
   }
 
   Value *getSize() const { return Call->getArgOperand(5); }
 
   CHK_TY getCheckType() const {
-    return static_cast<CHK_TY>(
-        cast<ConstantInt>(Call->getArgOperand(6))->getZExtValue());
+    return (CHK_TY)cast<ConstantInt>(Call->getArgOperand(6))->getZExtValue();
   }
 
   unsigned getOperandIndex() const {
     return cast<ConstantInt>(Call->getArgOperand(7))->getZExtValue();
   }
 
-  bool isVector() const { return Call->arg_size() == 9; }
+  bool isVector() const { return Call->arg_size() == (Cl32BitIDs ? 10 : 9); }
 
   Value *getMask() const {
     return isVector() ? Call->getArgOperand(8) : nullptr;
@@ -389,8 +432,8 @@ public:
   }
 };
 
-// __ptsan_loop_preanalysis(id, base, span, range_min, range_size) marks a
-// placed preanalysis check.
+// __ptsan_loop_preanalysis(id, base, span, range_min, range_size, [origin])
+// marks a placed preanalysis check. Origin is present only in ID32 mode.
 class LoopPreanalysisAnchor : public CheckAnchor {
 public:
   LoopPreanalysisAnchor(Anchor A) : CheckAnchor(A) {}
@@ -401,45 +444,100 @@ public:
 
   static LoopPreanalysisAnchor create(PointerTagSanitizer &DS, Instruction *IP,
                                       GetIDAnchor ID, BoundAnchor BaseBound,
-                                      BoundAnchor SpanBound) {
+                                      BoundAnchor SpanBound,
+                                      optional<LoadBoundAnchor> Origin =
+                                          nullopt) {
     Value *RangeMin = DS.PTSanUnmaterializedRange;
     Value *RangeSize = ConstantInt::get(DS.U64Ty, 0);
+    SmallVector<Value *> Args = {ID.Call, BaseBound.Call, SpanBound.Call,
+                                 RangeMin, RangeSize};
+    assert(Origin.has_value() == Cl32BitIDs &&
+           "only ID32 preanalysis anchors carry an origin");
+    if (Origin) {
+      assert(Origin->isOrigin() && "preanalysis requires an origin anchor");
+      Args.push_back(Origin->Call);
+    }
     return LoopPreanalysisAnchor(
-        Anchor::create(DS, DS.PTSanLoopPreanalysis, IP,
-                       {ID.Call, BaseBound.Call, SpanBound.Call, RangeMin,
-                        RangeSize}));
+        Anchor::create(DS, DS.PTSanLoopPreanalysis, IP, Args));
   }
 };
 
-// __ptsan_strip variants return a stripped replacement for operand 0.
+// Strip anchors return a stripped replacement for operand 0.
 class StripAnchor : public Anchor {
 public:
   StripAnchor(Anchor A) : Anchor(A) {}
 
   static bool classof(const Anchor *Anchor) {
-    return Anchor->isCallTo(Anchor->DS.PTSanStrip) ||
-           Anchor->isCallTo(Anchor->DS.PTSanStripI64);
+    return Anchor->isCallTo(Anchor->DS.PTSanID16Strip) ||
+           Anchor->isCallTo(Anchor->DS.PTSanID16StripI64) ||
+           Anchor->isCallTo(Anchor->DS.PTSanID32Strip) ||
+           Anchor->isCallTo(Anchor->DS.PTSanID32StripI64);
   }
 
-  static StripAnchor create(PointerTagSanitizer &DS, Instruction *IP,
-                            Value *Ptr) {
+  Value *getValue() const { return Call->getArgOperand(0); }
+  bool isPointerStrip() const {
+    return getValue()->getType()->isPtrOrPtrVectorTy();
+  }
+  bool isIntegerStrip() const { return getValue()->getType()->isIntegerTy(64); }
+};
+
+class ID16StripAnchor : public StripAnchor {
+public:
+  ID16StripAnchor(Anchor A) : StripAnchor(A) {}
+
+  static bool classof(const Anchor *Anchor) {
+    return Anchor->isCallTo(Anchor->DS.PTSanID16Strip) ||
+           Anchor->isCallTo(Anchor->DS.PTSanID16StripI64);
+  }
+
+  static ID16StripAnchor create(PointerTagSanitizer &DS, Instruction *IP,
+                               Value *Ptr) {
+    bool IsPointer = Ptr->getType()->isPtrOrPtrVectorTy();
+    if (!IsPointer && Ptr->getType() != DS.U64Ty) {
+      errs() << "Unsupported strip anchor type: " << *Ptr->getType() << "\n";
+      die();
+    }
+    ID16StripAnchor Strip(Anchor::create(
+        DS, IsPointer ? DS.PTSanID16Strip : DS.PTSanID16StripI64,
+        Ptr->getType(), IP, {Ptr}));
+    setPTSanPolarityMetadata(*Strip.Call, Polarity::Stripped);
+    return Strip;
+  }
+};
+
+// ID32 decoding needs an ID and base. Any vector mask belongs to the base load;
+// the strip's base dependency constrains placement.
+class ID32StripAnchor : public StripAnchor {
+public:
+  ID32StripAnchor(Anchor A) : StripAnchor(A) {}
+
+  static bool classof(const Anchor *Anchor) {
+    return Anchor->isCallTo(Anchor->DS.PTSanID32Strip) ||
+           Anchor->isCallTo(Anchor->DS.PTSanID32StripI64);
+  }
+
+  static ID32StripAnchor create(PointerTagSanitizer &DS, Instruction *IP,
+                               Value *Ptr, Value *ID, BoundAnchor Base) {
     bool IsPointer = Ptr->getType()->isPtrOrPtrVectorTy();
     if (!IsPointer && Ptr->getType() != DS.U64Ty) {
       errs() << "Unsupported strip anchor type: " << *Ptr->getType() << "\n";
       die();
     }
 
-    StripAnchor Strip(
-        IsPointer
-            ? Anchor::create(DS, DS.PTSanStrip, Ptr->getType(), IP, {Ptr})
-            : Anchor::create(DS, DS.PTSanStripI64, IP, {Ptr}));
+    assert((ID->getType() == Ptr->getType()->getWithNewType(DS.U64Ty) ||
+            ID->getType() == DS.U64Ty) && "strip ID must match pointer shape");
+    assert(Base.isBase() && Base.Call->getType() == ID->getType());
+    ID32StripAnchor Strip(Anchor::create(
+        DS, IsPointer ? DS.PTSanID32Strip : DS.PTSanID32StripI64,
+        Ptr->getType(), IP, {Ptr, ID, Base.Call}));
     setPTSanPolarityMetadata(*Strip.Call, Polarity::Stripped);
     return Strip;
   }
 
-  Value *getValue() const { return Call->getArgOperand(0); }
-  bool isPointerStrip() const { return isCallTo(DS.PTSanStrip); }
-  bool isIntegerStrip() const { return isCallTo(DS.PTSanStripI64); }
+  Value *getID() const { return Call->getArgOperand(1); }
+  BoundAnchor getBaseBound() const {
+    return *DS.getAsAnchor<BoundAnchor>(Call->getArgOperand(2));
+  }
 };
 
 // __ptsan_tagged(value) returns value, marking that this use needs tags.
@@ -461,6 +559,9 @@ public:
            "tagged anchor should not wrap a stripped pointer");
     TaggedAnchor Tagged(
         Anchor::create(DS, DS.PTSanTagged, Ptr->getType(), IP, {Ptr}));
+    // This identity marker preserves both provenance and the numeric value.
+    // Let pointer peeling and ScalarEvolution see through it.
+    Tagged.Call->addParamAttr(0, Attribute::Returned);
     setPTSanPolarityMetadata(*Tagged.Call, Polarity::Tagged);
     return Tagged;
   }
@@ -468,30 +569,67 @@ public:
   Value *getValue() const { return Call->getArgOperand(0); }
 };
 
-// __ptsan_tag(value, id) returns value with id installed in its tag bits.
+// Tag anchors encode operand 0 with the ID in operand 1.
 class TagAnchor : public Anchor {
 public:
   TagAnchor(Anchor A) : Anchor(A) {}
 
   static bool classof(const Anchor *Anchor) {
-    return Anchor->isCallTo(Anchor->DS.PTSanTag);
+    return Anchor->isCallTo(Anchor->DS.PTSanID16Tag) ||
+           Anchor->isCallTo(Anchor->DS.PTSanID32Tag);
   }
 
-  static TagAnchor create(PointerTagSanitizer &DS, Instruction *IP,
-                          Value *Ptr, Value *ID) {
+  Value *getValue() const { return Call->getArgOperand(0); }
+  Value *getID() const { return Call->getArgOperand(1); }
+};
+
+class ID16TagAnchor : public TagAnchor {
+public:
+  ID16TagAnchor(Anchor A) : TagAnchor(A) {}
+
+  static bool classof(const Anchor *Anchor) {
+    return Anchor->isCallTo(Anchor->DS.PTSanID16Tag);
+  }
+
+  static ID16TagAnchor create(PointerTagSanitizer &DS, Instruction *IP,
+                             Value *Ptr, Value *ID) {
     assert(Ptr->getType()->isPtrOrPtrVectorTy() &&
            "tag anchor expects pointer or pointer vector");
     Type *PointerIDTy = Ptr->getType()->getWithNewType(DS.U64Ty);
     assert((ID->getType() == PointerIDTy || ID->getType() == DS.U64Ty) &&
            "tag anchor expects a per-lane or scalar-common ID");
-    TagAnchor Tag(
-        Anchor::create(DS, DS.PTSanTag, Ptr->getType(), IP, {Ptr, ID}));
+    ID16TagAnchor Tag(
+        Anchor::create(DS, DS.PTSanID16Tag, Ptr->getType(), IP, {Ptr, ID}));
+    setPTSanPolarityMetadata(*Tag.Call, Polarity::Tagged);
+    return Tag;
+  }
+};
+
+class ID32TagAnchor : public TagAnchor {
+public:
+  ID32TagAnchor(Anchor A) : TagAnchor(A) {}
+
+  static bool classof(const Anchor *Anchor) {
+    return Anchor->isCallTo(Anchor->DS.PTSanID32Tag);
+  }
+
+  static ID32TagAnchor create(PointerTagSanitizer &DS, Instruction *IP,
+                             Value *Ptr, Value *ID, BoundAnchor Base) {
+    assert(Ptr->getType()->isPtrOrPtrVectorTy() &&
+           "tag anchor expects pointer or pointer vector");
+    Type *PointerIDTy = Ptr->getType()->getWithNewType(DS.U64Ty);
+    assert((ID->getType() == PointerIDTy || ID->getType() == DS.U64Ty) &&
+           "tag anchor expects a per-lane or scalar-common ID");
+    assert(Base.isBase() && Base.Call->getType() == ID->getType());
+    ID32TagAnchor Tag(Anchor::create(DS, DS.PTSanID32Tag, Ptr->getType(), IP,
+                                   {Ptr, ID, Base.Call}));
     setPTSanPolarityMetadata(*Tag.Call, Polarity::Tagged);
     return Tag;
   }
 
-  Value *getValue() const { return Call->getArgOperand(0); }
-  Value *getID() const { return Call->getArgOperand(1); }
+  BoundAnchor getBaseBound() const {
+    return *DS.getAsAnchor<BoundAnchor>(Call->getArgOperand(2));
+  }
 };
 
 // __ptsan_validate_arith(lhs, rhs) validates pointer arithmetic operands.
@@ -513,65 +651,125 @@ public:
   Value *getRHS() const { return Call->getArgOperand(1); }
 };
 
-// No-operand positioned anchors refer to the following real instruction.
-class PositionedAnchor : public Anchor {
-public:
-  PositionedAnchor(Anchor A) : Anchor(A) {}
+// A target and all its anchors share one distinct metadata node. Their
+// association does not depend on adjacency or the target producing an SSA value.
+class TargetedAnchor : public Anchor {
+  mutable WeakTrackingVH CachedTarget;
 
-  Instruction *getPositionedInstruction() const {
-    return DS.getNextRealInstruction(*this);
+public:
+  static constexpr StringLiteral TargetMetadata = "ptsan.target";
+
+  TargetedAnchor(Anchor A) : Anchor(A) {}
+
+  static MDNode *getTargetID(const Instruction *I) {
+    return I->getMetadata(TargetMetadata);
+  }
+
+  Instruction *getTarget() const {
+    if (CachedTarget) {
+      return cast<Instruction>(CachedTarget);
+    }
+    MDNode *ID = getTargetID(Call);
+    assert(ID && "targeted anchor must have target metadata");
+    for (Instruction &I : instructions(Call->getFunction())) {
+      if (!DS.isAnchor(&I) && getTargetID(&I) == ID) {
+        CachedTarget = &I;
+        return &I;
+      }
+    }
+    llvm_unreachable("PTSan anchor target not found");
+  }
+
+  static TargetedAnchor create(PointerTagSanitizer &DS, FunctionCallee Callee,
+                              Instruction *Target) {
+    MDNode *ID = getTargetID(Target);
+    if (!ID) {
+      ID = MDNode::getDistinct(DS.Ctx, {});
+      Target->setMetadata(TargetMetadata, ID);
+    }
+    Anchor A = Anchor::create(DS, Callee, Target);
+    A.Call->setMetadata(TargetMetadata, ID);
+    return TargetedAnchor(A);
   }
 };
 
-class FunctionExitAnchor : public PositionedAnchor {
+class FunctionExitAnchor : public TargetedAnchor {
 public:
-  FunctionExitAnchor(Anchor A) : PositionedAnchor(A) {}
+  FunctionExitAnchor(Anchor A) : TargetedAnchor(A) {}
 
   static bool classof(const Anchor *Anchor) {
     return Anchor->isCallTo(Anchor->DS.PTSanFunctionExit);
   }
 
   static FunctionExitAnchor create(PointerTagSanitizer &DS, Instruction *IP) {
-    return FunctionExitAnchor(Anchor::create(DS, DS.PTSanFunctionExit, IP));
+    return FunctionExitAnchor(TargetedAnchor::create(DS, DS.PTSanFunctionExit, IP));
   }
 };
 
-class SetjmpAnchor : public PositionedAnchor {
+class SetjmpAnchor : public TargetedAnchor {
 public:
-  SetjmpAnchor(Anchor A) : PositionedAnchor(A) {}
+  SetjmpAnchor(Anchor A) : TargetedAnchor(A) {}
 
   static bool classof(const Anchor *Anchor) {
     return Anchor->isCallTo(Anchor->DS.PTSanSetjmp);
   }
 
   static SetjmpAnchor create(PointerTagSanitizer &DS, CallBase *CB) {
-    return SetjmpAnchor(Anchor::create(DS, DS.PTSanSetjmp, CB));
+    return SetjmpAnchor(TargetedAnchor::create(DS, DS.PTSanSetjmp, CB));
   }
 };
 
-class LibcCallAnchor : public PositionedAnchor {
+// va_start initializes several frame-owned regions, not one pointer source.
+class VAStartAnchor : public TargetedAnchor {
 public:
-  LibcCallAnchor(Anchor A) : PositionedAnchor(A) {}
+  VAStartAnchor(Anchor A) : TargetedAnchor(A) {}
+
+  static bool classof(const Anchor *Anchor) {
+    return Anchor->isCallTo(Anchor->DS.PTSanVAStart);
+  }
+
+  static VAStartAnchor create(PointerTagSanitizer &DS, IntrinsicInst *Start) {
+    return VAStartAnchor(TargetedAnchor::create(DS, DS.PTSanVAStart, Start));
+  }
+};
+
+// Both fully instrumented and strip-only callers supply the vararg sentinel.
+class VarargCallAnchor : public TargetedAnchor {
+public:
+  VarargCallAnchor(Anchor A) : TargetedAnchor(A) {}
+
+  static bool classof(const Anchor *Anchor) {
+    return Anchor->isCallTo(Anchor->DS.PTSanVarargCall);
+  }
+
+  static VarargCallAnchor create(PointerTagSanitizer &DS, CallBase *CB) {
+    return VarargCallAnchor(TargetedAnchor::create(DS, DS.PTSanVarargCall, CB));
+  }
+};
+
+class LibcCallAnchor : public TargetedAnchor {
+public:
+  LibcCallAnchor(Anchor A) : TargetedAnchor(A) {}
 
   static bool classof(const Anchor *Anchor) {
     return Anchor->isCallTo(Anchor->DS.PTSanLibcCall);
   }
 
   static LibcCallAnchor create(PointerTagSanitizer &DS, Instruction *IP) {
-    return LibcCallAnchor(Anchor::create(DS, DS.PTSanLibcCall, IP));
+    return LibcCallAnchor(TargetedAnchor::create(DS, DS.PTSanLibcCall, IP));
   }
 };
 
-class SpecialStripAnchor : public PositionedAnchor {
+class SpecialStripAnchor : public TargetedAnchor {
 public:
-  SpecialStripAnchor(Anchor A) : PositionedAnchor(A) {}
+  SpecialStripAnchor(Anchor A) : TargetedAnchor(A) {}
 
   static bool classof(const Anchor *Anchor) {
     return Anchor->isCallTo(Anchor->DS.PTSanSpecialStrip);
   }
 
   static SpecialStripAnchor create(PointerTagSanitizer &DS, CallBase *CB) {
-    return SpecialStripAnchor(Anchor::create(DS, DS.PTSanSpecialStrip, CB));
+    return SpecialStripAnchor(TargetedAnchor::create(DS, DS.PTSanSpecialStrip, CB));
   }
 };
 

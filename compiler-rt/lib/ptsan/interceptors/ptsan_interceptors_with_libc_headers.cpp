@@ -26,10 +26,12 @@
 #include "ptsan_thread.h"
 #include "ptsan_ptr_utils.h"
 #include "ptsan_drift.h"
+#include "ptsan_linux_syscalls.h"
 
 #include "interception/interception.h"
 
 #include <dlfcn.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <pthread.h>
 #include <time.h>
@@ -146,6 +148,49 @@ static void ptsan_build_argv_from_varargs_into(const char *arg0, va_list &ap,
   dst[i] = 0;
 }
 
+
+DECLARE_REAL(long, syscall, long number, ...)
+
+struct LibcSyscallExecutor final : SyscallExecutor {
+  sptr operator()(sptr number, sptr a, sptr b, sptr c, sptr d, sptr e,
+                  sptr f) const override {
+    const sptr result = REAL(syscall)(number, a, b, c, d, e, f);
+    // Handlers consume raw kernel errors, not libc's -1/errno convention.
+    return result == -1 ? -errno : result;
+  }
+};
+
+INTERCEPTOR(long, syscall, long number, ...) {
+  // Match musl's public syscall entry: collect all six ABI slots, leaving
+  // interpretation of the arguments actually used to the typed handler.
+  va_list ap;
+  va_start(ap, number);
+  sptr a = va_arg(ap, sptr);
+  sptr b = va_arg(ap, sptr);
+  sptr c = va_arg(ap, sptr);
+  sptr d = va_arg(ap, sptr);
+  sptr e = va_arg(ap, sptr);
+  sptr f = va_arg(ap, sptr);
+  va_end(ap);
+
+  const int saved_errno = errno;
+  LibcSyscallExecutor executor;
+  const sptr result = dispatchSyscall(executor, number, a, b, c, d, e, f);
+  int error;
+  if (internal_iserror((uptr)result, &error)) {
+    errno = error;
+    return -1;
+  }
+  errno = saved_errno;
+  return result;
+}
+
+INTERCEPTOR(int, pthread_once, pthread_once_t *control, void (*init_routine)(void)) {
+  ENSURE_PTSAN_INITED();
+  check_range_and_report(0, control, sizeof(*control), "read/write");
+  // The initializer runs application code, so do not enter InLibcGuard.
+  return REAL(pthread_once)(clear_id(control), init_routine);
+}
 
 // ------------------------------
 //  Mutexes
@@ -333,6 +378,16 @@ INTERCEPTOR(int, pthread_cond_timedwait,
   InLibcGuard _ig;
   int res = REAL(pthread_cond_timedwait)(clear_id(c), clear_id(m),
                                          clear_id(abstime));
+  return res;
+}
+
+INTERCEPTOR(int, pthread_cond_clockwait,
+            pthread_cond_t *c, pthread_mutex_t *m, clockid_t clock_id,
+            const struct timespec *abstime) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  int res = REAL(pthread_cond_clockwait)(clear_id(c), clear_id(m), clock_id,
+                                       clear_id(abstime));
   return res;
 }
 
@@ -711,7 +766,7 @@ INTERCEPTOR(int, prlimit,
 
 
 //===----------------------------------------------------------------------===//
-// ISO C90 stdio positioning primitives
+// Stdio positioning primitives
 //===----------------------------------------------------------------------===//
 
 INTERCEPTOR(int, fseek,
@@ -720,6 +775,19 @@ INTERCEPTOR(int, fseek,
   InLibcGuard _ig;
   int res = REAL(fseek)(clear_id(stream), offset, whence);
   return res;
+}
+
+// Like fseek, fseeko can lazily allocate a libc-owned stream buffer.
+INTERCEPTOR(int, fseeko, FILE *stream, off_t offset, int whence) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  return REAL(fseeko)(clear_id(stream), offset, whence);
+}
+
+INTERCEPTOR(int, fseeko64, FILE *stream, off64_t offset, int whence) {
+  ENSURE_PTSAN_INITED();
+  InLibcGuard _ig;
+  return REAL(fseeko64)(clear_id(stream), offset, whence);
 }
 
 INTERCEPTOR(long int, ftell,
@@ -3266,7 +3334,8 @@ INTERCEPTOR(void *, mmap, void *addr, SIZE_T sz, int prot, int flags, int fd,
   }
   if (out == MAP_FAILED)
     return out;
-  return tag_with_next_id(out, RoundUpTo(sz, GetPageSizeCached()), FREE_TY::MMAP);
+  return tag_with_next_id(out, RoundUpTo(sz, GetPageSizeCached()), FREE_TY::MMAP,
+                          GetPageSizeCached());
 }
 
 INTERCEPTOR(void *, mmap64, void *addr, SIZE_T sz, int prot, int flags, int fd,
@@ -3285,7 +3354,8 @@ INTERCEPTOR(void *, mmap64, void *addr, SIZE_T sz, int prot, int flags, int fd,
   }
   if (out == MAP_FAILED)
     return out;
-  return tag_with_next_id(out, RoundUpTo(sz, GetPageSizeCached()), FREE_TY::MMAP);
+  return tag_with_next_id(out, RoundUpTo(sz, GetPageSizeCached()), FREE_TY::MMAP,
+                          GetPageSizeCached());
 }
 
 INTERCEPTOR(int, munmap, void *addr, SIZE_T sz) {
@@ -3294,11 +3364,18 @@ INTERCEPTOR(int, munmap, void *addr, SIZE_T sz) {
   if (ptsan_init_is_running)
     return REAL(munmap)(addr, sz);
   ENSURE_PTSAN_INITED();
-  if (ptsan_mark_ptr_freed(addr, FREE_TY::MMAP)) {
+  // Decode while the ID still belongs to this mapping.
+  void *raw = clear_id(addr);
+  ptsan_validate_allocation(addr, FREE_TY::MMAP);
+  int result;
+  {
     InLibcGuard _ig;
-    return REAL(munmap)(clear_id(addr), sz);
+    result = REAL(munmap)(raw, sz);
   }
-  return -1;
+  if (result == 0) {
+    ptsan_mark_ptr_freed(addr, FREE_TY::MMAP);
+  }
+  return result;
 }
 
 INTERCEPTOR(int, mprotect, void *addr, SIZE_T sz, int prot) {
@@ -3310,13 +3387,14 @@ INTERCEPTOR(int, mprotect, void *addr, SIZE_T sz, int prot) {
     return REAL(mprotect)(addr, sz, prot);
   ENSURE_PTSAN_INITED();
   MprotectMallocZones(addr, prot);
+  void *raw = clear_id(addr);
   int result;
   {
     InLibcGuard _ig;
-    result = REAL(mprotect)(clear_id(addr), sz, prot);
+    result = REAL(mprotect)(raw, sz, prot);
   }
   if (result == 0) {
-    ptsan_check_mprotect(addr, sz, prot);
+    ptsan_check_mprotect(raw, sz, prot);
   }
   return result;
 }
@@ -3327,14 +3405,14 @@ INTERCEPTOR(int, pkey_mprotect, void *address, SIZE_T size, int protection,
     return REAL(pkey_mprotect)(clear_id(address), size, protection, key);
   }
   ENSURE_PTSAN_INITED();
+  void *raw = clear_id(address);
   int result;
   {
     InLibcGuard _ig;
-    result =
-        REAL(pkey_mprotect)(clear_id(address), size, protection, key);
+    result = REAL(pkey_mprotect)(raw, size, protection, key);
   }
   if (result == 0) {
-    ptsan_check_mprotect(address, size, protection);
+    ptsan_check_mprotect(raw, size, protection);
   }
   return result;
 }
@@ -3603,6 +3681,7 @@ INTERCEPTOR(ssize_t, sendfile64, int out_fd, int in_fd, off_t *offset,
 }
 
 void __ptsan::InitializeLibCHeaderInterceptors() {
+  INTERCEPT_FUNCTION(syscall);
   INTERCEPT_FUNCTION(connect);
   INTERCEPT_FUNCTION(recvmsg);
   INTERCEPT_FUNCTION(recvmmsg);
@@ -3633,6 +3712,7 @@ void __ptsan::InitializeLibCHeaderInterceptors() {
   INTERCEPT_FUNCTION(pthread_setschedparam);
   INTERCEPT_FUNCTION(pthread_attr_setschedparam);
 
+  INTERCEPT_FUNCTION(pthread_once);
   INTERCEPT_FUNCTION(pthread_mutex_init);
   INTERCEPT_FUNCTION(pthread_mutex_destroy);
   INTERCEPT_FUNCTION(pthread_mutex_lock);
@@ -3659,6 +3739,7 @@ void __ptsan::InitializeLibCHeaderInterceptors() {
   INTERCEPT_FUNCTION(pthread_cond_destroy);
   INTERCEPT_FUNCTION(pthread_cond_wait);
   INTERCEPT_FUNCTION(pthread_cond_timedwait);
+  INTERCEPT_FUNCTION(pthread_cond_clockwait);
   INTERCEPT_FUNCTION(pthread_cond_signal);
   INTERCEPT_FUNCTION(pthread_cond_broadcast);
 
@@ -3685,6 +3766,8 @@ void __ptsan::InitializeLibCHeaderInterceptors() {
   INTERCEPT_FUNCTION(prlimit);
 
   INTERCEPT_FUNCTION(fseek);
+  INTERCEPT_FUNCTION(fseeko);
+  INTERCEPT_FUNCTION(fseeko64);
   INTERCEPT_FUNCTION(ftell);
   INTERCEPT_FUNCTION(rewind);
   INTERCEPT_FUNCTION(fgetpos);

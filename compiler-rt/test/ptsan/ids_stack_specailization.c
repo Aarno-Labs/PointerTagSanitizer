@@ -1,3 +1,4 @@
+// Exercises the 16-bit specialized stack callbacks.
 /* Make sure all stack getId routines work. We have
  * different ones for each 1-4, and a general case
  * for more.
@@ -25,8 +26,8 @@
 #define u32 uint32_t
 #define u64 uint64_t
 
-extern u16 ptsan_next_stack_id;
-extern u16 ptsan_stack_id_limit;
+extern __thread uint64_t ptsan_next_stack_id;
+extern __thread uint64_t ptsan_stack_id_limit;
 extern u64 __ptsan_used_ids;
 extern u64 __ptsan_used_global_ids;
 

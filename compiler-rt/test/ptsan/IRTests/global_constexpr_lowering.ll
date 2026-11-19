@@ -88,3 +88,34 @@ loop:
 exit:
   ret void
 }
+
+; A recursive PHI does not necessarily expose the global as one of the PHI's
+; base pointers. Materialize its constant-expression incoming value before
+; polarity discovery so the recurrence can stay raw all the way from the
+; global to the load.
+define void @global_constexpr_recursive_phi(i1 %recurse) {
+; CHECK-LABEL: define void @global_constexpr_recursive_phi(
+; CHECK: entry:
+; CHECK-NOT: call ptr @__ptsan_strip
+; CHECK: loop.preheader:
+; CHECK: [[INITIAL:%.*]] = getelementptr inbounds i8, ptr @extern_global, i64 -1
+; CHECK-NOT: call ptr @__ptsan_strip
+; CHECK: loop:
+; CHECK: [[PHI:%.*]] = phi ptr [ [[NEXT:%.*]], %loop ], [ [[INITIAL]], %loop.preheader ]
+; CHECK: [[NEXT]] = getelementptr i8, ptr [[PHI]], i64 1
+; CHECK-NEXT: %v = load volatile i8, ptr [[NEXT]]
+; CHECK-NOT: call ptr @__ptsan_strip
+entry:
+  br label %loop
+
+loop:
+  %p = phi ptr [ getelementptr inbounds (i8, ptr @extern_global, i64 -1), %entry ],
+               [ %next, %loop ]
+  %next = getelementptr i8, ptr %p, i64 1
+  %stripped = call ptr @__ptsan_strip(ptr %next)
+  %v = load volatile i8, ptr %stripped, align 1
+  br i1 %recurse, label %loop, label %exit
+
+exit:
+  ret void
+}

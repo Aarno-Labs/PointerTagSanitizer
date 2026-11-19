@@ -6,8 +6,8 @@
 // RUN: %ptsan_musl_strict -o %t %s
 // RUN: %t 2>&1 | FileCheck %s
 // RUN: %ptsan_musl_strict \
-// RUN:   -mllvm -ptsan-stack-ids-per-bucket=1 -o %t.smallbucket %s
-// RUN: %t.smallbucket 2>&1 | FileCheck %s
+// RUN:   -mllvm -ptsan-stack-id-thread-buckets=0 -o %t.nobuckets %s
+// RUN: %t.nobuckets 2>&1 | FileCheck %s
 
 // RUN: %ptsan_musl_strict -mllvm -ptsan-no-opts -o %t.noopts %s
 // RUN: %t.noopts 2>&1 | FileCheck %s

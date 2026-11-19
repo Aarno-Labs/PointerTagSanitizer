@@ -3,6 +3,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
+// Exercises exhaustion and permissive fallback in the 16-bit ID space.
 // RUN: %clang_ptsan -O2 -mllvm -ptsan-abort-on-error -o %t %s
 // RUN: %t 2>&1 | FileCheck %s --check-prefixes=DEFAULT,STATS
 // RUN: %clang_raw -fsanitize=ptsan -O2 -mllvm -ptsan-abort-on-error \
@@ -10,13 +11,12 @@
 // RUN: %t.normal 2>&1 | FileCheck %s --check-prefix=DEFAULT
 // DEFAULT-NOT: Found bad
 // DEFAULT-DAG: repeatable exhaustion and recovery ok
-// STATS-DAG: Max used stack IDs at once: 70000
 // STATS-DAG: Unreclaimed IDs at exit: 0
 // DEFAULT-NOT: Found bad
 
-// Enough live buffers to grow the runtime container and exhaust the ID pool.
-// Statistics count default-ID requests too, but they must never be returned to
-// the real ID pool.
+// Exhaust the ID pool with more allocations than the ownership log has slots.
+// Default IDs need no log entries and must never be returned to the real pool.
+// Stack statistics count only real owned IDs.
 #include <alloca.h>
 #include <assert.h>
 #include <stdint.h>

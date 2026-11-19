@@ -10,6 +10,10 @@
 // RUN:   -mllvm -ptsan-abort-on-error -mllvm -ptsan-no-stack-id-fast-path \
 // RUN:   -o %t.slow %s
 // RUN: %t.slow 2>&1 | FileCheck %s
+
+// Repeated ID32 allocations must keep distinct live metadata through recursion.
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32
+// RUN: %run %t.id32 2>&1 | FileCheck %s
 // CHECK-NOT: Found bad
 // CHECK: repeatable-alloca-ok
 // CHECK-NOT: Found bad
@@ -20,6 +24,7 @@
 #include <alloca.h>
 #include <assert.h>
 #include <stdint.h>
+#include "../Inputs/ptsan_test_interface.h"
 #include <stdio.h>
 
 static volatile unsigned count = 4;
@@ -42,10 +47,10 @@ __attribute__((noinline)) static void exercise(unsigned depth, unsigned iteratio
   assert(buffers_count <= 4);
   for (unsigned i = 0; i < buffers_count; ++i) {
     buffers[i] = alloca(n);
-    uintptr_t id = (uintptr_t)buffers[i] >> 48;
-    assert(id != 0 && id != 0xffff);
+    uintptr_t id = get_id(buffers[i]);
+    assert(id != 0 && id != ptsan_default_id());
     for (unsigned j = 0; j < i; ++j) {
-      assert(id != (uintptr_t)buffers[j] >> 48);
+      assert(id != get_id(buffers[j]));
     }
     fill(buffers[i], n, (char)(i + 1));
   }

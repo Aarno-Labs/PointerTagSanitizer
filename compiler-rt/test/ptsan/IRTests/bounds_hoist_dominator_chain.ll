@@ -5,6 +5,8 @@
 ;
 ; RUN: %opt_ptsan -ptsan-stop-after=optimization %s | FileCheck %s
 ; RUN: %opt_ptsan -ptsan-runtime-validate -ptsan-abort-on-error %s -o /dev/null
+; RUN: %opt_ptsan -ptsan-32-bit-ids -ptsan-stop-after=optimization %s | FileCheck %s
+; RUN: %opt_ptsan -ptsan-32-bit-ids -ptsan-runtime-validate -ptsan-abort-on-error %s -o /dev/null
 ;
 ; Search the dominator chain, but retain the freeing-call barriers on paths
 ; through sibling blocks and loop backedges.

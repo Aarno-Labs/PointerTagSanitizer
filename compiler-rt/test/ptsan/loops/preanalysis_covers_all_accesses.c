@@ -7,14 +7,14 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_raw -O3 -fno-discard-value-names -S -emit-llvm -o raw.ll %s
 // RUN: FileCheck %s --check-prefix=RAW < raw.ll
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-discard-value-names \
-// RUN:   -mllvm -ptsan-reoptimize -mllvm -ptsan-runtime-validate \
+// RUN: %clang_ptsan_plain -g -O3 -fno-discard-value-names \
+// RUN:   -mllvm -ptsan-reoptimize -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-stop-after=optimization -S -emit-llvm \
 // RUN:   -o optimized.ll %s
 // RUN: FileCheck %s --check-prefix=OPT < optimized.ll
 // RUN: FileCheck %s --check-prefix=NOACCESS < optimized.ll
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -mllvm -ptsan-reoptimize \
-// RUN:   -mllvm -ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
+// RUN: %clang_ptsan_plain -g -O3 -mllvm -ptsan-reoptimize \
+// RUN:   -fsanitize-ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
 // RUN:   -mllvm -ptsan-stack-temporal-safety=0 -o test %s
 // RUN: ./test 2> good.txt
 // RUN: FileCheck %s --check-prefix=GOOD --allow-empty < good.txt
@@ -29,7 +29,7 @@
 // OPT: call void @llvm.sideeffect() [ "ptsan.loop.preheader"
 // OPT-COUNT-2: call void (...) @__ptsan_loop_preanalysis(
 // OPT: [[NEXT_GEP:%next.gep[^ ]*]] = getelementptr i8, ptr [[INPUT_BASE]], i64
-// OPT: [[STRIPPED_INPUT:%.*]] = call ptr @__ptsan_strip(ptr [[NEXT_GEP]])
+// OPT: [[STRIPPED_INPUT:%.*]] = call ptr @__ptsan_strip(ptr [[NEXT_GEP]]
 // OPT: load <{{[0-9]+}} x i8>, ptr [[STRIPPED_INPUT]]
 
 // NOACCESS-LABEL: define {{.*}} @copy_rows(

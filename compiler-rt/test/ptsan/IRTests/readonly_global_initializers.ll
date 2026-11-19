@@ -22,8 +22,8 @@ target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16
 ; CHECK: { i32 3, ptr @__ptsan_seal_global_initializers, ptr @__ptsan_seal_global_initializers }
 
 ; CHECK-LABEL: define internal void @__ptsan_init_tagged_globals(
-; CHECK: call i16 @ptsan_get_next_global_id(ptr @slot, i64 8)
-; CHECK: call i16 @ptsan_get_constant_global_id(ptr @scalar, i64 4)
+; CHECK: call i{{16|32}} @ptsan_get_next_global_id(ptr @slot, i64 8, i64 8)
+; CHECK: call i{{16|32}} @ptsan_get_constant_global_id(ptr @scalar, i64 4, i64 4)
 
 ; CHECK-LABEL: define internal void @__ptsan_init_global_initializer_pointers(
 ; CHECK: load ptr, ptr @target.ptsan.ptr

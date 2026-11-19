@@ -11,6 +11,14 @@
 // RUN: %t.noopts 2>&1 | FileCheck %s --check-prefix=GOOD
 // RUN: not %t.noopts bad 2>&1 | FileCheck %s --check-prefix=BAD
 
+// RUN: %clang_ptsan_id32 -O2 -mllvm -ptsan-abort-on-error -o %t %s
+// RUN: %t 2>&1 | FileCheck %s --check-prefix=GOOD
+// RUN: not %t bad 2>&1 | FileCheck %s --check-prefix=BAD
+// RUN: %clang_ptsan_id32 -O2 -mllvm -ptsan-no-opts \
+// RUN:   -mllvm -ptsan-abort-on-error -o %t.noopts %s
+// RUN: %t.noopts 2>&1 | FileCheck %s --check-prefix=GOOD
+// RUN: not %t.noopts bad 2>&1 | FileCheck %s --check-prefix=BAD
+
 // GOOD-NOT: Found bad
 // GOOD: source-pointer-ids-ok
 // GOOD-NOT: Found bad
@@ -22,10 +30,11 @@
 // pointer must retain its ID, so an out-of-bounds read through it is reported.
 #include <assert.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 #include <stdio.h>
 
 __attribute__((noinline)) static unsigned id_of(const void *p) {
-  return (uintptr_t)p >> 48;
+  return get_id(p);
 }
 
 __attribute__((noinline)) static char *identity(char *p) {

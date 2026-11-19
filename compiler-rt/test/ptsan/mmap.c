@@ -4,12 +4,13 @@
 // RUN: cat out.txt | FileCheck %s --check-prefix=OUT
 // RUN: ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
+// RUN: not ./%exe bad 2> err.txt
+// RUN: FileCheck %s --check-prefix=BAD < err.txt
 
 // OUT: Mapped byte = 0x42
-// OUT: Invalid access =
 
 // ERR: Startup IDs: [[#STARTUP:]]
-// ERR: Found bad POINT access
+// BAD: Found bad POINT access
 // ERR: Max used IDs at once: [[#STARTUP + 1]]
 
 
@@ -18,10 +19,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 
 extern volatile uint64_t __ptsan_used_ids;
 
-int main(void) {
+int main(int argc, char **argv) {
     fprintf(stderr, "Startup IDs: %lu\n", __ptsan_used_ids);
     /* 1. figure out a page size */
     size_t length = sysconf(_SC_PAGESIZE);
@@ -40,7 +42,7 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    printf("mmap id is 0x%lx\n", (uint64_t)addr >> 48);
+    printf("mmap id is 0x%x\n", get_id(addr));
 
     /* 3. use it — write then read back via a volatile pointer so
        the compiler must actually emit the store/load: */
@@ -48,8 +50,10 @@ int main(void) {
     p[0] = 0x42;
     printf("Mapped byte = 0x%02x\n", (unsigned char)p[0]);
 
-    p+= length + 10;
-    printf("Invalid access = 0x%02x\n", (unsigned char)p[0]);
+    if (argc > 1) {
+        p += length + 10;
+        printf("Invalid access = 0x%02x\n", (unsigned char)p[0]);
+    }
 
     /* 4. munmap the page */
     if (munmap(addr, length) != 0) {
@@ -58,7 +62,7 @@ int main(void) {
     }
 
     void *newMem = malloc(4);
-    printf("After munmap, id is 0x%lx\n", (uint64_t)newMem >> 48);
+    printf("After munmap, id is 0x%x\n", get_id(newMem));
 
     return 0;
 }

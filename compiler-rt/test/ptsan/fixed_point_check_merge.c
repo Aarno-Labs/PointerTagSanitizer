@@ -11,7 +11,7 @@
 // RUN:   -fno-unroll-loops -o %exe %s
 // RUN: ./%exe 3 2> good.txt
 // RUN: FileCheck %s --check-prefix=GOOD < good.txt
-// RUN: ./%exe 2 2> bad.txt
+// RUN: not ./%exe 2 2> bad.txt
 // RUN: FileCheck %s --check-prefix=BAD < bad.txt
 
 // The first merging pass combines the checks for offsets 0 and 2. A second

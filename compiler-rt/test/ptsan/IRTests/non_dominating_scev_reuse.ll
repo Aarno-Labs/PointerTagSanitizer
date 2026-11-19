@@ -36,22 +36,22 @@ case1:
 ; OPT-LABEL: define i32 @sibling_check_reuses_non_dominating_scev(
 ; OPT-LABEL: entry:
 ; OPT: [[ID:%.*]] = call i64 @__ptsan_get_id(ptr %p)
-; OPT: [[STRIP:%.*]] = call ptr @__ptsan_strip(ptr %p)
-; OPT-NOT: call ptr @__ptsan_strip(ptr %p)
-; OPT: [[ENTRY_SPAN:%.*]] = call i64 @__ptsan_load_span(i64 [[ID]])
-; OPT: [[ENTRY_BASE:%.*]] = call i64 @__ptsan_load_base(i64 [[ID]])
+; OPT-DAG: [[STRIP:%.*]] = call ptr @__ptsan_strip(ptr %p
+; OPT-DAG: [[ENTRY_SPAN:%.*]] = call i64 @__ptsan_load_span(i64 [[ID]])
+; OPT-DAG: [[ENTRY_BASE:%.*]] = call i64 @__ptsan_load_base(i64 [[ID]])
+; OPT-NOT: call ptr @__ptsan_strip(ptr %p
 ; OPT: switch i32 %sel
 ; OPT-LABEL: default:
-; OPT-NOT: call ptr @__ptsan_strip(ptr %p)
-; OPT: [[DEFAULT_SPAN:%.*]] = call i64 @__ptsan_load_span(i64 [[ID]])
-; OPT: [[DEFAULT_BASE:%.*]] = call i64 @__ptsan_load_base(i64 [[ID]])
-; OPT: call void (...) @__ptsan_access(i64 [[ID]], i64 [[DEFAULT_BASE]], i64 [[DEFAULT_SPAN]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0)
+; OPT-NOT: call ptr @__ptsan_strip(ptr %p
+; OPT-DAG: [[DEFAULT_SPAN:%.*]] = call i64 @__ptsan_load_span(i64 [[ID]])
+; OPT-DAG: [[DEFAULT_BASE:%.*]] = call i64 @__ptsan_load_base(i64 [[ID]])
+; OPT: call void (...) @__ptsan_access(i64 [[ID]], i64 [[DEFAULT_BASE]], i64 [[DEFAULT_SPAN]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0
 ; OPT: load i32, ptr [[STRIP]]
 ; OPT-LABEL: case0:
-; OPT-NOT: call ptr @__ptsan_strip(ptr %p)
-; OPT: call void (...) @__ptsan_access(i64 [[ID]], i64 [[ENTRY_BASE]], i64 [[ENTRY_SPAN]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0)
+; OPT-NOT: call ptr @__ptsan_strip(ptr %p
+; OPT: call void (...) @__ptsan_access(i64 [[ID]], i64 [[ENTRY_BASE]], i64 [[ENTRY_SPAN]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0
 ; OPT: load i32, ptr [[STRIP]]
 ; OPT-LABEL: case1:
-; OPT-NOT: call ptr @__ptsan_strip(ptr %p)
-; OPT: call void (...) @__ptsan_access(i64 [[ID]], i64 [[ENTRY_BASE]], i64 [[ENTRY_SPAN]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0)
+; OPT-NOT: call ptr @__ptsan_strip(ptr %p
+; OPT: call void (...) @__ptsan_access(i64 [[ID]], i64 [[ENTRY_BASE]], i64 [[ENTRY_SPAN]], ptr @__ptsan_unmaterialized_range, i64 0, i64 4, i32 1, i32 0
 ; OPT: load i32, ptr [[STRIP]]

@@ -6,6 +6,12 @@
 // RUN: %ptsan_musl_strict -o %t %s
 // RUN: %run %t
 
+// Nested ID32 destination pointers must reach the kernel as raw addresses.
+// RUN: %ptsan_musl_id32_nonstrict %s -o %t.id32
+// RUN: %run %t.id32
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32.strict
+// RUN: %run %t.id32.strict
+
 #include <string.h>
 #include <sys/uio.h>
 #include <unistd.h>

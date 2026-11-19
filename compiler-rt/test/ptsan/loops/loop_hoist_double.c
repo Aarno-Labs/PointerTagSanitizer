@@ -6,10 +6,10 @@
 // RUN: ./%exe 1 3 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD
 
-// RUN: ./%exe 61 80 2> out.txt
+// RUN: not ./%exe 61 80 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 
-// RUN: ./%exe 60 81 2> out.txt
+// RUN: not ./%exe 60 81 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 
 // BAD: Found bad

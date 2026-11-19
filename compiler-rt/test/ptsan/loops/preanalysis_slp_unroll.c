@@ -4,27 +4,27 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 // REQUIRES: x86_64-target-arch
-// RUN: %clang_raw -fsanitize=ptsan -O3 -march=x86-64 \
-// RUN:   -fno-discard-value-names -mllvm -ptsan-runtime-validate \
+// RUN: %clang_ptsan_plain -O3 -march=x86-64 \
+// RUN:   -fno-discard-value-names -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o %t.loop.ll %s
 // RUN: FileCheck %s --check-prefixes=CHECK,LOOP < %t.loop.ll
-// RUN: %clang_raw -fsanitize=ptsan -O3 -march=haswell -mno-bmi2 \
-// RUN:   -fno-discard-value-names -mllvm -ptsan-runtime-validate \
+// RUN: %clang_ptsan_plain -O3 -march=haswell -mno-bmi2 \
+// RUN:   -fno-discard-value-names -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -print-before=slp-vectorizer -mllvm -print-after=slp-vectorizer \
 // RUN:   -mllvm -filter-print-funcs=block_difference \
 // RUN:   -mllvm -ptsan-stop-after=optimization -S -emit-llvm \
 // RUN:   -o %t.unrolled.ll %s 2> %t.slp.txt
 // RUN: FileCheck %s --check-prefix=SLP < %t.slp.txt
 // RUN: FileCheck %s --check-prefixes=CHECK,UNROLLED < %t.unrolled.ll
-// RUN: %clang_raw -fsanitize=ptsan -O3 -march=x86-64 \
-// RUN:   -mllvm -ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
+// RUN: %clang_ptsan_plain -O3 -march=x86-64 \
+// RUN:   -fsanitize-ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
 // RUN:   -mllvm -ptsan-stack-temporal-safety=0 -o %t.loop %s
 // RUN: %run %t.loop 0 2> %t.loop.good.txt
 // RUN: FileCheck %s --check-prefix=GOOD --allow-empty < %t.loop.good.txt
 // RUN: not %run %t.loop 1 2> %t.loop.bad.txt
 // RUN: FileCheck %s --check-prefix=BAD < %t.loop.bad.txt
-// RUN: %clang_raw -fsanitize=ptsan -O3 -march=haswell -mno-bmi2 \
-// RUN:   -mllvm -ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
+// RUN: %clang_ptsan_plain -O3 -march=haswell -mno-bmi2 \
+// RUN:   -fsanitize-ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
 // RUN:   -mllvm -ptsan-stack-temporal-safety=0 -o %t.unrolled %s
 // RUN: %run %t.unrolled 0 2> %t.unrolled.good.txt
 // RUN: FileCheck %s --check-prefix=GOOD --allow-empty < %t.unrolled.good.txt

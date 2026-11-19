@@ -13,6 +13,8 @@ function(ptsan_configure_unwinder)
       # PRIVATE matters: these object targets are also linked into libc++abi.
       target_compile_options(${target} PRIVATE
         "$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-mllvm -ptsan-nochecks>")
+      target_compile_definitions(${target} PRIVATE
+        "$<$<COMPILE_LANGUAGE:C,CXX>:_LIBUNWIND_PTSAN_NATIVE_REGISTERS>")
     endif()
   endforeach()
 

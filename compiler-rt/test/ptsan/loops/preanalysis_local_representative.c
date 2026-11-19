@@ -1,4 +1,4 @@
-// RUN: %clang_raw -fsanitize=ptsan -g -O2 -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o %t.ll %s
+// RUN: %clang_ptsan_plain -g -O2 -fno-vectorize -fno-slp-vectorize -fno-unroll-loops -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o %t.ll %s
 // RUN: FileCheck %s --implicit-check-not='!{!"ptsan.loop.bounds", i1 false' < %t.ll
 
 // The inner access range depends on the already-computed row/end pointers and

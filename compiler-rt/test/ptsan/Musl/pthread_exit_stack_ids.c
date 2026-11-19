@@ -8,14 +8,30 @@
 // RUN: %run %t 2>&1 | FileCheck %s
 // RUN: %run %t exit 2>&1 | FileCheck %s
 // CHECK: thread stack IDs reclaimed
+//
+// RUN: %ptsan_musl_id32_strict -pthread \
+// RUN:   -mllvm -ptsan-no-stack-id-fast-path %s -o %t.id32
+// RUN: %run %t.id32 2>&1 | FileCheck %s
+// RUN: %run %t.id32 exit 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_strict -pthread -mllvm -ptsan-no-stack-id-fast-path -mllvm -ptsan-stack-temporal-safety=0 %s -o %t.weak16
+// RUN: %run %t.weak16 exit 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict -pthread -mllvm -ptsan-no-stack-id-fast-path -mllvm -ptsan-stack-temporal-safety=0 %s -o %t.weak32
+// RUN: %run %t.weak32 exit 2>&1 | FileCheck %s
+
+// RUN: %ptsan_musl_strict -pthread -mllvm -ptsan-stack-temporal-safety=1 %s -o %t.fast16
+// RUN: %run %t.fast16 2>&1 | FileCheck %s
+// RUN: %run %t.fast16 exit 2>&1 | FileCheck %s
+// RUN: %ptsan_musl_id32_strict -pthread -mllvm -ptsan-stack-temporal-safety=1 %s -o %t.fast32
+// RUN: %run %t.fast32 2>&1 | FileCheck %s
+// RUN: %run %t.fast32 exit 2>&1 | FileCheck %s
 
 // Returning from an instrumented worker reclaims its frame IDs. Musl's
 // pthread_exit bypasses that cleanup, so thread teardown must recycle the
-// outstanding slow stack IDs and the IDs held by repeatable-alloca containers.
-// Check both kinds independently.
+// outstanding slow stack IDs and the IDs held by repeatable-alloca containers,
+// and invalidate abandoned fast-stack bounds in both ID modes.
 //
-// Use the validation runtime's live stack-ID count so this stays small and
-// checks reclamation without depending on ID reuse order or cleared bounds.
+// Check both the live stack-ID count and the last escaped object's span.
+// Runtime teardown must invalidate that object even with strong codegen off.
 // The normal-return run is a control for reclamation from abandoned frames.
 #include "../Inputs/ptsan_test_interface.h"
 #include <alloca.h>
@@ -33,6 +49,7 @@ static uint64_t live_stack_ids(void) {
 }
 
 static int exit_without_return;
+static PTSanID last_id;
 static volatile unsigned allocation_size = 37;
 static volatile unsigned allocation_count = 3;
 
@@ -40,6 +57,7 @@ __attribute__((noinline)) static void consume(char *p, unsigned size) {
   unsigned id = get_id(p);
   if (!id || id == ptsan_default_id())
     _Exit(2);
+  last_id = id;
   *(volatile char *)p = 1;
   *(volatile char *)(p + size - 1) = 2;
 }
@@ -68,6 +86,10 @@ static int check_worker(void *(*worker)(void *), const char *name) {
   if (pthread_create(&thread, 0, worker, 0) || pthread_join(thread, 0))
     return 1;
   uint64_t after = live_stack_ids();
+  if (ptsan_get_size(last_id) != 0) {
+    fprintf(stderr, "%s: exited thread retained live stack bounds\n", name);
+    return 1;
+  }
   if (after != before) {
     fprintf(stderr, "%s: live stack IDs before=%llu after=%llu\n", name,
             (unsigned long long)before, (unsigned long long)after);

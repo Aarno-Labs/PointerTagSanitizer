@@ -3,6 +3,10 @@
 // RUN: ./%exe > out.txt
 // RUN: cat out.txt | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe > out.txt
+// RUN: cat out.txt | FileCheck %s
+
 // CHECK: g_add[2]=3
 
 // atomicrmw_array_demo.c

@@ -32,6 +32,17 @@
 // RUN: %ptsan_musl_strict -DSIZE=304 -S -o - %s | \
 // RUN:   FileCheck %s --check-prefix=LARGE-ASM
 
+// Exercise ID32 pointer returns and checks for libcalls and memory intrinsics.
+// RUN: %ptsan_musl_id32_strict -DSIZE=304 %s -o %t.id32
+// RUN: %run %t.id32
+// RUN: %run %t.id32 indirect
+// RUN: %run %t.id32 builtin
+// RUN: for mode in 1 2 3 4 5; do \
+// RUN:   not %run %t.id32 direct $mode 2>&1 | FileCheck %s --check-prefix=BAD && \
+// RUN:   not %run %t.id32 indirect $mode 2>&1 | FileCheck %s --check-prefix=BAD && \
+// RUN:   not %run %t.id32 builtin $mode 2>&1 | FileCheck %s --check-prefix=INTRINSIC-BAD || exit 1; \
+// RUN: done
+
 // Both initializations are memory intrinsics after PTSan. On x86-64 and
 // AArch64, the small one becomes inline stores and the large one calls memset.
 // Both use raw destinations. Backend-generated calls must reach raw libc,
@@ -50,6 +61,7 @@
 // LARGE-ASM-LABEL: main:
 // LARGE-ASM: {{callq|bl}} {{.*}}memset
 
+#include "../Inputs/ptsan_test_interface.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,7 +81,7 @@ static void *(*volatile memmove_ptr)(void *, const void *, size_t) = memmove;
 
 static void checkResult(void *result, void *expected) {
   if (result != expected ||
-      ((uintptr_t)result >> 48) != ((uintptr_t)expected >> 48))
+      get_id(result) != get_id(expected))
     _Exit(4);
 }
 
@@ -79,7 +91,7 @@ static void checkResult(void *result, void *expected) {
 __attribute__((noinline, no_builtin("memset", "memcpy", "memmove")))
 static void checkCalls(int indirect, int bad) {
   unsigned char src[SIZE], dst[SIZE];
-  if (!((uintptr_t)src >> 48) || !((uintptr_t)dst >> 48))
+  if (!get_id(src) || !get_id(dst))
     _Exit(3);
 
   void *result = CALL(memset, src, 7, SIZE + (bad == 1));

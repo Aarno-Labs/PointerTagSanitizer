@@ -8,6 +8,10 @@
 // RUN: ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe 2> err.txt
+// RUN: cat err.txt | FileCheck %s
+
 // Edge cases for the shadow msghdr/iovec send/recv interceptors: NULL msghdr,
 // NULL msgvec, tagged msg_iov with msg_iovlen == 0, kernel copy-back of
 // msg_namelen/msg_controllen/msg_flags, and a partial recvmmsg fill that must
@@ -27,7 +31,9 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 
-static uint16_t tag_of(const void *p) { return (uint16_t)((uintptr_t)p >> 48); }
+#include "Inputs/ptsan_test_interface.h"
+
+static PTSanID tag_of(const void *p) { return get_id(p); }
 
 int main(void) {
   int sv[2];

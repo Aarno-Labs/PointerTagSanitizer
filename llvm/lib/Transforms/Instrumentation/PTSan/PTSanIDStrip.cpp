@@ -6,29 +6,18 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "PTSanDiscoveryInternal.h"
 #include "PTSanUtils.h"
 #include "llvm/Analysis/GlobalsModRef.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/StringSet.h"
-#include "llvm/ADT/Hashing.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/IR/InstVisitor.h"
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Module.h"
-#include "llvm/Passes/PassBuilder.h"
-#include "llvm/Passes/PassPlugin.h"
-#include "llvm/Support/CommandLine.h"
-#include "llvm/Support/ErrorOr.h"
-#include "llvm/Support/FormatVariadic.h"
-#include "llvm/Support/JSON.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "llvm/Support/Regex.h"
+#include "llvm/IR/IntrinsicsX86.h"
 #include "llvm/Transforms/Instrumentation/PTSanIDStrip.h"
 
-#include <stdlib.h>
-
 using namespace llvm;
+#undef DEBUG_TYPE
 #define DEBUG_TYPE "ptsan"
 
 namespace llvm::ptsan {
@@ -41,109 +30,30 @@ static cl::opt<bool> ClClearCmps(
 
 
 namespace {
-class PTSanIDStrip;
-
 class PTSanIDStripVisitor : public InstVisitor<PTSanIDStripVisitor> {
-public:
+  PTSanAnalysisState &PTA;
   Function &F;
-  PTSanIDStrip &DS;
-  const TargetLibraryInfo &TLI;
-  PTSanIDStripVisitor(Function &F, PTSanIDStrip &DS,
-               const TargetLibraryInfo &TLI): F(F), DS(DS), TLI(TLI) {};
-  bool runOnFunction();
+  PointerTagSanitizer &DS;
+
+public:
+  PTSanIDStripVisitor(PTSanAnalysisState &PTA)
+      : PTA(PTA), F(PTA.F), DS(PTA.DS) {}
+  void runOnFunction();
   void visitCallBase(CallBase &CB);
   void visitLoadInst(LoadInst &I);
   void visitStoreInst(StoreInst &I);
   void visitAtomicRMWInst(AtomicRMWInst &I);
-  void visitAtomicCmpXchg(AtomicCmpXchgInst &I);
+  void visitAtomicCmpXchgInst(AtomicCmpXchgInst &I);
   void visitCmpInst(CmpInst &CI);
   void visitMemIntrinsic(MemIntrinsic &I);
-  // Utils
-  Value *stripID(Value *Ptr);
-  void stripOperandID(Instruction &I, int idx);
-  Instruction *getFirstIPAfter(Value *V);
-
-  DenseMap<Value *, Value *> StrippedCache;
+  void stripOperandID(Instruction &I, unsigned Index);
 };
-
-class PTSanIDStrip {
-private:
-  friend class PTSanIDStripVisitor;
-  LLVMContext &Ctx;
-  const DataLayout &DL;
-  IntegerType *U32Ty;
-  IntegerType *U64Ty;
-  IntegerType *U8Ty;
-  IntegerType *UptrTy;
-  Type *PtrTy;
-
-  Value *AddrMask;
-
-public:
-  PTSanIDStrip(Module &M);
-  bool sanitizeFunction(Function &F, TargetLibraryInfo &TLI);
-};
-
-PTSanIDStrip::PTSanIDStrip(Module &M) : Ctx(M.getContext()),
-                                        DL(M.getDataLayout()) {
-  PtrTy = PointerType::getUnqual(Ctx);
-  UptrTy = DL.getIntPtrType(Ctx);
-  U32Ty = IntegerType::get(Ctx, 32);
-  U64Ty = IntegerType::get(Ctx, 64);
-  U8Ty = IntegerType::get(Ctx, 8);
-
-  AddrMask = ConstantInt::get(U64Ty, 0x0000FFFFFFFFFFFFULL);
-}
 } // end namespace
 
-bool PTSanIDStrip::sanitizeFunction(Function &F, TargetLibraryInfo &TLI) {
-  if (F.hasFnAttribute(Attribute::DisableSanitizerInstrumentation)) {
-    return false;
-  }
-
-  PTSanIDStripVisitor V(F, *this, TLI);
-  return V.runOnFunction();
-}
-
-Instruction *PTSanIDStripVisitor::getFirstIPAfter(Value *V) {
-  if (PHINode *PHI = dyn_cast<PHINode>(V)) {
-    return &*PHI->getParent()->getFirstInsertionPt();
-  } else if (InvokeInst *II = dyn_cast<InvokeInst>(V)) {
-    return &*II->getNormalDest()->getFirstInsertionPt();
-  } else if (Instruction *I = dyn_cast<Instruction>(V)) {
-    assert(!I->isTerminator());
-    return I->getNextNode();
-  } else {
-    return &*F.getEntryBlock().getFirstInsertionPt();
-  }
-}
-
-Value *PTSanIDStripVisitor::stripID(Value *Ptr) {
-  if (StrippedCache.contains(Ptr)) {
-    return StrippedCache.at(Ptr);
-  }
-
-  if(!Ptr->getType()->isPointerTy()) {
-    errs() << "Can't strip ID of non-ptr: " << Ptr << "\n";
-    exit(EXIT_FAILURE);
-  }
-
-  if (isa<Constant>(Ptr)) {
-    // Don't strip the tops of constants. -1 is a ptr constant that does exist
-    return Ptr;
-  }
-
-  Function *PMFn =
-      Intrinsic::getDeclaration(F.getParent(), Intrinsic::ptrmask, {DS.PtrTy, DS.U64Ty});
-
-  IRBuilder<> IRB(getFirstIPAfter(Ptr));
-  Value *True = IRB.CreateCall(PMFn, {Ptr, DS.AddrMask}, Ptr->getName() + ".true");
-  StrippedCache[Ptr] = True;
-  return True;
-}
-
-void PTSanIDStripVisitor::stripOperandID(Instruction &I, int idx) {
-  I.setOperand(idx, stripID(I.getOperand(idx)));
+void PTSanIDStripVisitor::stripOperandID(Instruction &I, unsigned Index) {
+  StripAnchor Strip =
+      PTSanDiscoverer::createStripWithDependencies(PTA, &I, I.getOperand(Index));
+  I.setOperand(Index, Strip.Call);
 }
 
 // Unlike 'real' ptsan, we can't garantee that pointers
@@ -157,15 +67,7 @@ void PTSanIDStripVisitor::visitCmpInst(CmpInst &CI) {
   Type *Ty = CI.getOperand(0)->getType();
   assert(Ty == CI.getOperand(1)->getType());
 
-  if (auto *VTy = dyn_cast<VectorType>(Ty)) {
-    if(VTy->getElementType()->isPointerTy()) {
-    errs() << "Handle ptr vector cmps like this one " << CI << "\n";
-    exit(EXIT_FAILURE);
-    }
-  }
-
-  if (Ty->isPointerTy()) {
-    errs() << "Clearing ids on cmp " << CI << "\n";
+  if (Ty->isPtrOrPtrVectorTy()) {
     stripOperandID(CI, 0);
     stripOperandID(CI, 1);
   }
@@ -175,7 +77,7 @@ void PTSanIDStripVisitor::visitAtomicRMWInst(AtomicRMWInst &I) {
   stripOperandID(I, 0);
 }
 
-void PTSanIDStripVisitor::visitAtomicCmpXchg(AtomicCmpXchgInst &I) {
+void PTSanIDStripVisitor::visitAtomicCmpXchgInst(AtomicCmpXchgInst &I) {
   stripOperandID(I, 0);
 }
 
@@ -188,7 +90,7 @@ void PTSanIDStripVisitor::visitLoadInst(LoadInst &I) {
 }
 
 
-bool PTSanIDStripVisitor::runOnFunction() {
+void PTSanIDStripVisitor::runOnFunction() {
   // Iterate all BBs in depth-first order and mark instructions for visiting.
   // This is much easier than trying to modify the program while we visit it
   SmallVector<Instruction *, 16> Instructions;
@@ -198,15 +100,9 @@ bool PTSanIDStripVisitor::runOnFunction() {
     }
   }
 
-  if (Instructions.size() == 0) { return false; }
-
   for (Instruction *I : Instructions) {
     this->visit(I);
   }
-
-  // XXX: Re-optimize function? Might save a
-  // bit of perf?
-  return true;
 }
 
 static bool isPTSanVar(Value *V) {
@@ -237,6 +133,7 @@ static bool shouldStripCallArg(CallBase &CB) {
 }
 
 void PTSanIDStripVisitor::visitCallBase(CallBase &CB) {
+  PTSanDiscoverer::discoverVarargCall(DS, CB);
   auto *Callee = CB.getCalledFunction();
   if (!Callee || !Callee->isIntrinsic()) { return; }
   if(callOnPtsanInternals(CB)) { return; }
@@ -263,6 +160,11 @@ void PTSanIDStripVisitor::visitCallBase(CallBase &CB) {
       // XXX: When we implement ids for globals, we'll need to
       // handle this carefully.
       break;
+    case Intrinsic::x86_sse3_ldu_dq:
+    case Intrinsic::x86_avx_ldu_dq_256:
+    case Intrinsic::x86_sse2_clflush:
+      stripOperandID(CB, 0);
+      break;
     case Intrinsic::ptrmask:
       // If we run into an instruction which is masking any of the top 16
       // bits, we're in trooooooble
@@ -288,11 +190,13 @@ void PTSanIDStripVisitor::visitMemIntrinsic(MemIntrinsic &I) {
 
   switch(I.getIntrinsicID()) {
     case Intrinsic::memcpy:
+    case Intrinsic::memcpy_inline:
     case Intrinsic::memmove:
       stripOperandID(I, 0);
       stripOperandID(I, 1);
       break;
     case Intrinsic::memset:
+    case Intrinsic::memset_inline:
       stripOperandID(I, 0);
       break;
     default:
@@ -306,31 +210,60 @@ void PTSanIDStripVisitor::visitMemIntrinsic(MemIntrinsic &I) {
 
 } // namespace llvm::ptsan
 
-PreservedAnalyses PTSanIDStripPass::run(Module &M,
-                                          ModuleAnalysisManager &AM) {
+PreservedAnalyses PTSanIDStripPass::run(Module &M, ModuleAnalysisManager &AM) {
   using namespace llvm::ptsan;
+
+  validatePTSanTarget(M);
 
   // Expose relative loads before visiting ordinary loads and stores.
   bool Modified = lowerLoadRelativeIntrinsics(M);
   if (Modified)
     AM.invalidate(M, PreservedAnalyses::none());
   Modified |= addNoBuiltinForPointerFns(M);
-  auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  SmallVector<Function *, 16> Functions;
+  SmallPtrSet<GlobalValue *, 32> OriginalGlobals;
   for (Function &F : M) {
-    if (F.empty())
-      continue;
-
-    PTSanIDStrip Stripper(*F.getParent());
-    Modified |=
-        Stripper.sanitizeFunction(F, FAM.getResult<TargetLibraryAnalysis>(F));
-
+    OriginalGlobals.insert(&F);
+    if (!F.empty() &&
+        !F.hasFnAttribute(Attribute::DisableSanitizerInstrumentation)) {
+      Functions.push_back(&F);
+    }
+  }
+  if (Functions.empty()) {
+    return Modified ? PreservedAnalyses::none() : PreservedAnalyses::all();
+  }
+  for (GlobalVariable &GV : M.globals()) {
+    OriginalGlobals.insert(&GV);
   }
 
-  if(!Modified) {
-    return PreservedAnalyses::all();
+  bool HadDebugCU = M.getNamedMetadata("llvm.dbg.cu") != nullptr;
+  PointerTagSanitizer DS(M);
+  auto &FAM = AM.getResult<FunctionAnalysisManagerModuleProxy>(M).getManager();
+  for (Function *F : Functions) {
+    auto &TLI = FAM.getResult<TargetLibraryAnalysis>(*F);
+    PTSanAnalysisState PTA(*F, DS, TLI);
+    PTSanIDStripVisitor(PTA).runOnFunction();
+    PTSanLateOptimizationPass().run(PTA);
+    PTSanLoweringPass().run(PTA, FAM);
+  }
+  DS.finalize();
+  if (!HadDebugCU && !ClCreateIRDbg) {
+    if (NamedMDNode *CU = M.getNamedMetadata("llvm.dbg.cu")) {
+      CU->eraseFromParent();
+    }
   }
 
-  // XXX: Probably most analyses are preserved, but I don't want to mess with this
-  PreservedAnalyses PA = PreservedAnalyses::none();
-  return PA;
+  // The shared context declares the full runtime and anchor vocabulary.
+  // Strip-only modules retain only the declarations they actually use.
+  for (Function &F : make_early_inc_range(M)) {
+    if (!OriginalGlobals.contains(&F) && F.use_empty()) {
+      F.eraseFromParent();
+    }
+  }
+  for (GlobalVariable &GV : make_early_inc_range(M.globals())) {
+    if (!OriginalGlobals.contains(&GV) && GV.use_empty()) {
+      GV.eraseFromParent();
+    }
+  }
+  return PreservedAnalyses::none();
 }

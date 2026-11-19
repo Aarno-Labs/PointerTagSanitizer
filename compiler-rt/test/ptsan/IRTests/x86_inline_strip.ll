@@ -4,6 +4,7 @@
 ; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 ;
 ; REQUIRES: x86_64-target-arch
+; This mask-only lowering is specific to the 16-bit address representation.
 ; RUN: %opt_ptsan -ptsan-no-opts -ptsan-nochecks -ptsan-stop-after=lowering %s | FileCheck %s
 ; RUN: %opt_ptsan -ptsan-no-opts -ptsan-nochecks -ptsan-stop-after=lowering -ptsan-x86-inline-strip=0 %s | FileCheck %s --check-prefix=FALLBACK --implicit-check-not=asm
 ; RUN: %opt_ptsan -ptsan-no-opts -ptsan-nochecks -ptsan-stop-after=lowering -mtriple=aarch64-unknown-linux-gnu %s | FileCheck %s --check-prefix=FALLBACK --implicit-check-not=asm

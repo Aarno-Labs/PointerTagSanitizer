@@ -17,7 +17,10 @@
 #include "ptsan.h"
 #include "ptsan_constants.h"
 #include "ptsan_bounds.h"
+#include "ptsan_origins.h"
 #include "ptsan_musl_interception.h"
+
+#include <stddef.h>
 
 template<typename T> struct is_pointer { static constexpr bool value = false; };
 template<typename T> struct is_pointer<T*> { static constexpr bool value = true; };
@@ -35,23 +38,18 @@ template <>struct is_void<void> { static constexpr bool value = true; };
 
 extern SANITIZER_INTERFACE_ATTRIBUTE THREADLOCAL u32 ptsan_in_libc;
 
+// get_addr and clear_id share ptsan_raw_address's decoding contract. In strict
+// ID32, neither may be applied to an already-decoded address.
 template <typename T>
 inline u64 get_addr(T ptr) {
-    return ((u64)ptr & 0x0000ffffffffffff);
+  return ptsan_raw_address((uintptr_t)ptr);
 }
 
-#ifdef PTSAN_NO_STRIP
-  #define clear_id(ptr) ptr
-#else
 template <typename T>
 inline T clear_id(T ptr) {
     return (T)get_addr(ptr);
 }
-#endif
 
-#ifdef PTSAN_NO_STRIP
-  #define clear_id_preserve_align(ptr) ptr
-#else
 template <typename T>
 inline T clear_id_preserve_align(T ptr)
 {
@@ -65,7 +63,6 @@ inline T clear_id_preserve_align(T ptr)
     /* 3. tell the optimiser the pointer still meets that alignment */
     return (T)__builtin_assume_aligned((void *)raw, A);
 }
-#endif
 
 // Strip IDs off of an unknown value if-and-only-if it's a pointer. If you
 // know for sure you're dealing with a pointer, I guess use clear_id from
@@ -106,27 +103,96 @@ ALWAYS_INLINE T *deepStripID(T *in) {
   return T
 }*/
 
+#ifdef PTSAN_32_BIT_IDS
 template <typename T>
-inline u16 get_id(T ptr) {
-    return (u16)((u64)ptr >> 48);
+inline PTSanID get_id(T ptr) {
+  u64 bits = (u64)ptr;
+#ifndef PTSAN_STRICT_32_BIT_IDS
+  if (!ptsan_is_encoded_id32(bits)) {
+    return 0;
+  }
+#endif
+  return (PTSanID)(bits >> 32);
 }
+#else
+template <typename T>
+inline PTSanID get_id(T ptr) {
+  return (PTSanID)((u64)ptr >> 48);
+}
+#endif
 
+#ifdef PTSAN_32_BIT_IDS
 template <typename T>
-inline T set_id(T ptr, u16 id) {
-    u64 raw = ((u64)id << 48) | get_addr(ptr);
+inline T set_id(T ptr, PTSanID id) {
+  // In strict ID32 mode tagging consumes a known raw address, not an unknown
+  // mixture of raw and encoded pointers.
+#ifdef PTSAN_STRICT_32_BIT_IDS
+  u64 raw = (u64)ptr;
+#else
+  u64 raw = get_addr(ptr);
+#endif
+  if (id == 0) {
     return (T)raw;
+  }
+  u64 payload = raw - ptsan_bounds[id].base;
+  CHECK(payload <= UINT32_MAX);
+  u64 tagged = ((u64)id << 32) | (u32)payload;
+  return (T)tagged;
 }
+#else
+template <typename T>
+inline T set_id(T ptr, PTSanID id) {
+  u64 raw = ((u64)id << 48) | get_addr(ptr);
+  return (T)raw;
+}
+#endif
+
+// Return the object base in the representation used for bounds checks:
+// tagged in ID16, raw in ID32. ID32 decoding instead uses the stored bias.
+#ifdef PTSAN_32_BIT_IDS
+inline u64 get_object_base(PTSanID id) {
+  return ptsan_bounds[id].base + ptsan_origins[id];
+}
+#else
+inline u64 get_object_base(PTSanID id) {
+  return ptsan_bounds[id].base;
+}
+#endif
+
+enum class Polarity { Tagged, Stripped };
+
+// Polarity describes the caller's representation, not whether its ID is nonzero.
+#ifdef PTSAN_32_BIT_IDS
+template <typename T>
+inline u64 get_object_offset(T ptr, PTSanID id,
+                             Polarity polarity = Polarity::Tagged) {
+  u64 address = (u64)ptr;
+  if (polarity == Polarity::Tagged) {
+    address = get_addr(ptr);
+  }
+  return address - get_object_base(id);
+}
+#else
+template <typename T>
+inline u64 get_object_offset(T ptr, PTSanID id,
+                             Polarity polarity = Polarity::Tagged) {
+  u64 base = get_object_base(id);
+  if (polarity == Polarity::Stripped)
+    base = get_addr(base);
+  return (u64)ptr - base;
+}
+#endif
 
 template<typename T>
-inline bool addr_in_range(T ptr, u16 id, u64 size) {
-  u64 base  = ptsan_bounds[id].base;
+inline bool addr_in_range(T ptr, PTSanID id, u64 size,
+                          Polarity polarity = Polarity::Tagged) {
   u64 span  = ptsan_bounds[id].span;
 
   if (size > span) {
     return false;
   }
 
-  u64 offset = (u64)ptr - base;
+  u64 offset = get_object_offset(ptr, id, polarity);
   u64 slack = span - size;
   return offset <= slack;
 }
@@ -134,18 +200,17 @@ inline bool addr_in_range(T ptr, u16 id, u64 size) {
 // False if bad range
 template<typename T>
 inline bool check_range(T ptr, u64 size) {
-  u16 id = get_id(ptr);
+  PTSanID id = get_id(ptr);
   // size == 0 accesses are always valid
   return addr_in_range(ptr, id, size) || size == 0;
 }
 
-// Use the tagged address, just as addr_in_range does: bounds bases include
-// their ID. Reserved IDs are governed by their table entries too, including
-// the empty bounds installed when strict-mode initialization finishes.
+// Return the number of accessible bytes from ptr to the end of its object.
 template <typename T>
 inline u64 bytes_remaining(T ptr) {
-  const auto &bounds = ptsan_bounds[get_id(ptr)];
-  const u64 offset = (u64)ptr - bounds.base;
+  PTSanID id = get_id(ptr);
+  const auto &bounds = ptsan_bounds[id];
+  const u64 offset = get_object_offset(ptr, id);
   return offset <= bounds.span ? bounds.span - offset : 0;
 }
 
@@ -202,14 +267,15 @@ inline bool check_range_and_report(u32 check_id, T ptr, u64 size,
   return true;
 }
 
+// Encode dest using src's ID. In strict ID32, non-null dest must be a raw
+// address belonging to src's object, not an already-encoded pointer.
 template <typename DstT, typename SrcT>
 inline DstT copy_id(DstT dest, SrcT src) {
   if (dest == nullptr) {
     return dest;
   }
 
-  u64 combined = ((u64)src & 0xffff000000000000) | (u64)dest;
-  return (DstT)combined;
+  return set_id(dest, get_id(src));
 }
 
 DECLARE_REAL(SIZE_T, malloc_usable_size, void *ptr)
@@ -221,7 +287,7 @@ DECLARE_REAL(SIZE_T, malloc_usable_size, void *ptr)
  * THIS IS A NOP IF ptsan_in_libc IS > 0
 **/
 template <typename T>
-inline T tag_with_next_id(T ptr, u64 size, FREE_TY type) {
+inline T tag_with_next_id(T ptr, u64 size, FREE_TY type, u64 alignment) {
   // We never tag ptrs from libc internals, since
   // those same internals often dereference them
   // which explodes. Call this once you've exited
@@ -230,13 +296,15 @@ inline T tag_with_next_id(T ptr, u64 size, FREE_TY type) {
     return ptr;
   }
 
+#ifndef PTSAN_STRICT_32_BIT_IDS
   CHECK(get_id(ptr) == 0);
+#endif
 
   if(UNLIKELY(ClUseReturnedMallocSize && type == FREE_TY::MALLOC)) {
     size = REAL(malloc_usable_size)(ptr);
   }
 
-  u16 id = ptsan_get_next_nonstack_id((void*)ptr, size, type);
+  PTSanID id = ptsan_get_next_nonstack_id((void*)ptr, size, type, alignment);
 
   return set_id(ptr, id);
 }
@@ -247,21 +315,21 @@ inline T tag_with_next_id(T ptr, u64 size, FREE_TY type) {
 // Nop if ptr is untagged
 template <typename T>
 inline void resize_buffer(T ptr, u64 new_size) {
-  u16 id = get_id(ptr);
+  PTSanID id = get_id(ptr);
   u64 addr = get_addr(ptr);
 
-  if (id == 0 || id == DefaultIDNo) {
+  if (id == 0 || isDefaultID(id)) {
     return;
   }
 
-  CHECK(ptsan_bounds[id].base == (u64)ptr);
+  CHECK_EQ(get_object_offset(ptr, id), 0);
 
   if(UNLIKELY(ClUseReturnedMallocSize &&
      ptsan_obj_types[id] == FREE_TY::MALLOC)) {
     new_size = REAL(malloc_usable_size)((void*)addr);
   }
 
-  ptsan_bounds[id].span = new_size;
+  ptsan_resize_buffer(id, new_size);
 }
 
 // new_ptr is the raw, untagged allocator result (possibly null).
@@ -275,7 +343,8 @@ T *tag_realloc(T *new_ptr, T* old_ptr, SIZE_T new_size) {
 
   // If old_ptr was null, this is just a malloc:
   if (old_ptr == nullptr) {
-    return tag_with_next_id(new_ptr, new_size, FREE_TY::MALLOC);
+    return tag_with_next_id(new_ptr, new_size, FREE_TY::MALLOC,
+                            alignof(max_align_t));
   }
 
   // If old_ptr == new_ptr, it's still valid, so we
@@ -286,10 +355,8 @@ T *tag_realloc(T *new_ptr, T* old_ptr, SIZE_T new_size) {
   }
 
   // If we get here, old_ptr was freed and we need a new id:
-  if(!ptsan_mark_ptr_freed((void*)old_ptr, FREE_TY::MALLOC)) {
-    Printf("PTSan found bad realloc. Deal with this\n");
-    internal__exit(1);
-  }
+  ptsan_mark_ptr_freed((void *)old_ptr, FREE_TY::MALLOC);
 
-  return tag_with_next_id(new_ptr, new_size, FREE_TY::MALLOC);
+  return tag_with_next_id(new_ptr, new_size, FREE_TY::MALLOC,
+                          alignof(max_align_t));
 }

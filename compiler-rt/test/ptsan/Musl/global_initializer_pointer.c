@@ -11,6 +11,12 @@
 // RUN: %ptsan_musl_strict -Wall -Wextra -Werror -o %t %s
 // RUN: %run %t
 
+// Loaded and directly derived ID32 global pointers must share an origin.
+// RUN: %ptsan_musl_id32_nonstrict %s -o %t.id32
+// RUN: %run %t.id32
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32.strict
+// RUN: %run %t.id32.strict
+
 struct Transition {
   short verify;
   short advance;

@@ -1,6 +1,6 @@
 ;
 ; Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-; See https:;llvm.org/LICENSE.txt for license information.
+; See https://llvm.org/LICENSE.txt for license information.
 ; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 ;
 ; RUN: %opt_ptsan -ptsan-strict-mode -ptsan-no-opts -mtriple=aarch64-unknown-linux-musl %s | FileCheck %s --check-prefixes=COMMON,ARM
@@ -9,13 +9,13 @@
 ; The frame owns one ID per ABI backing region: three on AArch64, two on
 ; x86-64. Initialize immediately after va_start and retire at function exit.
 ; COMMON-LABEL: define void @reader(
-; ARM: call void @ptsan_get_stack_ids_n({{.*}}i64 3)
-; X86: call void @ptsan_get_stack_ids_n({{.*}}i64 2)
+; COMMON: [[CURSOR:%.*]] = load i64, ptr @ptsan_stack_id_log
+; ARM-NEXT: call void @ptsan_get_stack_ids({{.*}}i64 3)
+; X86-NEXT: call void @ptsan_get_stack_ids({{.*}}i64 2)
 ; COMMON: call void @llvm.va_start{{.*}}(ptr [[RAW:%[^)]+]])
 ; ARM-NEXT: call void @ptsan_init_va_list_aarch64(ptr [[RAW]], i64 {{.*}}, i64 {{.*}}, i64 {{.*}})
 ; X86-NEXT: call void @ptsan_init_va_list_x86_64(ptr [[RAW]], i64 {{.*}}, i64 {{.*}}, i64 176)
-; ARM: call void @ptsan_free_stack_ids_n({{.*}}i64 3)
-; X86: call void @ptsan_free_stack_ids_n({{.*}}i64 2)
+; COMMON: call void @ptsan_free_stack_ids(i64 [[CURSOR]])
 ; COMMON: ret void
 ;
 ; Both backends place the appended IR byval marker on the stack even when

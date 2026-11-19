@@ -6,6 +6,13 @@
 // RUN: split-file %s %t
 // RUN: %ptsanxx_musl_strict -O2 -mllvm -ptsan-abort-on-error %t/base.cpp %t/main.cpp -o %t/test
 // RUN: %t/test
+//
+// VTT entries must carry the encoding expected by strict ID32 callers.
+// RUN: %ptsanxx_musl_id32_strict %t/base.cpp %t/main.cpp -o %t/id32
+// RUN: %t/id32
+// Check the separately built indicator-supported C++ stack too.
+// RUN: %ptsanxx_musl_id32_strict_indicator %t/base.cpp %t/main.cpp -o %t/indicator
+// RUN: %t/indicator
 
 // The separately compiled base constructor uses the VTT's construction-vtable
 // pointer to locate its virtual base. Initializer replay must tag that pointer.

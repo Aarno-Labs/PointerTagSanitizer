@@ -1,6 +1,6 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clangxx_ptsan -g -O2 -o %exe %s
-// RUN: ./%exe 2> out.txt
+// RUN: not ./%exe 2> out.txt
 // RUN: cat out.txt | FileCheck %s
 
 // CHECK: Found bad

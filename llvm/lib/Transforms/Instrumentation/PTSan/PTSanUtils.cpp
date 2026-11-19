@@ -100,9 +100,6 @@ bool addNoBuiltinForPointerFns(Module &M) {
 
     if (HasPtrParam) {
       F.addFnAttr(Attribute::NoBuiltin);
-      if (!F.hasFnAttribute(Attribute::OptimizeNone)) {
-        F.addFnAttr(Attribute::MinSize);
-      }
       Modified = true;
     }
   }
@@ -147,9 +144,9 @@ bool materializeConstantUsersOfGlobal(Function &F, GlobalValue *G) {
       continue;
     }
 
-    // A GlobalVariable user is a module-level initializer and cannot be
-    // materialized inside F.
-    if (isa<GlobalVariable>(C)) {
+    // Global initializers and alias definitions belong to the module, not F.
+    // Each symbol's expression users are visited separately.
+    if (isa<GlobalValue>(C)) {
       continue;
     }
 
@@ -166,27 +163,16 @@ bool materializeConstantUsersOfGlobal(Function &F, GlobalValue *G) {
                                                true);
 }
 
-GlobalVariable *getPTSanDataGlobal(Value *V) {
-  if (auto *GV = dyn_cast<GlobalVariable>(V)) {
-    return GV;
-  }
-
-  auto *GA = dyn_cast<GlobalAlias>(V);
-  if (!GA) {
-    return nullptr;
-  }
-
-  GlobalObject *Aliasee = GA->getAliaseeObject();
-  while (auto *AliasedAlias = dyn_cast<GlobalAlias>(Aliasee)) {
-    Aliasee = AliasedAlias->getAliaseeObject();
-  }
-  return dyn_cast<GlobalVariable>(Aliasee);
-}
-
 // Fixed representations constrain the value node. Otherwise MinCut chooses
 // its polarity from the surrounding uses and conversion costs.
 std::optional<Polarity>
 getRequiredPolarity(PointerTagSanitizer &DS, Value *V) {
+  // Code addresses already have their public representation; unlike data
+  // globals, they do not need a proxy or a tag conversion.
+  if (isa<Function>(V)) {
+    return Polarity::Tagged;
+  }
+
   if (DS.getAsAnchor<SourceAnchor>(V) || DS.getAsAnchor<StripAnchor>(V)) {
     return Polarity::Stripped;
   }
@@ -203,11 +189,11 @@ getRequiredPolarity(PointerTagSanitizer &DS, Value *V) {
     return Polarity::Tagged;
   }
 
-  // A data global has both representations available without a conversion:
+  // A global symbol has both representations available without a conversion:
   // its GlobalValue is the raw address, while its proxy (when one exists)
   // contains the tagged address.
   // Without a proxy, the tagged representation explicitly carries ID zero.
-  if (getPTSanDataGlobal(V)) {
+  if (isa<GlobalValue>(V)) {
     return std::nullopt;
   }
 
@@ -250,9 +236,13 @@ PTSanPolarityReader::PTSanPolarityReader(PointerTagSanitizer &DS, Function &F)
 }
 
 Polarity PTSanPolarityReader::getPolarity(Value *V) {
+  if (isa<Function>(V)) {
+    return Polarity::Tagged;
+  }
+
   // A global symbol denotes the raw address. Tagged uses are represented by
   // proxy loads, or an explicit zero-ID tag when the global has no proxy.
-  if (getPTSanDataGlobal(V)) {
+  if (isa<GlobalValue>(V)) {
     return Polarity::Stripped;
   }
 
@@ -1263,21 +1253,46 @@ HoistTarget PTSanUtils::getFirstCommonInsertionPoint(
   return Acc;
 }
 
-HoistTarget PTSanUtils::getFirstIPAfter(Value *V) {
+Instruction *PTSanUtils::getUseInsertionPoint(Use &U) {
+  auto *User = cast<Instruction>(U.getUser());
+  if (auto *PHI = dyn_cast<PHINode>(User)) {
+    return PHI->getIncomingBlock(U)->getTerminator();
+  }
+  return User;
+}
+
+HoistTarget PTSanUtils::getInsertionPointForUse(Value *V, Use &U) {
+  return getInsertionPointForUse(V, getUseInsertionPoint(U));
+}
+
+HoistTarget PTSanUtils::getInsertionPointForUse(Value *V,
+                                               Instruction *UseIP) {
+  assert(DT.dominates(V, UseIP) && "value must be available before its consumer");
   if (PHINode *PHI = dyn_cast<PHINode>(V)) {
     return {&*PHI->getParent()->getFirstInsertionPt(), BEFORE};
-  } else if (InvokeInst *II = dyn_cast<InvokeInst>(V)) {
-    return {&*II->getNormalDest()->getFirstInsertionPt(), BEFORE};
   } else if (Instruction *I = dyn_cast<Instruction>(V)) {
-    assert(!I->isTerminator());
-    return {I, AFTER};
+    if (!I->isTerminator()) {
+      return {I, AFTER};
+    }
+
+    // Terminator results become available on edges. Walk up from this use
+    // while the value remains available; a join may be the earliest point
+    // shared by the paths from a callbr's successors.
+    BasicBlock *BB = UseIP->getParent();
+    auto *Node = DT.getNode(BB);
+    while (Node && Node->getIDom() &&
+           DT.dominates(I, Node->getIDom()->getBlock())) {
+      Node = Node->getIDom();
+      BB = Node->getBlock();
+    }
+    return {&*BB->getFirstInsertionPt(), BEFORE};
   } else {
     return {&*F.getEntryBlock().getFirstInsertionPt(), BEFORE};
   }
 }
 
 // If Ty is a vector and V is not, splat V to match Ty
-Value *PTSanUtils::splatToMatchType(Value *V, Type *Ty) {
+Value *PTSanUtils::splatToMatchType(Value *V, Type *Ty, Instruction *UseIP) {
   if (V->getType() == Ty) {
     return V;
   }
@@ -1285,7 +1300,7 @@ Value *PTSanUtils::splatToMatchType(Value *V, Type *Ty) {
   auto *VectorTy = dyn_cast<VectorType>(Ty);
   assert(VectorTy && VectorTy->getElementType() == V->getType() &&
          "expected a scalar value matching the vector element type");
-  IRBuilder<> IRB(getFirstIPAfter(V).getIP());
+  IRBuilder<> IRB(getInsertionPointForUse(V, UseIP).getIP());
   return IRB.CreateVectorSplat(VectorTy->getElementCount(), V,
                                V->getName() + ".ptsan.splat");
 }
@@ -1354,45 +1369,19 @@ bool PTSanUtils::isKnownSpatiallyValid(Use *U) {
 }
 
 bool PTSanUtils::isUnfreeableMemory(Value *V) {
-  auto onlyContainsUnfreeables = [](Value *V) -> bool {
-    if (isa<Constant>(V)) {
-      return true;
-    }
-
-    if (CallBase *CB = dyn_cast<CallBase>(V)) {
-      auto *Callee = CB->getCalledFunction();
-      if (!Callee) {
-        return false;
-      }
-
-      // XXX: there are a bunch more of these...
-      if (Callee->getName() == "__cxa_begin_catch") {
-        return true;
-      }
-    }
-
-    return false;
-  };
-
-
   if (isa<AllocaInst>(V) || isa<Constant>(V)) {
-    return true;
-  }
-
-  if (onlyContainsUnfreeables(V)) {
     return true;
   }
 
   // Load of global should be true, but not neceesarily loads of things
   // in globals.
-
   if (auto *LI = dyn_cast<LoadInst>(V)) {
     Value *Base = findBasePointer(LI->getPointerOperand());
-    if (onlyContainsUnfreeables(Base)) {
-      return true;
-    }
+    return isa<Constant>(Base);
   }
 
+  // In particular, __cxa_begin_catch returns exception storage that can be
+  // freed by __cxa_end_catch; its bounds cannot be hoisted across that call.
   return false;
 }
 
@@ -1453,6 +1442,7 @@ void FindMemAccesses::visitIntrinsicInst(IntrinsicInst &I) {
       return;
     }
     case Intrinsic::memcpy:
+    case Intrinsic::memcpy_inline:
     case Intrinsic::memmove:
     {
       Value *Size = I.getOperand(2);
@@ -1461,15 +1451,22 @@ void FindMemAccesses::visitIntrinsicInst(IntrinsicInst &I) {
       return;
     }
     case Intrinsic::memset:
+    case Intrinsic::memset_inline:
     {
       Value *Size = I.getOperand(2);
       PtrOps.push_back(PtrOp(&I, 0, RANGE, Size));
       return;
     }
+    case Intrinsic::x86_sse3_ldu_dq:
+    case Intrinsic::x86_avx_ldu_dq_256:
+      PtrOps.push_back(PtrOp(&I, 0, POINT, DL.getTypeStoreSize(I.getType())));
+      return;
     case Intrinsic::x86_sse_ldmxcsr:
     case Intrinsic::x86_sse_stmxcsr:
       PtrOps.push_back(PtrOp(&I, 0, EXOTIC, 4));
       return;
+    // Cache-line operations need raw addresses, not whole-cache-line checks.
+    case Intrinsic::x86_sse2_clflush:
     case Intrinsic::x86_umonitor:
       PtrOps.push_back(PtrOp(&I, 0));
       return;
@@ -2203,7 +2200,7 @@ std::pair<Value *, Value *> VectorAccessRange::materializeMinSize(
   IRBuilder<> IRB(IP);
   Type *LaneVectorTy = Mask->getType()->getWithNewType(U64Ty);
   Value *LaneSizeVector =
-      PTU->splatToMatchType(IRB.getInt64(LaneSize), LaneVectorTy);
+      PTU->splatToMatchType(IRB.getInt64(LaneSize), LaneVectorTy, IP);
   Value *RangeMin = Pointer;
 
   if (Offset != 0) {
@@ -2215,7 +2212,7 @@ std::pair<Value *, Value *> VectorAccessRange::materializeMinSize(
     Value *LaneNumbers =
         IRB.CreateStepVector(OffsetTy, "ptsan.range.lane.numbers");
     Value *StrideVector =
-        PTU->splatToMatchType(IRB.getInt64(Stride), LaneVectorTy);
+        PTU->splatToMatchType(IRB.getInt64(Stride), LaneVectorTy, IP);
     Value *ByteOffsets =
         IRB.CreateMul(LaneNumbers, StrideVector, "ptsan.range.lane.offsets");
     RangeMin = IRB.CreateGEP(IRB.getInt8Ty(), RangeMin, ByteOffsets,

@@ -5,6 +5,12 @@
 // RUN: ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 
+// RUN: %clang_ptsan_id32 -g -O2 -I%crt_src/include -I%crt_src/lib -o %exe %s
+// RUN: ./%exe > out.txt
+// RUN: cat out.txt | FileCheck %s --check-prefix=OUT
+// RUN: ./%exe 2> err.txt
+// RUN: cat err.txt | FileCheck %s --check-prefix=ERR
+
 // OUT: Size: 56
 // OUT: Got date:
 // ERR-NOT: Found bad
@@ -18,12 +24,7 @@
 #include <stdio.h>
 
 
-#define get_id(ptr) \
-  (uint16_t)((uint64_t)ptr >> 48)
-
-extern uint64_t ptsan_get_bound(uint16_t id);
-extern uint64_t ptsan_get_base(uint16_t id);
-extern uint64_t ptsan_get_size(uint16_t id);
+#include "Inputs/ptsan_test_interface.h"
 
 /* Drop-in replacements for the MHD helpers */
 static size_t MHD_uint8_to_str_pad(uint8_t v, unsigned width,
@@ -60,7 +61,7 @@ bool get_date_str (char *date)
 
   struct tm *nptr = &now;
 
-  uint16_t id = get_id(nptr);
+  PTSanID id = get_id(nptr);
   printf("ID: %u\n", id);
   printf("Base: %lu\n", ptsan_get_base(id));
   printf("Bound: %lu\n", ptsan_get_bound(id));

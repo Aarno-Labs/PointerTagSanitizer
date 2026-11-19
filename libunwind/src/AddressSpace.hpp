@@ -191,6 +191,11 @@ public:
     return val;
   }
   uintptr_t       getP(pint_t addr);
+#if defined(_LIBUNWIND_PTSAN_NATIVE_REGISTERS)
+  // A register slot has a native machine address, but its contents may be an
+  // encoded application pointer. Keep this load raw and preserve every bit.
+  __attribute__((disable_sanitizer_instrumentation, noinline))
+#endif
   uint64_t        getRegister(pint_t addr);
   static uint64_t getULEB128(pint_t &addr, pint_t end);
   static int64_t  getSLEB128(pint_t &addr, pint_t end);
@@ -213,6 +218,17 @@ inline uintptr_t LocalAddressSpace::getP(pint_t addr) {
 #endif
 }
 
+#if defined(_LIBUNWIND_PTSAN_NATIVE_REGISTERS)
+inline uint64_t LocalAddressSpace::getRegister(pint_t addr) {
+#if __SIZEOF_POINTER__ == 8 || defined(__mips64)
+  uint64_t value;
+#else
+  uint32_t value;
+#endif
+  memcpy(&value, (const void *)addr, sizeof(value));
+  return value;
+}
+#else
 inline uint64_t LocalAddressSpace::getRegister(pint_t addr) {
 #if __SIZEOF_POINTER__ == 8 || defined(__mips64)
   return get64(addr);
@@ -220,6 +236,7 @@ inline uint64_t LocalAddressSpace::getRegister(pint_t addr) {
   return get32(addr);
 #endif
 }
+#endif
 
 /// Read a ULEB128 into a 64-bit word.
 inline uint64_t LocalAddressSpace::getULEB128(pint_t &addr, pint_t end) {

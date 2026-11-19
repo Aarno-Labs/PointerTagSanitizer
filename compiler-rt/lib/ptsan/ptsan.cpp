@@ -14,9 +14,10 @@
 
 #include "ptsan.h"
 #include "interceptors/ptsan_interceptors.h"
-#include "ptsan_thread.h"
 #include "ptsan_bounds.h"
+#include "ptsan_origins.h"
 #include "ptsan_stats.h"
+#include "ptsan_thread.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -44,7 +45,8 @@ static bool tsd_key_inited = false;
 void PTSanTSDInit(void (*destructor)(void *tsd)) {
   CHECK(!tsd_key_inited);
   tsd_key_inited = true;
-  CHECK_EQ(0, pthread_key_create(&tsd_key, destructor));
+  int result = pthread_key_create(&tsd_key, destructor);
+  CHECK_EQ(result, 0);
 }
 #endif
 
@@ -57,11 +59,19 @@ PTSanThread *GetCurrentThread() {
 void SetCurrentThread(PTSanThread *t) {
   // Make sure we do not reset the current PTSanThread.
   CHECK_EQ(0, ptsan_current_thread);
+  // The child owns its TLS log. Initialize it before publishing the thread
+  // record or entering instrumented code; application signals remain blocked.
+  ptsan_stack_id_log.initialize();
   ptsan_current_thread = t;
+#ifdef PTSAN_32_BIT_IDS
+  // Start at the zero sentinel, so the first frame takes the refill path.
+  // Signals remain blocked here; a refill later publishes one cursor store.
+  ptsan_stack_origin_next = t->StackOrigins + t->StackOriginCount;
+#endif
 
-  if (t->stack_id_bucket_no >= 0) {
-    ptsan_next_stack_id = StackIDBuckets[t->stack_id_bucket_no].start;
-    ptsan_stack_id_limit = StackIDBuckets[t->stack_id_bucket_no].end;
+  if (t->stack_id_bucket) {
+    ptsan_next_stack_id = t->stack_id_bucket->start;
+    ptsan_stack_id_limit = t->stack_id_bucket->end;
   } else {
     // 1 > 0, so we always go to the slow case
     ptsan_next_stack_id = 1;
@@ -75,6 +85,15 @@ void SetCurrentThread(PTSanThread *t) {
 #endif
 }
 
+void ClearCurrentThread() {
+#ifdef PTSAN_32_BIT_IDS
+  ptsan_stack_origin_next = nullptr;
+#endif
+  ptsan_current_thread = nullptr;
+  // Publish the cleared pointer before the thread record is unmapped.
+  atomic_signal_fence(memory_order_seq_cst);
+}
+
 #ifdef PTSAN_MUSL_INTERCEPTION
 void FinishMuslThread() {
   // Instrumented musl still uses stack and TLS IDs after running TSD
@@ -85,24 +104,21 @@ void FinishMuslThread() {
   SetSigProcMask(&set, nullptr);
 
   PTSanThread *t = ptsan_current_thread;
-  ptsan_current_thread = nullptr;
-  atomic_signal_fence(memory_order_seq_cst);
   // A failed pthread_create can exit before PTSanThreadStartFunc runs.
-  if (t)
+  if (t) {
     t->Destroy();
+  }
 }
 #else
 void PTSanTSDDtor(void *tsd) {
   PTSanThread *t = (PTSanThread*)tsd;
   if (t->destructor_iterations_ > 1) {
     t->destructor_iterations_--;
-    CHECK_EQ(0, pthread_setspecific(tsd_key, tsd));
+    int result = pthread_setspecific(tsd_key, tsd);
+    CHECK_EQ(result, 0);
     return;
   }
   ScopedBlockSignals block(nullptr);
-  ptsan_current_thread = nullptr;
-  // Make sure that signal handler can not see a stale current thread pointer.
-  atomic_signal_fence(memory_order_seq_cst);
   PTSanThread::TSDDtor(tsd);
 }
 #endif
@@ -110,19 +126,23 @@ void PTSanTSDDtor(void *tsd) {
 
 
 void ValidateCls() {
+#ifdef PTSAN_STRICT_32_BIT_IDS
+  CHECK(ClStrictMode);
+#elif defined(PTSAN_32_BIT_IDS)
+  CHECK(!ClStrictMode);
+#endif
+#ifdef PTSAN_32_BIT_IDS
+  CHECK(ClAbortOnError);
+  CHECK(IsPowerOfTwo(ClID32OriginQuantum));
+  CHECK_LE(ClID32OriginQuantum, 1ULL << 31);
+  const u64 PageSize = GetPageSizeCached();
+  if (ClID32OriginQuantum < PageSize) {
+    Printf("PTSan ID32 origin quantum (%u) is smaller than the kernel page "
+           "size (%llu)\n", ClID32OriginQuantum, PageSize);
+    internal__exit(1);
+  }
+#endif
   // If you hit these, go change the define in ptsan.h
-  #ifdef PTSAN_NO_IDS
-    CHECK(ClNoIDs);
-  #else
-    CHECK(!ClNoIDs);
-  #endif
-
-  #ifdef PTSAN_NO_STRIP
-    CHECK(ClNoStrip);
-  #else
-    CHECK(!ClNoStrip);
-  #endif
-
   #ifdef PTSAN_LAM
     CHECK(ClLAM);
   #else
@@ -212,12 +232,21 @@ int ptsan_enable_lam_u48(void) {
 #endif
 }
 
+SANITIZER_INTERFACE_ATTRIBUTE void __ptsan_init_ids() {
+  static bool initialized;
+  if (initialized) {
+    return;
+  }
+  SetCommonFlagsDefaults();
+  ValidateCls();
+  InitializeIDs();
+  initialized = true;
+}
+
 static void ptsanInitStart() {
   ptsan_init_is_running = true;
 
-  SetCommonFlagsDefaults();
-
-  ValidateCls();
+  __ptsan_init_ids();
 
   if (ClLAM)
     ptsan_enable_lam_u48();
@@ -226,38 +255,34 @@ static void ptsanInitStart() {
 
   InitializeInterceptors();
 
-  InitializeIDs();
-
-  // An instrumented libc's global proxy constructors run before initialization
-  // finishes. Give them valid slow-path stack-ID state; the normal per-thread
-  // bucket is installed below by SetCurrentThread.
+  // Libc-dependent setup can enter instrumented code before initialization
+  // finishes. Give it valid slow-path stack-ID state; SetCurrentThread installs
+  // the normal per-thread bucket below.
   ptsan_next_stack_id = 1;
   ptsan_stack_id_limit = 0;
-}
 
-static void ptsanInitFinish() {
+#ifndef PTSAN_MUSL_INTERCEPTION
+  // Musl has already registered these ranges in its pre-TLS startup wrapper.
+  InitializeSharedConstantRanges();
+#endif
+  // Musl has TLS by this point. Install the thread record
+  // before returning to instrumented startup code, including va_start users.
 #ifndef PTSAN_MUSL_INTERCEPTION
   PTSanTSDInit(PTSanTSDDtor);
 #endif
 
+  // TLS exists at this point. Publish the main thread before constructors or
+  // subsequent instrumented-libc setup can request ordinary stack/heap IDs.
   PTSanThread *main_thread = PTSanThread::Create(nullptr, nullptr);
   SetCurrentThread(main_thread);
-  main_thread->Init();
+}
 
+static void ptsanInitFinish() {
   Atexit(ptsan_atexit);
-
-  // Initialization may call instrumented libc with bootstrap ID-zero pointers.
-  // Close the permissive ranges only after the last setup call into libc.
-  if (ClStrictMode) {
-    ptsan_bounds[0].base = 0;
-    ptsan_bounds[0].span = 0;
-    ptsan_bounds[DefaultIDNo].base = 0;
-    ptsan_bounds[DefaultIDNo].span = 0;
-  }
 
   ptsan_init_is_running = false;
   ptsan_initialized = true;
-#ifndef PTSAN_INSTRUMENTED_LIBC
+#ifndef PTSAN_MUSL_INTERCEPTION
   // ptsan is initialized, but there are potentially libc calls between
   // here an main (in c++ at least). PointerTagSanitizer will add a
   // call to ptsan_enable_libc_instr in main, which will set this back to
@@ -273,12 +298,12 @@ SANITIZER_INTERFACE_ATTRIBUTE void __ptsan_init() {
     return;
 
   ptsanInitStart();
-#ifndef PTSAN_INSTRUMENTED_LIBC
+#ifndef PTSAN_MUSL_INTERCEPTION
   ptsanInitFinish();
 #endif
 }
 
-#ifdef PTSAN_INSTRUMENTED_LIBC
+#ifdef PTSAN_MUSL_INTERCEPTION
 // An instrumented libc needs its PTSan-generated global proxy constructors to
 // run after the ID tables exist but before initialization calls into libc.
 SANITIZER_INTERFACE_ATTRIBUTE void __ptsan_finish_instrumented_libc_init() {

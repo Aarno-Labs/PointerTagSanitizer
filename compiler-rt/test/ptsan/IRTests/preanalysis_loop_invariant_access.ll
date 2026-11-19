@@ -4,7 +4,7 @@
 ; SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 ;
 ; XFAIL: *
-; RUN: %clang_raw -x ir -fsanitize=ptsan -O2 -fno-vectorize \
+; RUN: %clang_ptsan_plain -x ir -O2 -fno-vectorize \
 ; RUN:   -fno-slp-vectorize -fno-unroll-loops -S -emit-llvm -o - %s \
 ; RUN:   | FileCheck %s
 ;

@@ -6,8 +6,8 @@
 // Without loop preanalysis, PTSan catches this as a normal point check.
 //
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -O3 -g -fno-discard-value-names \
-// RUN:   -mllvm -ptsan-runtime-validate \
+// RUN: %clang_ptsan_plain -O3 -g -fno-discard-value-names \
+// RUN:   -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-abort-on-error \
 // RUN:   -mllvm -ptsan-stack-temporal-safety=0 \
 // RUN:   -o %exe %s

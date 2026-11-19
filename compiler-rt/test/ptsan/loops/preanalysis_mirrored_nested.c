@@ -1,6 +1,6 @@
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-discard-value-names -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR --implicit-check-not=SimpleAccessRange
+// RUN: %clang_ptsan_plain -g -O3 -fno-discard-value-names -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR --implicit-check-not=SimpleAccessRange
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -fno-discard-value-names -mllvm -ptsan-runtime-validate -mllvm -ptsan-print-stats -o %exe %s %S/../Inputs/preanalysis_obsequi_globals.c
+// RUN: %clang_ptsan_plain -g -O3 -fno-discard-value-names -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats -o %exe %s %S/../Inputs/preanalysis_obsequi_globals.c
 // RUN: ./%exe 8 2> err && FileCheck %s --check-prefix=OUT < err
 
 // Model Obsequi's four mirrored writes inside a pair of nested loops. Their

@@ -5,14 +5,14 @@
 //
 // REQUIRES: x86_64-target-arch
 // RUN: rm -rf %t && mkdir -p %t && cd %t
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 -march=skylake-avx512 \
+// RUN: %clang_ptsan_plain -g -O3 -march=skylake-avx512 \
 // RUN:   -fno-discard-value-names -mllvm -force-vector-width=4 \
-// RUN:   -mllvm -force-vector-interleave=1 -mllvm -ptsan-runtime-validate \
+// RUN:   -mllvm -force-vector-interleave=1 -fsanitize-ptsan-runtime-validate \
 // RUN:   -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o optimized.ll %s
 // RUN: FileCheck %s --check-prefix=OPT < optimized.ll
-// RUN: %clang_raw -fsanitize=ptsan -g -O3 \
+// RUN: %clang_ptsan_plain -g -O3 \
 // RUN:   -mllvm -force-vector-width=4 -mllvm -force-vector-interleave=1 \
-// RUN:   -mllvm -ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
+// RUN:   -fsanitize-ptsan-runtime-validate -mllvm -ptsan-abort-on-error \
 // RUN:   -mllvm -ptsan-stack-temporal-safety=0 -o test %s
 // RUN: ./test 2> good.txt
 // RUN: FileCheck %s --check-prefix=GOOD --allow-empty < good.txt

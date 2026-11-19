@@ -1,15 +1,19 @@
 ; RUN: rm -rf %t && mkdir -p %t && cd %t
 ; RUN: %opt_ptsan %s -S > out.ll
-; RUN: cat out.ll | FileCheck %s
+; RUN: cat out.ll | FileCheck %s --check-prefixes=CHECK,DEFAULT
+
+; RUN: %opt_ptsan -ptsan-32-bit-ids %s -S > out.ll
+; RUN: cat out.ll | FileCheck %s --check-prefixes=CHECK,ID32
 
 ; Check should be fully hoisted
 ; CHECK-LABEL: define{{.*}}@case_alloca_ptr
 ; CHECK-LABEL: entry:
 ; CHECK: %local = alloca [8 x i32]
-; CHECK: getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds, i64 0, i64
+; CHECK: getelementptr inbounds {{.*}}%__ptsan_ObjectBounds{{.*}} i64
 ; Exactly one gep for the memset at the end
-; CHECK: = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds
-; CHECK-NEXT: call void @llvm.memset
+; DEFAULT: = getelementptr inbounds [65536 x %__ptsan_ObjectBounds], ptr @ptsan_bounds
+; DEFAULT-NEXT: call void @llvm.memset
+; ID32: call void @ptsan_free_stack_ids(i64
 
 
 ; ModuleID = '../hoisting.c'

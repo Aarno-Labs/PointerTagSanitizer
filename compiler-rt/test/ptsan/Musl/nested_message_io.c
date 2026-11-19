@@ -15,6 +15,15 @@
 // RUN: FileCheck %s < %t.recv
 // RUN: not %run %t recvmmsg-bad 2> %t.recvmmsg
 // RUN: FileCheck %s < %t.recvmmsg
+
+// ID32 message headers and their nested buffers must both be decoded and checked.
+// RUN: %ptsan_musl_id32_strict %s -o %t.id32
+// RUN: %run %t.id32 send-good
+// RUN: %run %t.id32 recv-good
+// RUN: %run %t.id32 recvmmsg-good
+// RUN: not %run %t.id32 send-bad 2>&1 | FileCheck %s
+// RUN: not %run %t.id32 recv-bad 2>&1 | FileCheck %s
+// RUN: not %run %t.id32 recvmmsg-bad 2>&1 | FileCheck %s
 //
 // CHECK: Found bad
 

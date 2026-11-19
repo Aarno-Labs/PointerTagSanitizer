@@ -10,6 +10,9 @@
 // RUN: %clang_ptsan -g -O2 -o %exe %s
 // RUN: ./%exe 2>&1 | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe 2>&1 | FileCheck %s
+
 // CHECK: OK: strdup tests passed
 // CHECK-NOT: BUG:
 
@@ -22,7 +25,9 @@
 extern char *__strdup(const char *s);
 
 // pointer == is tag-blind under ptsan, so compare the tag bits explicitly
-static uint16_t tag_of(const void *p) { return (uint16_t)((uintptr_t)p >> 48); }
+#include "Inputs/ptsan_test_interface.h"
+
+static PTSanID tag_of(const void *p) { return get_id(p); }
 
 static int failures = 0;
 

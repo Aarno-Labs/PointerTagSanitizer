@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "notes": [
+    "Initial expectations from local baseline campaigns; clean llvmorg-18.1.8 CI must confirm them.",
+    "Plain dynamic glibc: 167/167 PASS in ptsan-glibc-baseline-20261009/multisource-baseline.json.",
+    "Plain musl: five FAIL and CLAMR NOEXE in ptsan-strict-id32-20261008/validation/multisource-baseline.json.",
+    "Historical failure reasons are provenance. Performance accepts any observed workload failure for these named exclusions; correctness CI retains diagnostic-aware expectations.",
+    "SPEC ref baseline workloads are expected to pass all output checks; specrand remains correctness-only.",
+    "2026-10-23: plain-musl consumer-typeset exits 139 in catclose((nl_catd)-1); its failed catopen result is closed unconditionally."
+  ],
+  "multisource_rules": [
+    {
+      "category": "other",
+      "phase": "verify",
+      "configurations": [
+        "plain-musl"
+      ],
+      "tests": [
+        "Applications/ClamAV/clamscan",
+        "Applications/obsequi/Obsequi",
+        "Benchmarks/MiBench/consumer-typeset/consumer-typeset",
+        "Benchmarks/Prolangs-C++/city/city",
+        "Benchmarks/Ptrdist/ft/ft"
+      ]
+    },
+    {
+      "category": "other",
+      "phase": "build",
+      "configurations": [
+        "plain-musl"
+      ],
+      "tests": [
+        "Benchmarks/DOE-ProxyApps-C++/CLAMR/CLAMR"
+      ],
+      "build_directory": "MultiSource/Benchmarks/DOE-ProxyApps-C++/CLAMR/"
+    }
+  ]
+}

@@ -7,6 +7,9 @@
 // RUN: %clang_ptsan -g -O2 -o %exe %s
 // RUN: ./%exe | FileCheck %s
 
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: ./%exe | FileCheck %s
+
 // CHECK: pass-by-value ID is fresh and has size 2048
 
 #include "Inputs/ptsan_test_interface.h"
@@ -18,8 +21,8 @@ typedef struct {
 } large_blob_t;
 
 __attribute__((noinline))
-static void inspect_copy(large_blob_t blob, uint16_t caller_id) {
-  uint16_t copy_id = get_id(blob.payload);
+static void inspect_copy(large_blob_t blob, PTSanID caller_id) {
+  PTSanID copy_id = get_id(blob.payload);
 
   assert(copy_id != 0);
   assert(copy_id != ptsan_default_id());
@@ -32,7 +35,7 @@ static void inspect_copy(large_blob_t blob, uint16_t caller_id) {
 
 int main(void) {
   large_blob_t blob = {0};
-  uint16_t caller_id = get_id(blob.payload);
+  PTSanID caller_id = get_id(blob.payload);
 
   assert(caller_id != 0);
   assert(caller_id != ptsan_default_id());

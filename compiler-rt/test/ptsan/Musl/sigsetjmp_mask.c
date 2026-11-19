@@ -7,6 +7,9 @@
 // RUN: %run %t
 // RUN: %ptsan_musl_strict -O2 %s -o %t.opt
 // RUN: %run %t.opt
+//
+// RUN: %ptsan_musl_id32_strict -O2 %s -o %t.id32
+// RUN: %run %t.id32
 
 // The assembly passes a raw jmp_buf to __sigsetjmp_tail on both returns.
 // Its runtime wrapper must save/restore the mask without requiring a pointer

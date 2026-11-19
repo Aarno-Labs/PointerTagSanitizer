@@ -2,13 +2,15 @@
 // RUN: %clang_ptsan -g -O2 -o %exe %s
 // RUN: ./%exe | FileCheck %s
 
-// CHECK: malloc id is 0x1
+// The cache's batch size and allocation order are implementation details.
+// CHECK: malloc id is 0x{{[1-9a-f][0-9a-f]*}}
 // CHECK: Printing buf as first argument: ABCDEFGHIJKLMNOPQRS
 // CHECK: Printing buf as varag argument: ABCDEFGHIJKLMNOPQRS
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 
 void __attribute__((noinline)) inner(int idx, char *buf) {
   char c = buf[idx];
@@ -22,7 +24,7 @@ void __attribute__((noinline)) outer(int idx) {
   }
   buf[19] = '\0';
 
-  printf("malloc id is 0x%lx\n", (uint64_t)buf>>48);
+  printf("malloc id is 0x%x\n", get_id(buf));
 
   inner(idx, buf);
 

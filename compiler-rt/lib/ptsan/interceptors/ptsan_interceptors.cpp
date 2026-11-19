@@ -143,10 +143,9 @@ T addRetID(T out, FirstArg first, Rest... rest) {
     }
 
     if constexpr (is_pointer<FirstArg>::value) {
-      u16 id = get_id(first);
-      T tagged_out = set_id(out, id);
-      if (id && addr_in_range(tagged_out, id, 1)) {
-        return tagged_out;
+      PTSanID id = get_id(first);
+      if (id && addr_in_range(out, id, 1, Polarity::Stripped)) {
+        return set_id(out, id);
       }
     }
 
@@ -205,9 +204,10 @@ INTERCEPTOR(void, free, void *ptr) {
 
   ENSURE_PTSAN_INITED();
 
-  if(ptsan_mark_ptr_freed(ptr, FREE_TY::MALLOC)) {
-    return REAL(free)(clear_id(ptr));
-  }
+  // Retirement publishes the ID for reuse, which can replace its decode bias.
+  void *raw = clear_id(ptr);
+  ptsan_mark_ptr_freed(ptr, FREE_TY::MALLOC);
+  REAL(free)(raw);
 }
 
 INTERCEPTOR(void *, malloc, SIZE_T size) {
@@ -222,7 +222,7 @@ INTERCEPTOR(void *, malloc, SIZE_T size) {
     return nullptr;
   }
 
-  return tag_with_next_id(out, size, FREE_TY::MALLOC);
+  return tag_with_next_id(out, size, FREE_TY::MALLOC, alignof(max_align_t));
 }
 
 INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
@@ -237,7 +237,7 @@ INTERCEPTOR(int, posix_memalign, void **memptr, SIZE_T alignment, SIZE_T size) {
   if (res != 0) {
     return res;
   }
-  *memptr = tag_with_next_id(*memptr, size, FREE_TY::MALLOC);
+  *memptr = tag_with_next_id(*memptr, size, FREE_TY::MALLOC, alignment);
   return res;
 }
 
@@ -253,11 +253,11 @@ INTERCEPTOR(void *, calloc, SIZE_T nmemb, SIZE_T size) {
   }
 
   SIZE_T tot = nmemb * size;
-  return tag_with_next_id(out, tot, FREE_TY::MALLOC);
+  return tag_with_next_id(out, tot, FREE_TY::MALLOC, alignof(max_align_t));
 }
 
 static inline bool validate_realloc(void *ptr) {
-  u16 id = get_id(ptr);
+  PTSanID id = get_id(ptr);
   if(id == 0) {
     return true;
   }
@@ -279,6 +279,12 @@ INTERCEPTOR(void *, realloc, void *ptr, SIZE_T size) {
 
   void *real_ptr = clear_id(ptr);
   void *out = REAL(realloc)(real_ptr, size);
+  // glibc frees a non-null allocation for size zero and returns null.
+  // Other null results leave the old allocation live.
+  if (ptr && size == 0 && out == nullptr) {
+    ptsan_mark_ptr_freed(ptr, FREE_TY::MALLOC);
+    return nullptr;
+  }
   return tag_realloc(out, ptr, size);
 }
 
@@ -449,7 +455,7 @@ INTERCEPTOR(char *, strdup, char *src) {
   }
 
   // n+1 for null terminator
-  res = tag_with_next_id(res, n + 1, FREE_TY::MALLOC);
+  res = tag_with_next_id(res, n + 1, FREE_TY::MALLOC, alignof(max_align_t));
   return res;
 }
 
@@ -465,7 +471,7 @@ INTERCEPTOR(char *, __strdup, char *src) {
   }
 
   // n+1 for null terminator
-  res = tag_with_next_id(res, n + 1, FREE_TY::MALLOC);
+  res = tag_with_next_id(res, n + 1, FREE_TY::MALLOC, alignof(max_align_t));
   return res;
 }
 
@@ -702,7 +708,7 @@ INTERCEPTOR(wchar_t *, wmemset, wchar_t *s, wchar_t c, SIZE_T n) {
   InLibcGuard _ig;
   wchar_t *res = REAL(wmemset)(clear_id(s), c, n);
 
-  CHECK(res = clear_id(s));
+  CHECK(res == clear_id(s));
   return s;
 }
 
@@ -878,7 +884,6 @@ static void *PTSanThreadStartFunc(void *arg) {
     // guard must end before ThreadStart(): that's user code and must see ptsan_in_libc == 0
     InLibcGuard _ig;
     t = clear_id((PTSanThread *)arg);
-    t->Init();
     SetCurrentThread(t);
     t->InitTLS();
     SetSigProcMask(&t->starting_sigset_, nullptr);

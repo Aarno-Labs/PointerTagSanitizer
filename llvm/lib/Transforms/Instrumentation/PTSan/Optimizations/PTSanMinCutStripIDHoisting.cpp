@@ -19,7 +19,7 @@
 // side and its head is on the sink side.
 //
 // Infinite-capacity edges encode semantic requirements that a legal cut cannot
-// violate. Finite edges encode the loop-weighted runtime cost of a conversion.
+// violate. Finite edges encode loop-weighted conversion and check costs.
 // Max-flow is only the mechanism used to find the minimum cut; the important
 // part of this file is how PTSan's IR constraints become this graph.
 //
@@ -28,6 +28,7 @@
 //   * Constraint nodes are graph artifacts. Source and sink define the two
 //     polarities. Pointer comparisons also use one synthetic node when their
 //     operands must match but the comparison has no pointer-valued result.
+//     Check-use nodes choose between tagged and stripped check implementations.
 //
 //   * Value nodes represent the polarity of actual pointer-valued IR Values.
 //     Transparent operations, PHIs, and selects reuse their result value node
@@ -37,7 +38,7 @@
 //     shared possible conversion, so ten uses of one stripped value can share
 //     one tag and pay its cost once.
 //
-// A small loop-hoisting example shows how those nodes fit together:
+// A small ID16 loop-hoisting example shows how those nodes fit together:
 //
 //   entry:
 //     br label %loop
@@ -79,7 +80,12 @@
 
 #include "PTSanStripIDHoisting.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/Analysis/ValueTracking.h"
+#include "llvm/Analysis/VectorUtils.h"
+#include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/InstIterator.h"
+#include "llvm/Support/KnownBits.h"
 #include <limits>
 #include <queue>
 
@@ -202,8 +208,8 @@ public:
   }
 
   void addEdge(unsigned From, unsigned To, uint64_t Cap) {
-    Edge Fwd{To, static_cast<unsigned>(Adj[To].size()), Cap};
-    Edge Rev{From, static_cast<unsigned>(Adj[From].size()), 0};
+    Edge Fwd{To, (unsigned)Adj[To].size(), Cap};
+    Edge Rev{From, (unsigned)Adj[From].size(), 0};
     Adj[From].push_back(Fwd);
     Adj[To].push_back(Rev);
   }
@@ -222,8 +228,6 @@ public:
 // "infinite" finite lets the solver use normal integer capacities without
 // risking overflow when several hard constraints meet.
 static constexpr uint64_t InfCost = UINT64_C(1) << 56;
-static constexpr uint64_t StripCostUnits = 1;
-static constexpr uint64_t TagCostUnits = 2;
 
 struct GraphBoundary {
   Use *U;
@@ -242,9 +246,15 @@ private:
     unsigned Strip;
   };
 
+  PTSanAnalysisState &PTA;
   PointerTagSanitizer &DS;
   Function &F;
   LoopInfo &LI;
+
+  uint64_t CheckWithTaggedCost;
+  uint64_t StripPointerCost;
+  uint64_t CheckWithStrippedCost;
+  uint64_t TagPointerCost;
 
   MinCutGraph Graph;
   unsigned SourceNode;
@@ -254,6 +264,7 @@ private:
   SmallVector<GraphBoundary, 32> Boundaries;
 
   uint64_t getCostMultiplier(Value *V) const;
+  bool canKeepID32GEPTagged(GetElementPtrInst &GEP);
   unsigned getValueNode(Value *V);
   ConversionNodes getConversionNodes(Value *V);
   void forceStripped(unsigned Node);
@@ -263,8 +274,26 @@ private:
 
 public:
   PTSanMinCutGraphBuilder(PTSanAnalysisState &PTA)
-      : DS(PTA.DS), F(PTA.F), LI(PTA.LI), SourceNode(Graph.addNode()),
+      : PTA(PTA), DS(PTA.DS), F(PTA.F), LI(PTA.LI), SourceNode(Graph.addNode()),
         SinkNode(Graph.addNode()) {
+    if (Cl32BitIDs) {
+      if (usesConditionalID32Decode()) {
+        CheckWithTaggedCost = 6;
+        StripPointerCost = 4;
+        CheckWithStrippedCost = 2;
+        TagPointerCost = 8;
+      } else {
+        CheckWithTaggedCost = 2;
+        StripPointerCost = 2;
+        CheckWithStrippedCost = 2;
+        TagPointerCost = 6;
+      }
+    } else {
+      CheckWithTaggedCost = 1;
+      StripPointerCost = 1;
+      CheckWithStrippedCost = 2;
+      TagPointerCost = 2;
+    }
     assert(DS.collectAnchors<TagAnchor>(F).empty() &&
            "tag anchors must be created by min-cut rewriting");
   }
@@ -296,6 +325,90 @@ uint64_t PTSanMinCutGraphBuilder::getCostMultiplier(Value *V) const {
   return UINT64_C(1) << (2 * LoopDepth);
 }
 
+// Bound every lane's total byte offset from Base. ScalarEvolution handles the
+// scalar prefix; vector GEPs add lane-wise displacement ranges. Unknown vector
+// producers (including PHIs and mixed-base vectors) stay on the stripped path.
+static std::optional<ConstantRange>
+getVectorGEPOffsetRange(Value *Ptr, Value *Base, PTSanAnalysisState &PTA) {
+  if (!Ptr->getType()->isVectorTy()) {
+    const SCEV *Offset =
+        PTA.SE.getMinusSCEV(PTA.SE.getSCEV(Ptr), PTA.SE.getSCEV(Base));
+    if (isa<SCEVCouldNotCompute>(Offset)) {
+      return std::nullopt;
+    }
+
+    return PTA.SE.getSignedRange(Offset);
+  }
+  if (Value *Splat = getSplatValue(Ptr)) {
+    return getVectorGEPOffsetRange(Splat, Base, PTA);
+  }
+
+  auto *GEP = dyn_cast<GEPOperator>(Ptr);
+  if (!GEP) {
+    return std::nullopt;
+  }
+  const DataLayout &DL = PTA.F.getParent()->getDataLayout();
+  unsigned Bits = DL.getIndexTypeSizeInBits(Ptr->getType());
+  MapVector<Value *, APInt> Indices;
+  APInt ConstantOffset(Bits, 0);
+  if (!GEP->collectOffset(DL, Bits, Indices, ConstantOffset)) {
+    return std::nullopt;
+  }
+
+  auto Offset = getVectorGEPOffsetRange(GEP->getPointerOperand(), Base, PTA);
+  if (!Offset) {
+    return std::nullopt;
+  }
+  *Offset = Offset->add(ConstantRange(ConstantOffset));
+  for (const auto &[Index, Scale] : Indices) {
+    // KnownBits describes every lane. GEP sign-extends or truncates indices to
+    // the pointer index width; ConstantRange accounts for wrapping arithmetic.
+    ConstantRange IndexRange = ConstantRange::fromKnownBits(
+        computeKnownBits(Index, DL), true).sextOrTrunc(Bits);
+    *Offset = Offset->add(IndexRange.smul_fast(ConstantRange(Scale)));
+  }
+  return Offset;
+}
+
+bool PTSanMinCutGraphBuilder::canKeepID32GEPTagged(GetElementPtrInst &GEP) {
+  Value *Base = PTA.PTU.findBasePointer(&GEP);
+  // The base walk can stop at an interior pointer, such as an argument. Sources,
+  // known allocators and individually registered globals name the object start.
+  if (!DS.getAsAnchor<SourceAnchor>(Base) && !isAllocLikeFn(Base, &PTA.TLI)) {
+    auto *GV = dyn_cast<GlobalVariable>(Base);
+    if (!GV || !DS.getGlobalProxy(GV)) {
+      return false;
+    }
+    // Constants can share a region's ID, but a linker section start names the
+    // registered base even when its declaration is const.
+    bool IsSectionStart = GV->isDeclaration() &&
+                          GV->getName().starts_with("__start_");
+    if ((GV->isConstant() && !IsSectionStart) ||
+        GV->getName().starts_with("__stop_")) {
+      return false;
+    }
+  }
+
+  // Origins are at most 2^31, so any nonnegative total offset below 2^31
+  // fits the payload. This does not require knowing the object's size.
+  if (GEP.getType()->isVectorTy()) {
+    auto Offset = getVectorGEPOffsetRange(&GEP, Base, PTA);
+    if (!Offset) {
+      return false;
+    }
+    unsigned Bits = Offset->getBitWidth();
+    return Offset->getUnsignedMax().ult(APInt(Bits, 1ULL << 31));
+  }
+  ScalarEvolution &SE = PTA.SE;
+  const SCEV *Offset = SE.getMinusSCEV(SE.getSCEV(&GEP), SE.getSCEV(Base));
+  if (isa<SCEVCouldNotCompute>(Offset)) {
+    return false;
+  }
+  return SE.isKnownPredicate(
+      ICmpInst::ICMP_ULT, Offset,
+      SE.getConstant(Offset->getType(), 1ULL << 31));
+}
+
 // Create each value node and apply its required polarity once.
 unsigned PTSanMinCutGraphBuilder::getValueNode(Value *V) {
   if (ValueNodes.contains(V)) {
@@ -313,6 +426,13 @@ unsigned PTSanMinCutGraphBuilder::getValueNode(Value *V) {
     }
   }
 
+  if (Cl32BitIDs) {
+    if (auto *GEP = dyn_cast<GetElementPtrInst>(V);
+        GEP && !canKeepID32GEPTagged(*GEP)) {
+      forceStripped(Node);
+    }
+  }
+
   return Node;
 }
 
@@ -323,8 +443,8 @@ PTSanMinCutGraphBuilder::getConversionNodes(Value *V) {
     ConversionNodes Conversions{Graph.addNode(), Graph.addNode()};
     ConversionNodesForValue[V] = Conversions;
     uint64_t Multiplier = getCostMultiplier(V);
-    Graph.addEdge(ValueNode, Conversions.Tag, TagCostUnits * Multiplier);
-    Graph.addEdge(Conversions.Strip, ValueNode, StripCostUnits * Multiplier);
+    Graph.addEdge(ValueNode, Conversions.Tag, TagPointerCost * Multiplier);
+    Graph.addEdge(Conversions.Strip, ValueNode, StripPointerCost * Multiplier);
   }
 
   return ConversionNodesForValue.at(V);
@@ -348,10 +468,20 @@ void PTSanMinCutGraphBuilder::addUseBoundary(Use &U, unsigned Node) {
 // conversion boundaries.
 void PTSanMinCutGraphBuilder::buildGraph() {
   for (Instruction &I : instructions(F)) {
+    if (auto Check = DS.getAsAnchor<CheckAnchor>(&I)) {
+      unsigned CheckNode = Graph.addNode();
+      addUseBoundary(Check->Call->getOperandUse(CheckAnchor::RangeMinIndex),
+                     CheckNode);
+      uint64_t Multiplier = getCostMultiplier(Check->Call);
+      Graph.addEdge(SourceNode, CheckNode, CheckWithTaggedCost * Multiplier);
+      Graph.addEdge(CheckNode, SinkNode, CheckWithStrippedCost * Multiplier);
+      continue;
+    }
+
     // With arithmetic stripping disabled, pointer subtraction retains IDs.
     // Neither operand requires a particular representation, but both must use
     // the same one so their ID bits cancel.
-    if (!ClClearIdsOnArith) {
+    if (!PTA.ClearIDsOnArith) {
       if (auto *Sub = dyn_cast<BinaryOperator>(&I)) {
         if (Sub->getOpcode() == Instruction::Sub) {
           auto *Left = dyn_cast<PtrToIntInst>(Sub->getOperand(0));
@@ -415,11 +545,13 @@ void PTSanMinCutGraphBuilder::buildGraph() {
       unsigned ResultNode = getValueNode(PHI);
       for (unsigned I = 0; I < PHI->getNumIncomingValues(); ++I) {
         addUseBoundary(PHI->getOperandUse(I), ResultNode);
-        auto *Invoke = dyn_cast<InvokeInst>(PHI->getIncomingValue(I));
-        if (Invoke && Invoke->getParent() == PHI->getIncomingBlock(I)) {
-          // There is no legal non-PHI insertion point on an invoke-result edge
-          // into its normal destination, so do not choose a strip/tag
-          // conversion there.
+        Value *Incoming = PHI->getIncomingValue(I);
+        auto *Invoke = dyn_cast<InvokeInst>(Incoming);
+        if (isa<CallBrInst>(Incoming) ||
+            (Invoke && Invoke->getParent() == PHI->getIncomingBlock(I))) {
+          // A callbr has no single insertion point for a result conversion.
+          // An invoke also cannot supply a conversion on its normal edge
+          // directly into a PHI. Keep these PHIs tagged and convert after them.
           forceTagged(ResultNode);
         }
       }
@@ -484,59 +616,90 @@ class PTSanMinCutRewriter {
 private:
   PointerTagSanitizer &DS;
   PTSanUtils &PTU;
+  Function &F;
+  DominatorTree &DT;
   PTSanPolarityReader Polarities;
 
   // Rewriting can make several boundaries ask for the same concrete conversion.
-  // Value -> canonical ID used to retag the value.
-  DenseMap<Value *, Value *> RetagIDs;
+  // A terminator result may need separate conversions on different paths.
+  // Reuse only a representative that dominates the requested location.
+  DenseMap<Value *, SmallVector<Value *, 1>> RetagIDs;
   // Value -> shared strip anchor for stripped boundary uses.
-  DenseMap<Value *, CallInst *> StrippedValues;
+  DenseMap<Value *, SmallVector<CallInst *, 1>> StrippedValues;
   // Value -> shared tagged representative: a tag anchor or global proxy load.
-  DenseMap<Value *, Value *> RetaggedValues;
+  DenseMap<Value *, SmallVector<Value *, 1>> RetaggedValues;
 
-  Value *getRetagID(Value *V);
-  Value *getInsertedStrip(Value *V);
-  Value *getRetaggedValue(Value *V);
+  template <typename T>
+  T *findDominating(const SmallVectorImpl<T *> &Candidates, Instruction *UseIP);
+  Value *getRetagID(Value *V, Instruction *UseIP);
+  Value *getInsertedStrip(Value *V, Use &U);
+  Value *getRetaggedValue(Value *V, Instruction *UseIP);
   void rewriteBoundary(const SolvedBoundary &Boundary);
 
 public:
   PTSanMinCutRewriter(PTSanAnalysisState &PTA)
-      : DS(PTA.DS), PTU(PTA.PTU), Polarities(DS, PTA.F) {}
+      : DS(PTA.DS), PTU(PTA.PTU), F(PTA.F), DT(PTA.DT),
+        Polarities(DS, PTA.F) {}
 
   void rewrite(ArrayRef<SolvedBoundary> Boundaries);
 };
 
-// Return a canonical retag ID for V
-Value *PTSanMinCutRewriter::getRetagID(Value *V) {
-  if (RetagIDs.contains(V)) {
-    return RetagIDs.at(V);
+template <typename T>
+T *PTSanMinCutRewriter::findDominating(const SmallVectorImpl<T *> &Candidates,
+                                      Instruction *UseIP) {
+  for (T *Candidate : Candidates) {
+    if (DT.dominates(Candidate, UseIP)) {
+      return Candidate;
+    }
+  }
+  return nullptr;
+}
+
+// Recover V's allocation ID at a location where the consumer can use it.
+Value *PTSanMinCutRewriter::getRetagID(Value *V, Instruction *UseIP) {
+  if (Value *ID = findDominating(RetagIDs[V], UseIP)) {
+    return ID;
   }
 
   auto cacheID = [&](Value *ID) {
-    RetagIDs[V] = ID;
+    RetagIDs[V].push_back(ID);
     return ID;
   };
 
-  if (auto Strip = DS.getAsAnchor<StripAnchor>(V)) {
-    return cacheID(getRetagID(Strip->getValue()));
+  // Instrumented stack allocations obtain IDs through SourceAnchor. Bare
+  // allocas, including those in strip-only libraries, retain the raw ID zero.
+  if (isa<ConstantPointerNull, AllocaInst>(V)) {
+    return cacheID(ConstantInt::get(DS.U64Ty, 0));
+  }
+
+  if (auto Strip = DS.getAsAnchor<ID32StripAnchor>(V)) {
+    return cacheID(Strip->getID());
+  }
+
+  if (auto Strip = DS.getAsAnchor<ID16StripAnchor>(V)) {
+    return cacheID(getRetagID(Strip->getValue(), UseIP));
   }
 
   if (auto Tagged = DS.getAsAnchor<TaggedAnchor>(V)) {
-    return cacheID(getRetagID(Tagged->getValue()));
+    return cacheID(getRetagID(Tagged->getValue(), UseIP));
   }
 
   if (auto Tag = DS.getAsAnchor<TagAnchor>(V)) {
     return cacheID(Tag->getID());
   }
 
-  if (getPTSanDataGlobal(V)) {
-    Value *Tagged = getRetaggedValue(V);
-    Instruction *IP = PTU.getFirstIPAfter(Tagged).getIP();
+  if (isa<GlobalValue>(V)) {
+    if (!DS.getGlobalProxy(V)) {
+      return cacheID(ConstantInt::get(DS.U64Ty, 0));
+    }
+
+    Value *Tagged = getRetaggedValue(V, UseIP);
+    Instruction *IP = PTU.getInsertionPointForUse(Tagged, UseIP).getIP();
     return cacheID(GetIDAnchor::create(DS, IP, Tagged).Call);
   }
 
   if (DS.getAsAnchor<SourceAnchor>(V)) {
-    Instruction *IP = PTU.getFirstIPAfter(V).getIP();
+    Instruction *IP = PTU.getInsertionPointForUse(V, UseIP).getIP();
     return cacheID(GetIDAnchor::create(DS, IP, V).Call);
   }
 
@@ -544,11 +707,11 @@ Value *PTSanMinCutRewriter::getRetagID(Value *V) {
   // intervening pointer dataflow and recover the ID directly from that base.
   Value *Base = PTU.findBasePointer(V);
   if (Base != V) {
-    return cacheID(getRetagID(Base));
+    return cacheID(getRetagID(Base, UseIP));
   }
 
   if (Polarities.getPolarity(V) == Polarity::Tagged) {
-    Instruction *IP = PTU.getFirstIPAfter(V).getIP();
+    Instruction *IP = PTU.getInsertionPointForUse(V, UseIP).getIP();
     return cacheID(GetIDAnchor::create(DS, IP, V).Call);
   }
 
@@ -567,10 +730,11 @@ Value *PTSanMinCutRewriter::getRetagID(Value *V) {
     auto *ID = PHINode::Create(IDTy, PHI->getNumIncomingValues(),
                                PHI->getName() + ".ptsan.id",
                                PHI->getIterator());
-    RetagIDs[V] = ID;
+    RetagIDs[V].push_back(ID);
     for (unsigned I = 0; I < PHI->getNumIncomingValues(); ++I) {
-      Value *IncomingID = getRetagID(PHI->getIncomingValue(I));
-      IncomingID = PTU.splatToMatchType(IncomingID, IDTy);
+      Instruction *IncomingIP = PHI->getIncomingBlock(I)->getTerminator();
+      Value *IncomingID = getRetagID(PHI->getIncomingValue(I), IncomingIP);
+      IncomingID = PTU.splatToMatchType(IncomingID, IDTy, IncomingIP);
       ID->addIncoming(IncomingID, PHI->getIncomingBlock(I));
     }
 
@@ -580,8 +744,8 @@ Value *PTSanMinCutRewriter::getRetagID(Value *V) {
   // Selects are the same idea but they can work per-row, so we have to handle
   // the vector cases a little more carefully
   if (auto *Select = dyn_cast<SelectInst>(V)) {
-    Value *TrueID = getRetagID(Select->getTrueValue());
-    Value *FalseID = getRetagID(Select->getFalseValue());
+    Value *TrueID = getRetagID(Select->getTrueValue(), Select);
+    Value *FalseID = getRetagID(Select->getFalseValue(), Select);
     bool IsVector = Select->getCondition()->getType()->isVectorTy() ||
                     TrueID->getType()->isVectorTy() ||
                     FalseID->getType()->isVectorTy();
@@ -590,10 +754,10 @@ Value *PTSanMinCutRewriter::getRetagID(Value *V) {
       IDTy = Select->getType()->getWithNewType(DS.U64Ty);
     }
 
-    Instruction *IP = PTU.getFirstIPAfter(Select).getIP();
+    Instruction *IP = PTU.getInsertionPointForUse(Select, UseIP).getIP();
     PTSanIRB IRB(DS, IP);
-    TrueID = PTU.splatToMatchType(TrueID, IDTy);
-    FalseID = PTU.splatToMatchType(FalseID, IDTy);
+    TrueID = PTU.splatToMatchType(TrueID, IDTy, IP);
+    FalseID = PTU.splatToMatchType(FalseID, IDTy, IP);
     // Selects have ordinary insertion points, so an ID select is simpler than
     // forcing the pointer select to stay tagged.
     Value *ID = IRB.CreateSelect(Select->getCondition(), TrueID, FalseID,
@@ -603,11 +767,12 @@ Value *PTSanMinCutRewriter::getRetagID(Value *V) {
 
   if (auto *Shuffle = dyn_cast<ShuffleVectorInst>(V)) {
     Type *IDTy = Shuffle->getOperand(0)->getType()->getWithNewType(DS.U64Ty);
-    Value *LHS =
-        PTU.splatToMatchType(getRetagID(Shuffle->getOperand(0)), IDTy);
-    Value *RHS =
-        PTU.splatToMatchType(getRetagID(Shuffle->getOperand(1)), IDTy);
-    Instruction *IP = PTU.getFirstIPAfter(Shuffle).getIP();
+    Value *LHS = getRetagID(Shuffle->getOperand(0), Shuffle);
+    LHS = PTU.splatToMatchType(LHS, IDTy, Shuffle);
+    Value *RHS = getRetagID(Shuffle->getOperand(1), Shuffle);
+    RHS = PTU.splatToMatchType(RHS, IDTy, Shuffle);
+
+    Instruction *IP = PTU.getInsertionPointForUse(Shuffle, UseIP).getIP();
     PTSanIRB IRB(DS, IP);
     Value *ID = IRB.CreateShuffleVector(LHS, RHS, Shuffle->getShuffleMask(),
                                            V->getName() + ".ptsan.id");
@@ -617,50 +782,61 @@ Value *PTSanMinCutRewriter::getRetagID(Value *V) {
   llvm_unreachable("unexpected stripped pointer root");
 }
 
-Value *PTSanMinCutRewriter::getInsertedStrip(Value *V) {
-  if (StrippedValues.contains(V)) {
-    return StrippedValues.at(V);
+Value *PTSanMinCutRewriter::getInsertedStrip(Value *V, Use &U) {
+  Instruction *UseIP = PTU.getUseInsertionPoint(U);
+  if (CallInst *Strip = findDominating(StrippedValues[V], UseIP)) {
+    return Strip;
   }
 
-  Instruction *IP = PTU.getFirstIPAfter(V).getIP();
-  StripAnchor Strip = StripAnchor::create(DS, IP, V);
-  StrippedValues[V] = Strip.Call;
-  return Strip.Call;
+  CallInst *Strip;
+  if (Cl32BitIDs) {
+    Value *ID = getRetagID(V, UseIP);
+    Instruction *IP = PTU.getFirstCommonInsertionPoint(
+                             {PTU.getInsertionPointForUse(V, U),
+                              PTU.getInsertionPointForUse(ID, U)})
+                          .getIP();
+    auto Base = LoadBoundAnchor::createBase(DS, IP, ID);
+    Strip = ID32StripAnchor::create(DS, IP, V, ID, Base).Call;
+  } else {
+    Strip = ID16StripAnchor::create(
+                DS, PTU.getInsertionPointForUse(V, U).getIP(), V).Call;
+  }
+  StrippedValues[V].push_back(Strip);
+  return Strip;
 }
 
 // Materialize the tagged representative for a stripped value. Retags use the
 // structural ID for the stripped value's provenance, not whichever ID happens
 // to be nearest in the rewritten IR.
-Value *PTSanMinCutRewriter::getRetaggedValue(Value *V) {
-  if (RetaggedValues.contains(V)) {
-    return RetaggedValues.at(V);
-  }
-
-  if (getPTSanDataGlobal(V)) {
-    GlobalValue *Proxy = DS.getGlobalProxy(V);
-    if (!Proxy) {
-      // Keep the representation explicit until lowering, even though adding
-      // a zero ID will leave the address unchanged.
-      TagAnchor Tagged = TagAnchor::create(
-          DS, PTU.getFirstIPAfter(V).getIP(), V, ConstantInt::get(DS.U64Ty, 0));
-      RetaggedValues[V] = Tagged.Call;
-      return Tagged.Call;
-    }
-
-    PTSanIRB IRB(DS, PTU.getFirstIPAfter(V).getIP());
-    auto *Tagged = IRB.CreateLoad(DS.PtrTy, Proxy, V->getName() + ".tagged");
-    setPTSanPolarityMetadata(*Tagged, Polarity::Tagged);
-    RetaggedValues[V] = Tagged;
+Value *PTSanMinCutRewriter::getRetaggedValue(Value *V, Instruction *UseIP) {
+  if (Value *Tagged = findDominating(RetaggedValues[V], UseIP)) {
     return Tagged;
   }
 
-  Value *ID = getRetagID(V);
+  if (isa<GlobalValue>(V)) {
+    if (GlobalValue *Proxy = DS.getGlobalProxy(V)) {
+      PTSanIRB IRB(DS, PTU.getInsertionPointForUse(V, UseIP).getIP());
+      auto *Tagged = IRB.CreateLoad(DS.PtrTy, Proxy, V->getName() + ".tagged");
+      setPTSanPolarityMetadata(*Tagged, Polarity::Tagged);
+      RetaggedValues[V].push_back(Tagged);
+      return Tagged;
+    }
+  }
+
+  Value *ID = getRetagID(V, UseIP);
   Instruction *IP = PTU.getFirstCommonInsertionPoint(
-                           {PTU.getFirstIPAfter(V), PTU.getFirstIPAfter(ID)})
+                           {PTU.getInsertionPointForUse(V, UseIP),
+                            PTU.getInsertionPointForUse(ID, UseIP)})
                         .getIP();
-  TagAnchor Tag = TagAnchor::create(DS, IP, V, ID);
-  RetaggedValues[V] = Tag.Call;
-  return Tag.Call;
+  CallInst *Tag;
+  if (Cl32BitIDs) {
+    auto Base = LoadBoundAnchor::createBase(DS, IP, ID);
+    Tag = ID32TagAnchor::create(DS, IP, V, ID, Base).Call;
+  } else {
+    Tag = ID16TagAnchor::create(DS, IP, V, ID).Call;
+  }
+  RetaggedValues[V].push_back(Tag);
+  return Tag;
 }
 
 // Rewrite one exact conversion boundary according to the solved labels. This is
@@ -673,34 +849,66 @@ void PTSanMinCutRewriter::rewriteBoundary(const SolvedBoundary &B) {
   }
 
   if (B.RequiredPolarity == Polarity::Stripped) {
-    B.U->set(getInsertedStrip(V));
+    B.U->set(getInsertedStrip(V, *B.U));
   } else {
-    B.U->set(getRetaggedValue(V));
+    B.U->set(getRetaggedValue(V, PTU.getUseInsertionPoint(*B.U)));
   }
 }
 
 // Apply the solved graph to IR. General anchor cleanup runs afterward.
 void PTSanMinCutRewriter::rewrite(ArrayRef<SolvedBoundary> Boundaries) {
-  // Resolve all retag IDs before boundary rewriting replaces pointer operands
-  // and can obscure their original splat and base-pointer structure.
+  // Resolve raw-pointer ID requests through the same machinery as retags.
+  // Tagged inputs and allocation sources can be lowered directly.
+  for (GetIDAnchor ID : DS.collectAnchors<GetIDAnchor>(F)) {
+    Value *Base = ID.getBase();
+    if (!Base->getType()->isPtrOrPtrVectorTy() ||
+        DS.getAsAnchor<SourceAnchor>(Base) ||
+        Polarities.getPolarity(Base) == Polarity::Tagged) {
+      continue;
+    }
+
+    Value *Resolved = PTU.splatToMatchType(
+        getRetagID(Base, ID.Call), ID.Call->getType(), ID.Call);
+    ID.Call->replaceAllUsesWith(Resolved);
+    ID.erase();
+  }
+
+  // Resolve conversion IDs before rewriting operands can obscure their
+  // original base-pointer structure. Default-mode strips do not consume IDs.
   for (const SolvedBoundary &B : Boundaries) {
     Value *V = B.U->get();
-    if (B.RequiredPolarity == Polarity::Tagged &&
-        Polarities.getPolarity(V) == Polarity::Stripped) {
-      getRetagID(V);
+    if (B.RequiredPolarity != Polarities.getPolarity(V) &&
+        (Cl32BitIDs || B.RequiredPolarity == Polarity::Tagged)) {
+      getRetagID(V, PTU.getUseInsertionPoint(*B.U));
     }
   }
 
   for (const SolvedBoundary &B : Boundaries) {
     rewriteBoundary(B);
   }
-
 }
 
 void runMinCutStripIDHoisting(PTSanAnalysisState &PTA) {
   PTSanMinCutGraphBuilder Builder(PTA);
   SmallVector<SolvedBoundary, 32> Boundaries = Builder.solveAndAnnotate();
-  PTSanMinCutRewriter(PTA).rewrite(Boundaries);
+  PTSanMinCutRewriter Rewriter(PTA);
+  Rewriter.rewrite(Boundaries);
+
+  // Finalize surviving conversions after rewriting has connected all users.
+  PTA.PTU.KnownBases.clear();
+  PTSanAnchorOptimizer Anchors(PTA);
+  Anchors.foldRedundantStripAnchors();
+
+  Anchors.foldStripOfTagAnchors();
+  Anchors.foldTagOfStripAnchors();
+  Anchors.foldGetIDOfTagAnchors();
+  Anchors.hoistGetIDAnchors();
+  Anchors.mergeGetIDAnchors();
+  if (Cl32BitIDs)
+    optimizeLoadBoundAnchors(PTA);
+  Anchors.hoistStripAnchors();
+  Anchors.mergeStripAnchors();
+  Anchors.eraseUnusedDependencyAnchors();
 }
 
 } // namespace llvm::ptsan

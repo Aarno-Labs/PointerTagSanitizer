@@ -5,10 +5,14 @@
 //
 // RUN: %clang -### --target=x86_64-linux-musl -static -fsanitize=ptsan %s \
 // RUN:   2>&1 | FileCheck %s --check-prefix=STATIC
+// RUN: %clang -### --target=x86_64-linux-musl -static-pie -fsanitize=ptsan %s \
+// RUN:   2>&1 | FileCheck %s --check-prefixes=STATIC,STATIC-PIE
 // RUN: %clang -### --target=x86_64-linux-musl -fsanitize=ptsan %s \
 // RUN:   2>&1 | FileCheck %s --check-prefix=DYNAMIC
 // RUN: %clang -### --target=aarch64-linux-musl -static -fsanitize=ptsan %s \
 // RUN:   2>&1 | FileCheck %s --check-prefix=STATIC
+// RUN: %clang -### --target=aarch64-linux-musl -static-pie -fsanitize=ptsan %s \
+// RUN:   2>&1 | FileCheck %s --check-prefixes=STATIC,STATIC-PIE
 // RUN: %clang -### --target=aarch64-linux-musl -fsanitize=ptsan %s \
 // RUN:   2>&1 | FileCheck %s --check-prefix=DYNAMIC
 
@@ -54,5 +58,6 @@
 // STATIC-SAME: "--wrap=vfork"
 // STATIC-SAME: "--wrap=__libc_start_main"
 // STATIC-SAME: "--wrap=__syscall_cp_asm"
+// STATIC-PIE-SAME: "--exclude-libs=libclang_rt.ptsan.a"
 
 // DYNAMIC-NOT: "--wrap="

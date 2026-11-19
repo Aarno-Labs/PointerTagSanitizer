@@ -5,7 +5,11 @@
 //
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -o %exe %s
-// RUN: ./%exe 2> err.txt
+// RUN: not ./%exe 2> err.txt
+// RUN: cat err.txt | FileCheck %s
+
+// RUN: %clang_ptsan_id32 -g -O2 -o %exe %s
+// RUN: not ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s
 
 // sendmsg/recvmsg/recvmmsg must strip ptsan tags from the msghdr's nested
@@ -33,7 +37,9 @@
 
 extern thread_local int ptsan_in_libc;
 
-static uint16_t tag_of(const void *p) { return (uint16_t)((uintptr_t)p >> 48); }
+#include "Inputs/ptsan_test_interface.h"
+
+static PTSanID tag_of(const void *p) { return get_id(p); }
 
 int __attribute__((noinline)) do_access(char *buf, int idx) {
   return buf[idx];

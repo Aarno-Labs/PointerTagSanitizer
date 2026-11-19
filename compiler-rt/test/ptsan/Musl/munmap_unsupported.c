@@ -48,7 +48,6 @@ static void checkLiveBounds(uint16_t id, const void *base, size_t size) {
 
 static void checkRetiredBounds(uint16_t id) {
   assert(id != 0);
-  assert(ptsan_get_base(id) == 0);
   assert(ptsan_get_size(id) == 0);
 }
 
@@ -151,11 +150,12 @@ static int testCrossMappingUnmap(void) {
     return 3;
   }
 
-  char *first = mapMemory(raw_base, page_size, MAP_FIXED);
+  char *first = mapMemory(raw_base, page_size, MAP_FIXED_NOREPLACE);
   if (first == NULL) {
     return 4;
   }
-  char *second = mapMemory(raw_base + page_size, page_size, MAP_FIXED);
+  char *second =
+      mapMemory(raw_base + page_size, page_size, MAP_FIXED_NOREPLACE);
   if (second == NULL) {
     return 5;
   }

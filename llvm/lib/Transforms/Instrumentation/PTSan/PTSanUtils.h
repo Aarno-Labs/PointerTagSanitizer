@@ -54,9 +54,10 @@ class SimpleAccessRange;
 enum class CmpResult { LTE, GTE, EQ, Unknown };
 CmpResult swapOpsCmpResult(CmpResult C);
 bool materializeConstantUsersOfGlobal(Function &F, GlobalValue *G);
-GlobalVariable *getPTSanDataGlobal(Value *V);
 bool addNoBuiltinForPointerFns(Module &M);
 bool lowerLoadRelativeIntrinsics(Module &M);
+// Give callbr results block-local representatives with legal
+// insertion points. Unlike invoke, callbr has no single result continuation.
 
 enum class Polarity {
   Tagged,
@@ -158,8 +159,8 @@ struct PTSanUtils {
   PostDominatorTree &PDT;
   LoopInfo &LI;
   ScalarEvolution &SE;
-
-  PTSanUtils(Function &F, LLVMContext &Ctx, DominatorTree &DT, PostDominatorTree &PDT, LoopInfo &LI, ScalarEvolution &SE):
+  PTSanUtils(Function &F, LLVMContext &Ctx, DominatorTree &DT,
+             PostDominatorTree &PDT, LoopInfo &LI, ScalarEvolution &SE):
     F(F), Ctx(Ctx), DL(F.getDataLayout()), DT(DT), PDT(PDT), LI(LI), SE(SE) {
     indexInstructionSCEVs();
   }
@@ -194,10 +195,14 @@ struct PTSanUtils {
   bool hoistTargetDominates(HoistTarget Target, Instruction *Pos);
   HoistTarget
   getFirstCommonInsertionPoint(std::initializer_list<HoistTarget> Targets);
-  HoistTarget getFirstIPAfter(Value *V);
+  // Earliest placement where V is available that dominates the consumer.
+  // PHI operands are consumed on their incoming edge, not in the PHI's block.
+  HoistTarget getInsertionPointForUse(Value *V, Instruction *UseIP);
+  HoistTarget getInsertionPointForUse(Value *V, Use &U);
+  static Instruction *getUseInsertionPoint(Use &U);
   // Return V unchanged when it already has Ty; otherwise splat scalar V to
   // match vector Ty.
-  Value *splatToMatchType(Value *V, Type *Ty);
+  Value *splatToMatchType(Value *V, Type *Ty, Instruction *UseIP);
   bool isKnownSpatiallyValid(Use *U);
   bool isUnfreeableMemory(Value *V);
 };

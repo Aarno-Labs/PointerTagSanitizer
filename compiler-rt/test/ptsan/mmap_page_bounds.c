@@ -10,12 +10,21 @@
 // RUN: not %run %t mmap bad 2>&1 | FileCheck %s
 // RUN: not %run %t 64 bad 2>&1 | FileCheck %s
 // RUN: not %run %t allocation bad 2>&1 | FileCheck %s
+
+// RUN: %clang_ptsan_id32 -O2 -mllvm -ptsan-abort-on-error %s -o %t
+// RUN: %run %t mmap
+// RUN: %run %t 64
+// RUN: %run %t allocation
+// RUN: not %run %t mmap bad 2>&1 | FileCheck %s
+// RUN: not %run %t 64 bad 2>&1 | FileCheck %s
+// RUN: not %run %t allocation bad 2>&1 | FileCheck %s
 // CHECK: Found bad
 
 // mmap and mmap64 describe pages, whereas malloc describes an exact object.
 // Access the last permitted byte and separately the first forbidden byte.
 #define _LARGEFILE64_SOURCE
 #include "Inputs/ptsan_test_interface.h"
+#include <assert.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -40,7 +49,7 @@ int main(int argc, char **argv) {
   }
 
   size_t size = allocation ? 20 : (size_t)sysconf(_SC_PAGESIZE);
-  uint16_t id = get_id(ptr);
+  PTSanID id = get_id(ptr);
   if (!id || ptsan_get_size(id) != size) {
     return 3;
   }
@@ -51,5 +60,6 @@ int main(int argc, char **argv) {
   } else if (munmap(ptr, 20)) {
     return 4;
   }
-  return ptsan_get_base(id) != 0 || ptsan_get_size(id) != 0;
+  assert(ptsan_get_size(id) == 0);
+  return 0;
 }

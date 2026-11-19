@@ -1,8 +1,8 @@
 // RUN: rm -rf %t && mkdir -p %t && cd %t
 // RUN: %clang_ptsan -g -O2 -o %exe %s
-// RUN: not --crash ./%exe 4300 2> out.txt
+// RUN: not ./%exe 4300 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
-// RUN: ./%exe 4097 2> out.txt
+// RUN: not ./%exe 4097 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=BAD
 // RUN: ./%exe 4096 2> out.txt
 // RUN: cat out.txt | FileCheck %s --check-prefix=GOOD

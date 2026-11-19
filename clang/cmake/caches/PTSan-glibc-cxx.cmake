@@ -5,8 +5,8 @@
 # C++ libraries compatible with tagged pointers and the host glibc.
 set(CMAKE_BUILD_TYPE Release CACHE STRING "")
 set(LLVM_ENABLE_RUNTIMES "libunwind;libcxxabi;libcxx" CACHE STRING "")
-set(CMAKE_C_FLAGS "-mllvm -ptsan-strip-ids" CACHE STRING "")
-set(CMAKE_CXX_FLAGS "-mllvm -ptsan-strip-ids" CACHE STRING "")
+set(CMAKE_C_FLAGS "-mllvm -ptsan-strip-ids -mllvm -ptsan-strip-ids-on-cmp" CACHE STRING "")
+set(CMAKE_CXX_FLAGS "-mllvm -ptsan-strip-ids -mllvm -ptsan-strip-ids-on-cmp" CACHE STRING "")
 set(LIBCXX_ENABLE_ASSERTIONS OFF CACHE BOOL "")
 set(LIBCXX_INCLUDE_TESTS OFF CACHE BOOL "")
 set(LIBCXX_INCLUDE_BENCHMARKS OFF CACHE BOOL "")

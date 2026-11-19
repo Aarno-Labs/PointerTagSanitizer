@@ -3,7 +3,7 @@
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
-// RUN: %clang_raw -fsanitize=ptsan -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s
+// RUN: %clang_ptsan_plain -O1 -g -fno-discard-value-names -S -emit-llvm -o - %s | FileCheck %s
 
 static const int ScalarConstant = 7;
 volatile int Sink;
@@ -39,7 +39,7 @@ __attribute__((noinline)) int read_constant_known(unsigned index) {
 // CHECK: ret i32
 
 // CHECK-LABEL: define internal void @__ptsan_init_tagged_globals(
-// CHECK-DAG: call i16 @ptsan_get_constant_global_id(ptr nonnull @ScalarConstant, i64 4)
-// CHECK-DAG: call i16 @ptsan_get_constant_global_id(ptr nonnull @.str, i64 38)
-// CHECK-DAG: call i16 @ptsan_get_next_global_id(ptr nonnull @Sink, i64 4)
+// CHECK-DAG: call i{{16|32}} @ptsan_get_constant_global_id(ptr nonnull @ScalarConstant, i64 4, i64 {{[0-9]+}})
+// CHECK-DAG: call i{{16|32}} @ptsan_get_constant_global_id(ptr nonnull @.str, i64 38, i64 {{[0-9]+}})
+// CHECK-DAG: call i{{16|32}} @ptsan_get_next_global_id(ptr nonnull @Sink, i64 4, i64 {{[0-9]+}})
 // CHECK: ret void

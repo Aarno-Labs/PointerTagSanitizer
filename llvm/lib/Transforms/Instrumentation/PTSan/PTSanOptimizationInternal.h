@@ -88,6 +88,7 @@ private:
   void applyLoopCheckHoisting();
   void hoistLoadBoundAnchors();
   void mergeLoadBoundAnchors();
+  void mergeDominatingConversionBaseAnchors();
   void foldStaticBoundAnchors();
   BoundedPtrCheck analyzePtrAccess(AccessAnchor Access);
   void eraseCheckAnchor(CheckAnchor Anchor);
@@ -99,6 +100,7 @@ public:
   PTSanOptimizer(PTSanAnalysisState &PTA);
 
   void run();
+  void optimizeLoadBoundAnchors();
   PlaceablePtrCheck placePtrSink(const BoundedPtrCheck &Check);
 
   bool mergeOrderableChecks();

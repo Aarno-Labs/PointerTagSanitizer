@@ -3,6 +3,10 @@
 // RUN: ./%exe 2> err.txt
 // RUN: cat err.txt | FileCheck %s --check-prefix=ERR
 
+// RUN: %clang_ptsan_id32 -g -O2 -I%crt_src/include -I%crt_src/lib -o %exe %s
+// RUN: ./%exe 2> err.txt
+// RUN: cat err.txt | FileCheck %s --check-prefix=ERR
+
 // ERR: Unreclaimed IDs at exit: 0
 
 // Thanks chatgpt!

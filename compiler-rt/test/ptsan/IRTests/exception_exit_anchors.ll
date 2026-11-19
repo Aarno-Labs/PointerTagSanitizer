@@ -9,6 +9,8 @@
 ;
 ; Discovery creates the exceptional exits before boundary helpers are lowered.
 ; Helpers which run after a call must use the invoke's normal destination.
+; Anchors identify their targets with shared metadata, including multiple
+; anchors for one void call and exits that cannot be referenced as SSA values.
 
 target datalayout = "e-p:64:64"
 target triple = "x86_64-unknown-linux-gnu"
@@ -25,11 +27,11 @@ entry:
 
 ; DISCOVERY-LABEL: define ptr @lookup()
 ; DISCOVERY: invoke ptr @dlsym(
-; DISCOVERY: call void (...) @__ptsan_function_exit()
-; DISCOVERY-NEXT: ret ptr
+; DISCOVERY: call void (...) @__ptsan_function_exit(){{.*}}!ptsan.target [[RETURN:![0-9]+]]
+; DISCOVERY-NEXT: ret ptr {{.*}}!ptsan.target [[RETURN]]
 ; DISCOVERY: landingpad
-; DISCOVERY: call void (...) @__ptsan_function_exit()
-; DISCOVERY-NEXT: resume
+; DISCOVERY: call void (...) @__ptsan_function_exit(){{.*}}!ptsan.target [[RESUME:![0-9]+]]
+; DISCOVERY-NEXT: resume {{.*}}!ptsan.target [[RESUME]]
 
 ; LOWER-LABEL: define ptr @lookup()
 ; LOWER: [[OLD:%.*]] = load i32, ptr @ptsan_in_libc
@@ -45,6 +47,12 @@ entry:
   call void (ptr, ptr, i32, ...) @makecontext(ptr %ctx, ptr %fn, i32 0)
   ret void
 }
+
+; DISCOVERY-LABEL: define void @context(
+; DISCOVERY: call void (...) @__ptsan_vararg_call(){{.*}}!ptsan.target [[CONTEXT:![0-9]+]]
+; DISCOVERY: call void (...) @__ptsan_special_strip(){{.*}}!ptsan.target [[CONTEXT]]
+; DISCOVERY: invoke void (ptr, ptr, i32, ...) @makecontext(
+; DISCOVERY-NEXT: to label {{.*}}!ptsan.target [[CONTEXT]]
 
 ; LOWER-LABEL: define void @context(
 ; LOWER: call void (ptr, ptr, i32, ...) @ptsan_strip_makecontext_before(

@@ -10,6 +10,12 @@
 // RUN: %t 2>&1 | FileCheck %s --check-prefix=GOOD
 // RUN: not %t bad 2>&1 | FileCheck %s --check-prefix=BAD
 
+// RUN: %clang_ptsan_id32 -O2 -mavx2 -mllvm -force-vector-width=4 \
+// RUN:   -mllvm -force-vector-interleave=1 -mllvm -ptsan-abort-on-error \
+// RUN:   -o %t %s
+// RUN: %t 2>&1 | FileCheck %s --check-prefix=GOOD
+// RUN: not %t bad 2>&1 | FileCheck %s --check-prefix=BAD
+
 // GOOD-NOT: Found bad
 // GOOD: pointer-vector-select-ids-ok
 // GOOD-NOT: Found bad
@@ -20,6 +26,7 @@
 // of every result as well as valid loads and an out-of-bounds load.
 #include <assert.h>
 #include <stdint.h>
+#include "Inputs/ptsan_test_interface.h"
 #include <stdio.h>
 
 enum { Count = 64 };
@@ -52,8 +59,8 @@ int main(int argc, char **argv) {
     right[i] = b;
     choices[i] = i & 1;
   }
-  assert(bits(a) >> 48 && bits(b) >> 48);
-  assert(bits(a) >> 48 != bits(b) >> 48);
+  assert(get_id(a) && get_id(b));
+  assert(get_id(a) != get_id(b));
   choose(output, left, right, choices, different);
   for (unsigned i = 0; i != Count; ++i) {
     assert(different[i]);

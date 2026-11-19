@@ -59,12 +59,14 @@ void ptsan_musl_init_child_thread(void *raw, void *tagged) {
   ((pthread_t)raw)->self = raw;
 }
 
-void ptsan_musl_thread_stack(void **top, size_t *size) {
-  pthread_t self = __pthread_self();
-  *top = self->stack;
-  *size = self->stack_size;
-}
-
 int ptsan_musl_is_c11_thread(const void *attr) {
   return attr == __ATTRP_C11_THREAD;
+}
+
+int ptsan_musl_is_threaded(void) {
+  return __libc.threaded;
+}
+
+void ptsan_musl_set_current_tsd(void *tsd) {
+  __pthread_self()->tsd = tsd;
 }
