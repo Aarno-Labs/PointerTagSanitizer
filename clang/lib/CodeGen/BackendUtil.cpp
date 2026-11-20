@@ -72,6 +72,8 @@
 #include "llvm/Transforms/Instrumentation/AddressSanitizerOptions.h"
 #include "llvm/Transforms/Instrumentation/BoundsChecking.h"
 #include "llvm/Transforms/Instrumentation/DataFlowSanitizer.h"
+#include "llvm/Transforms/Instrumentation/PointerTagSanitizer.h"
+#include "llvm/Transforms/Instrumentation/PTSanLoopInfoGather.h"
 #include "llvm/Transforms/Instrumentation/GCOVProfiler.h"
 #include "llvm/Transforms/Instrumentation/HWAddressSanitizer.h"
 #include "llvm/Transforms/Instrumentation/InstrProfiling.h"
@@ -784,7 +786,24 @@ static void addSanitizers(const Triple &TargetTriple,
       MPM.addPass(DataFlowSanitizerPass(LangOpts.NoSanitizeFiles,
                                         PB.getVirtualFileSystemPtr()));
     }
+
+    if (LangOpts.Sanitize.has(SanitizerKind::PTSan)) {
+      MPM.addPass(PointerTagSanitizerPass());
+    }
   };
+
+  if (LangOpts.Sanitize.has(SanitizerKind::PTSan)) {
+    PB.registerVectorizerStartEPCallback(
+        [](FunctionPassManager &FPM, OptimizationLevel Level) {
+          if (Level == OptimizationLevel::O2 ||
+              Level == OptimizationLevel::O3) {
+            FPM.addPass(LoopSimplifyPass());
+            FPM.addPass(LCSSAPass());
+            FPM.addPass(PTSanLoopInfoGatherPass());
+          }
+        });
+  }
+
   if (ClSanitizeOnOptimizerEarlyEP) {
     PB.registerOptimizerEarlyEPCallback(
         [SanitizersCallback](ModulePassManager &MPM, OptimizationLevel Level,

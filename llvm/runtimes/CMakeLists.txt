@@ -3,6 +3,12 @@
 # similar although simpler functionality. We should figure out how to merge
 # the two files.
 
+option(LLVM_ENABLE_PTSAN_DEPENDENCIES
+  "Enable targets for PTSan's libc and C++ dependencies" OFF)
+if(LLVM_ENABLE_PTSAN_DEPENDENCIES)
+  include(LLVMPTSanDependencies)
+endif()
+
 set(COMMON_CMAKE_ARGS "-DHAVE_LLVM_LIT=ON;-DCLANG_RESOURCE_DIR=${CLANG_RESOURCE_DIR};-DLLVM_LIBDIR_SUFFIX=${LLVM_LIBDIR_SUFFIX}")
 if(APPLE AND CMAKE_OSX_SYSROOT AND (LLVM_TARGET_TRIPLE STREQUAL LLVM_HOST_TRIPLE))
   # Only propagate the host sysroot for native runtimes builds.

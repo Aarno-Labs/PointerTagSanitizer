@@ -1,0 +1,19 @@
+//===-- PTSanStripIDHoisting.h - Strip-ID hoisting helpers -----*- C++ -*-===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#pragma once
+
+#include "../PTSanPhases.h"
+
+namespace llvm::ptsan {
+
+// Choose pointer representations, simplify conversions, and complete their
+// ID32 decoding dependencies before returning.
+void runMinCutStripIDHoisting(PTSanAnalysisState &PTA);
+
+} // namespace llvm::ptsan

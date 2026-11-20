@@ -1,0 +1,340 @@
+name: PTSan performance
+
+on:
+  workflow_call:
+    inputs:
+      group:
+        description: Configuration group
+        required: true
+        type: string
+      suite:
+        description: Benchmark suite
+        default: all
+        type: string
+      repetitions:
+        description: Measurement repetitions
+        default: 1
+        type: number
+  workflow_dispatch:
+    inputs:
+      group:
+        description: "Configurations: one group, or all supported groups sequentially"
+        type: choice
+        options: [software, lam, id32, glibc-stack-off, all]
+        default: software
+      suite:
+        description: "Benchmark suite to measure"
+        type: choice
+        options: [all, multisource, spec, fleetbench]
+        default: all
+      repetitions:
+        description: Repetitions (1 for bring-up; 3 or more for measurements)
+        type: number
+        default: 3
+
+permissions:
+  contents: read
+
+# Shared with correctness and manual runs in this repository.
+# The runner group must use one worker to serialize jobs across repositories.
+concurrency:
+  group: ptsan-private-runner
+  # Keep waiting runs from different branches instead of replacing them.
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  performance:
+    if: github.repository == 'Aarno-Labs/PointerTagSanitizer-private'
+    name: Performance (${{ matrix.group }}, ${{ inputs.suite }})
+    runs-on:
+      group: ptsan-ci
+      labels: [self-hosted, linux, x64]
+    timeout-minutes: 5760
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        group: ${{ fromJSON(inputs.group == 'all' && (inputs.suite == 'fleetbench' && '["id32", "software"]' || '["id32", "software", "lam", "glibc-stack-off"]') || format('["{0}"]', inputs.group)) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_DIR: /home/ptsan-ci/builds/PointerTagSanitizer-private/performance-${{ matrix.group }}
+      MUSL_SOURCE: /home/ptsan-ci/sources/musl
+      SPEC_ROOT: /home/ptsan-ci/spec2017
+      FLEETBENCH_L1_DATA_SIZE: ${{ vars.FLEETBENCH_L1_DATA_SIZE || '49152' }}
+      FLEETBENCH_L2_SIZE: ${{ vars.FLEETBENCH_L2_SIZE || '3145728' }}
+      FLEETBENCH_L3_SIZE: ${{ vars.FLEETBENCH_L3_SIZE || '25165824' }}
+      PERF_GROUP: ${{ matrix.group }}
+      PERF_SUITE: ${{ inputs.suite }}
+      PERF_REPETITIONS: ${{ inputs.repetitions }}
+      PERF_CPU: '3'
+      REPORT_ARTIFACT: ptsan-performance-reports-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+      FULL_ARTIFACT: ptsan-performance-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+    steps:
+      - name: Validate inputs and clear previous performance build
+        run: |
+          set -euo pipefail
+          test "$(id -un)" = ptsan-ci
+          case "$PERF_GROUP" in software|lam|id32|glibc-stack-off) ;; *) exit 1 ;; esac
+          case "$PERF_SUITE" in all|multisource|spec|fleetbench) ;; *) exit 1 ;; esac
+          if [[ "$PERF_SUITE" == fleetbench &&
+                "$PERF_GROUP" != software && "$PERF_GROUP" != id32 ]]; then
+            echo "Fleetbench has not been validated for $PERF_GROUP." >&2
+            exit 1
+          fi
+          test "$BUILD_DIR" = "/home/ptsan-ci/builds/PointerTagSanitizer-private/performance-$PERF_GROUP"
+          /usr/bin/python3 - <<'PY'
+          import os, venv, ensurepip
+          repetitions = int(os.environ['PERF_REPETITIONS'])
+          cpu = int(os.environ['PERF_CPU'])
+          assert 1 <= repetitions <= 10, 'Use 1–10 repetitions'
+          assert cpu in os.sched_getaffinity(0), 'Configured benchmark CPU is not allowed on this runner'
+          print(f'Benchmark CPU: {cpu}', flush=True)
+          PY
+          rm -rf -- "$BUILD_DIR"
+          mkdir -p "$BUILD_DIR"
+
+      - name: Check out source
+        uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Keep results with the selected build
+        run: |
+          set -euo pipefail
+          # Checkout cleanup may remove this link on the next group, but the
+          # reports survive until this group's build directory is cleared.
+          mkdir -p "$BUILD_DIR/ci-results"
+          ln -s "$BUILD_DIR/ci-results" ci-results
+
+      - name: Use fast CPU policy while building
+        id: fast
+        run: sudo -n /usr/local/sbin/ptsan-fast
+
+      - name: Set up Python and record environment
+        run: |
+          set -euo pipefail
+          mkdir -p ci-results/performance
+          cp .github/performance/README.md ci-results/performance/README.md
+          /usr/bin/python3 -m venv "$BUILD_DIR/venv"
+          "$BUILD_DIR/venv/bin/python" -m pip install --disable-pip-version-check \
+            -r .github/requirements/ptsan-ci.txt
+          "$BUILD_DIR/venv/bin/python" -m pip check
+          "$BUILD_DIR/venv/bin/python" -m pip freeze --all > ci-results/python-packages.txt
+          echo "$BUILD_DIR/venv/bin" >> "$GITHUB_PATH"
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=$(nproc)" >> "$GITHUB_ENV"
+          echo "MAKEFLAGS=-j$(nproc)" >> "$GITHUB_ENV"
+          {
+            git rev-parse HEAD
+            uname -a
+            lscpu
+            lscpu -e=CPU,CORE,SOCKET,NODE,ONLINE
+            taskset -pc $$
+            free -h
+            df -h "$BUILD_DIR"
+            ulimit -a
+            cat /proc/self/cgroup
+            for file in /sys/fs/cgroup/memory.max /sys/fs/cgroup/cpu.max; do
+              if test -r "$file"; then echo "$file"; cat "$file"; fi
+            done
+          } > ci-results/performance/host.txt
+      - name: Check benchmark harness
+        run: python -m unittest discover -s .github/tests -v
+
+      - name: Check SPEC installation access
+        if: ${{ inputs.suite == 'all' || inputs.suite == 'spec' }}
+        run: |
+          set -euo pipefail
+          test -x /usr/bin/gfortran
+          /bin/bash -c 'cd "$1" && source ./shrc && runcpu --version' \
+            ptsan-perf-preflight "$SPEC_ROOT"
+          cp "$SPEC_ROOT/version.txt" ci-results/performance/spec-version.txt
+
+      - name: Require working LAM_U48
+        if: matrix.group == 'lam' || matrix.group == 'glibc-stack-off'
+        run: |
+          set -euo pipefail
+          /usr/bin/clang -O2 .github/scripts/ptsan-lam-probe.c -o "$BUILD_DIR/lam-probe"
+          "$BUILD_DIR/lam-probe" 2>&1 | tee ci-results/performance/lam-probe.log
+
+      - name: Copy pinned musl source
+        run: |
+          set -euo pipefail
+          : > ci-results/performance/source-revisions.txt
+          if test "$PERF_GROUP" != glibc-stack-off; then
+            expected=9fa28ece75d8a2191de7c5bb53bed224c5947417
+            if ! test -d "$MUSL_SOURCE/.git"; then
+              echo "Permanent musl source is missing: $MUSL_SOURCE" >&2
+              exit 1
+            fi
+            revision=$(git -C "$MUSL_SOURCE" rev-parse HEAD 2>/dev/null || true)
+            tag=$(git -C "$MUSL_SOURCE" describe --tags --exact-match 2>/dev/null || true)
+            if test "$revision" != "$expected" || test "$tag" != v1.2.6; then
+              echo "Permanent musl source is not clean tag v1.2.6 ($expected)" >&2
+              echo "Found tag $tag at $revision" >&2
+              exit 1
+            fi
+            if test -n "$(git -C "$MUSL_SOURCE" status --porcelain --untracked-files=all)"; then
+              echo "Permanent musl source has local changes: $MUSL_SOURCE" >&2
+              git -C "$MUSL_SOURCE" status --short >&2
+              exit 1
+            fi
+            cp -a "$MUSL_SOURCE" "$BUILD_DIR/musl-src"
+            {
+              echo "$tag"
+              echo "$revision"
+            } >> ci-results/performance/source-revisions.txt
+          fi
+
+      - name: Fetch LLVM test-suite source
+        if: ${{ inputs.suite == 'all' || inputs.suite == 'multisource' }}
+        run: |
+          set -euo pipefail
+          git clone --depth=1 --filter=blob:none --sparse --branch=llvmorg-18.1.8 \
+            https://github.com/llvm/llvm-test-suite.git "$BUILD_DIR/test-suite-src"
+          git -C "$BUILD_DIR/test-suite-src" sparse-checkout set MultiSource cmake litsupport tools
+          {
+            git -C "$BUILD_DIR/test-suite-src" describe --tags --exact-match
+            git -C "$BUILD_DIR/test-suite-src" rev-parse HEAD
+          } >> ci-results/performance/source-revisions.txt
+
+      - name: Fetch Fleetbench and pinned Bazel
+        id: fleetbench_source
+        if: ${{ (inputs.suite == 'all' || inputs.suite == 'fleetbench') && (matrix.group == 'software' || matrix.group == 'id32') }}
+        timeout-minutes: 15
+        run: python .github/scripts/ptsan_fleetbench.py fetch
+
+      - name: Configure and build all default targets
+        timeout-minutes: 300
+        run: |
+          set -euo pipefail
+          lam=OFF
+          dependency_args=()
+          if test "$PERF_GROUP" != glibc-stack-off; then
+            dependency_args=(-DPTSAN_MUSL_SOURCE_DIR="$BUILD_DIR/musl-src"
+                             -DPTSAN_BUILD_BASELINE_DEPENDENCIES=ON)
+          fi
+          if [[ "$PERF_GROUP" == lam || "$PERF_GROUP" == glibc-stack-off ]]; then
+            lam=ON
+          fi
+          cmake -S llvm -B "$BUILD_DIR" -G Ninja \
+            -C "$GITHUB_WORKSPACE/clang/cmake/caches/PTSan.cmake" \
+            -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DPython3_EXECUTABLE="$BUILD_DIR/venv/bin/python" \
+            -DLLVM_USE_LINKER=lld -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DLLVM_INCLUDE_TESTS=ON -DCOMPILER_RT_INCLUDE_TESTS=ON \
+            -DPTSAN_BUILD_LAM_DEPENDENCIES="$lam" \
+            -DPTSAN_ID32_STACK_TEMPORAL_SAFETY=1 \
+            "${dependency_args[@]}" \
+            2>&1 | tee ci-results/performance/configure.log
+          ninja -C "$BUILD_DIR" -j"$(nproc)" \
+            2>&1 | tee ci-results/performance/build-dependencies.log
+
+      - name: Check uninstrumented baselines and system glibc linkage
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          python .github/scripts/ptsan-performance-deps.py \
+            2>&1 | tee ci-results/performance/build-baselines.log
+
+      - name: Prepare selected benchmark configurations
+        id: benchmarks
+        timeout-minutes: 480
+        run: python .github/scripts/ptsan-performance.py build --group "$PERF_GROUP" --suite "$PERF_SUITE"
+
+      - name: Build Fleetbench configurations and uninstrumented baselines
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'fleetbench') && steps.fleetbench_source.outcome == 'success' && (steps.benchmarks.outcome == 'success' || steps.benchmarks.outcome == 'failure') }}
+        timeout-minutes: 360
+        run: python .github/scripts/ptsan_fleetbench.py build --performance --group "$PERF_GROUP"
+
+      - name: Set CPU policy for serial measurements
+        id: benchmark_policy
+        if: ${{ !cancelled() && (steps.benchmarks.outcome == 'success' || steps.benchmarks.outcome == 'failure') }}
+        run: sudo -n /usr/local/sbin/ptsan-benchmark
+
+      - name: Measure MultiSource train
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'multisource') && steps.benchmark_policy.outcome == 'success' }}
+        run: |
+          python .github/scripts/ptsan-performance.py run --suite multisource --group "$PERF_GROUP" \
+            --cpu "$PERF_CPU" --repetitions "$PERF_REPETITIONS"
+
+      - name: Measure SPEC ref
+        # Still run SPEC after an ordinary MultiSource failure; never overlap them.
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'spec') && steps.benchmark_policy.outcome == 'success' }}
+        run: |
+          python .github/scripts/ptsan-performance.py run --suite spec --group "$PERF_GROUP" \
+            --cpu "$PERF_CPU" --repetitions "$PERF_REPETITIONS"
+
+      - name: Measure Fleetbench
+        if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'fleetbench') && (matrix.group == 'software' || matrix.group == 'id32') && steps.benchmark_policy.outcome == 'success' }}
+        run: |
+          python .github/scripts/ptsan-performance.py run --suite fleetbench --group "$PERF_GROUP" \
+            --cpu "$PERF_CPU" --repetitions "$PERF_REPETITIONS"
+
+      - name: Restore fast CPU policy
+        if: ${{ always() && steps.fast.outcome == 'success' }}
+        run: sudo -n /usr/local/sbin/ptsan-fast
+
+      - name: Summarize completed or interrupted measurements
+        if: always()
+        run: |
+          if test -f ci-results/performance/measurements-multisource.json || \
+             test -f ci-results/performance/measurements-spec.json || \
+             test -f ci-results/performance/measurements-fleetbench.json; then
+            python .github/scripts/ptsan-performance.py report
+          fi
+          if test -f "$BUILD_DIR/CMakeCache.txt"; then
+            cp "$BUILD_DIR/CMakeCache.txt" ci-results/performance/
+          fi
+          if test -d "$BUILD_DIR/bin"; then
+            mkdir -p ci-results/performance/compiler-configs
+            find "$BUILD_DIR/bin" -maxdepth 1 -name '*.cfg' -exec cp {} ci-results/performance/compiler-configs/ \;
+          fi
+
+      - name: Package artifacts in named folders
+        id: package
+        if: always()
+        run: |
+          set -euo pipefail
+          test -d ci-results || exit 0
+          stage=$(mktemp -d "$RUNNER_TEMP/ptsan-artifacts.XXXXXX")
+          mkdir -p "$stage/reports/$REPORT_ARTIFACT" "$stage/full/$FULL_ARTIFACT"
+          # Upload each parent directory so the artifact name survives as the ZIP root.
+          shopt -s nullglob
+          for file in ci-results/performance/{README.md,summary.md,*.csv,comparison.json,measurements.json,plan.json,source-revisions.txt,*environment-*.json}; do
+            if test -f "$file"; then
+              cp --reflink=auto -- "$file" "$stage/reports/$REPORT_ARTIFACT/"
+            fi
+          done
+          cp -a --reflink=auto -- ci-results/. "$stage/full/$FULL_ARTIFACT/"
+          echo "reports=$stage/reports" >> "$GITHUB_OUTPUT"
+          echo "full=$stage/full" >> "$GITHUB_OUTPUT"
+
+      - name: Upload downloadable performance reports
+        id: performance_reports
+        if: ${{ always() && steps.package.outputs.reports != '' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ${{ env.REPORT_ARTIFACT }}
+          path: ${{ steps.package.outputs.reports }}/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Link downloadable performance reports
+        if: ${{ always() && steps.performance_reports.outputs.artifact-url != '' }}
+        env:
+          REPORT_URL: ${{ steps.performance_reports.outputs.artifact-url }}
+        run: |
+          printf '\n[Download performance tables, CSVs, and JSON](%s)\n' "$REPORT_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports and diagnostics
+        if: ${{ always() && steps.package.outputs.full != '' }}
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ${{ env.FULL_ARTIFACT }}
+          # SPEC inputs, binaries, and complete workload outputs remain local.
+          path: ${{ steps.package.outputs.full }}/
+          retention-days: 30

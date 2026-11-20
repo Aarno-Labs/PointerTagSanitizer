@@ -995,6 +995,8 @@ Linux::getSupportedSanitizers(BoundArch BA,
   Res |= SanitizerKind::KernelAddress;
   Res |= SanitizerKind::Vptr;
   Res |= SanitizerKind::SafeStack;
+  if (IsX86_64 || getTriple().getArch() == llvm::Triple::aarch64)
+    Res |= SanitizerKind::PTSan;
   if (IsX86_64 || IsMIPS64 || IsAArch64 || IsLoongArch64 || IsSystemZ)
     Res |= SanitizerKind::DataFlow;
   if (IsX86_64 || IsMIPS64 || IsAArch64 || IsX86 || IsArmArch || IsPowerPC64 ||

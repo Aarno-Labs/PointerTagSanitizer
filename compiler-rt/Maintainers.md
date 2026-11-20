@@ -64,6 +64,11 @@ browneee@google.com (email), [browneee](https://github.com/browneee) (GitHub)
 Alexander Shaposhnikov \
 alexander.v.shaposhnikov@gmail.com (email), [alexander-shaposhnikov](https://github.com/alexander-shaposhnikov) (GitHub)
 
+#### PointerTagSanitizer (PTSan)
+
+Eli Davis \
+eli@aarno-labs.com (email)
+
 #### Realtime Sanitizer (RTSan)
 
 Christopher Apple \

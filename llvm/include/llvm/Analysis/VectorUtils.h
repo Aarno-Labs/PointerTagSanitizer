@@ -373,13 +373,13 @@ LLVM_ABI MDNode *intersectAccessGroups(const Instruction *Inst1,
 /// Add metadata from \p Inst to \p Metadata, if it can be preserved after
 /// vectorization. It can be preserved after vectorization if the kind is one of
 /// [MD_tbaa, MD_alias_scope, MD_noalias, MD_fpmath, MD_nontemporal,
-/// MD_access_group, MD_mmra].
+/// MD_access_group, MD_mmra, MD_ptsan_loop_ids].
 LLVM_ABI void getMetadataToPropagate(
     Instruction *Inst,
     SmallVectorImpl<std::pair<unsigned, MDNode *>> &Metadata);
 
 /// Specifically, let Kinds = [MD_tbaa, MD_alias_scope, MD_noalias, MD_fpmath,
-/// MD_nontemporal, MD_access_group, MD_mmra].
+/// MD_nontemporal, MD_access_group, MD_mmra, MD_ptsan_loop_ids].
 /// For K in Kinds, we get the MDNode for K from each of the
 /// elements of VL, compute their "intersection" (i.e., the most generic
 /// metadata value that covers all of the individual values), and set I's

@@ -79,6 +79,7 @@
 #include "llvm/Transforms/InstCombine/InstCombine.h"
 #include "llvm/Transforms/Instrumentation/AllocToken.h"
 #include "llvm/Transforms/Instrumentation/CGProfile.h"
+#include "llvm/Transforms/Instrumentation/PTSanIDStrip.h"
 #include "llvm/Transforms/Instrumentation/ControlHeightReduction.h"
 #include "llvm/Transforms/Instrumentation/InstrProfiling.h"
 #include "llvm/Transforms/Instrumentation/MemProfInstrumentation.h"
@@ -159,6 +160,10 @@
 #include "llvm/Transforms/Vectorize/VectorCombine.h"
 
 using namespace llvm;
+
+static cl::opt<bool> EnablePTSanIDStrip(
+    "ptsan-strip-ids", cl::init(false), cl::Optional,
+    cl::desc("Strips ptsan ids from IR memory accesses"));
 
 namespace llvm {
 
@@ -1802,6 +1807,10 @@ PassBuilder::buildPerModuleDefaultPipeline(OptimizationLevel Level,
   // Now add the optimization pipeline.
   MPM.addPass(buildModuleOptimizationPipeline(Level, Phase));
 
+  if (EnablePTSanIDStrip) {
+    MPM.addPass(PTSanIDStripPass());
+  }
+
   if (PGOOpt && PGOOpt->PseudoProbeForProfiling &&
       PGOOpt->Action == PGOOptions::SampleUse)
     MPM.addPass(PseudoProbeUpdatePass());
@@ -2413,6 +2422,10 @@ PassBuilder::buildO0DefaultPipeline(OptimizationLevel Level,
          "buildO0DefaultPipeline should only be used with O0");
 
   ModulePassManager MPM;
+
+  if (EnablePTSanIDStrip) {
+    MPM.addPass(PTSanIDStripPass());
+  }
 
   instructionCountersPass(MPM, /* IsPreOptimization */ true);
 

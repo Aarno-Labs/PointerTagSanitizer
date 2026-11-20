@@ -1,0 +1,11 @@
+--- a/fleetbench/compression/compression_benchmark.cc
++++ b/fleetbench/compression/compression_benchmark.cc
+@@ -311,7 +311,7 @@ void RegisterBenchmarks() {
+   using algorithms_entry = std::tuple<std::string, std::string, std::string,
+                                       std::vector<int64_t>, int64_t, int64_t>;
+   auto algorithms = {
+-      algorithms_entry("Snappy", "Snappy", "", {}, NULL, NULL),
++      algorithms_entry("Snappy", "Snappy", "", {}, 0, 0),
+       algorithms_entry("ZSTD", "ZSTD", "", {15, 16}, 0, 0),
+       algorithms_entry("Flate", "ZLib", "", {15}, 15, 6),
+       algorithms_entry("Brotli", "Brotli", "", {18}, 18, 2),

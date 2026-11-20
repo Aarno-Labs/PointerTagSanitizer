@@ -1,0 +1,60 @@
+// RUN: %clang_ptsan_plain -g -O3 -fno-discard-value-names -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats -mllvm -ptsan-stop-after=optimization -S -emit-llvm -o - %s | FileCheck %s --check-prefix=IR --implicit-check-not=SimpleAccessRange
+// RUN: rm -rf %t && mkdir -p %t && cd %t
+// RUN: %clang_ptsan_plain -g -O3 -fno-discard-value-names -fsanitize-ptsan-runtime-validate -mllvm -ptsan-print-stats -o %exe %s %S/../Inputs/preanalysis_obsequi_globals.c
+// RUN: ./%exe 8 2> err && FileCheck %s --check-prefix=OUT < err
+
+// Model Obsequi's four mirrored writes inside a pair of nested loops. Their
+// addresses combine both induction variables with positive and negative
+// offsets, so preanalysis must preserve them as LoopAccessRanges rather than
+// SimpleAccessRanges. All eight resulting prechecks must execute without a
+// false positive.
+
+// IR: call void (...) @__ptsan_loop_preanalysis(
+// IR: LoopAccessRange
+
+// OUT-NOT: Found bad
+// OUT: Checks called:
+// OUT: PREANALYZED_LOOP: 8
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+extern int g_first_move[2][32][32];
+extern int g_board_size[2];
+volatile int sink;
+
+static void set_position_value(int player, int row, int col, int value) {
+  int num_rows = g_board_size[player] + 1;
+  int num_cols = g_board_size[player ^ 1];
+
+  g_first_move[player][row][col] = value;
+  g_first_move[player][num_rows - row][col] = value;
+  g_first_move[player][num_rows - row][num_cols - col] = value;
+  g_first_move[player][row][num_cols - col] = value;
+}
+
+__attribute__((noinline))
+void set_position_values(void) {
+  for (int i = 0; i < 2; i++)
+    for (int j = 0; j < 32; j++)
+      for (int k = 0; k < 32; k++)
+        g_first_move[i][j][k] = 0;
+
+  for (int i = 0; i < 2; i++) {
+    int count = 127;
+    for (int j = 2; j < (g_board_size[i] + 3) / 2; j += 2)
+      for (int k = 1; k < (g_board_size[i ^ 1] / 2) + 1; k += 2)
+        set_position_value(i, j, k, --count);
+  }
+}
+
+int main(int argc, char **argv) {
+  int size = argc > 1 ? atoi(argv[1]) : 8;
+  g_board_size[0] = size;
+  g_board_size[1] = size;
+  set_position_values();
+  sink = g_first_move[0][2][1] + g_first_move[1][2][1];
+  fprintf(stderr, "%d\n", sink);
+  return 0;
+}

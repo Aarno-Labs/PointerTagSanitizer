@@ -2630,6 +2630,23 @@ def fexperimental_sanitize_metadata_ignorelist_EQ : Joined<["-"], "fexperimental
     Group<f_Group>, Visibility<[ClangOption, CLOption]>,
     HelpText<"Disable sanitizer metadata for modules and functions that match the provided special case list">,
     MarshallingInfoStringVector<CodeGenOpts<"SanitizeMetadataIgnorelistFiles">>;
+def fsanitize_ptsan_32_bit_ids : Flag<["-"], "fsanitize-ptsan-32-bit-ids">,
+    Group<f_clang_Group>, HelpText<"Enable 32-bit-ID pointer encoding">;
+def fno_sanitize_ptsan_32_bit_ids : Flag<["-"], "fno-sanitize-ptsan-32-bit-ids">,
+    Group<f_clang_Group>, HelpText<"Disable 32-bit-ID pointer encoding">;
+def fsanitize_ptsan_strict_mode : Flag<["-"], "fsanitize-ptsan-strict-mode">,
+    Group<f_clang_Group>, HelpText<"Enable strict PTSan checking">;
+def fno_sanitize_ptsan_strict_mode : Flag<["-"], "fno-sanitize-ptsan-strict-mode">,
+    Group<f_clang_Group>, HelpText<"Disable strict PTSan checking">;
+def fsanitize_ptsan_lam : Flag<["-"], "fsanitize-ptsan-lam">,
+    Group<f_clang_Group>, HelpText<"Enable LAM-compatible PTSan encoding">;
+def fno_sanitize_ptsan_lam : Flag<["-"], "fno-sanitize-ptsan-lam">,
+    Group<f_clang_Group>, HelpText<"Disable LAM-compatible PTSan encoding">;
+def fsanitize_ptsan_runtime_validate : Flag<["-"], "fsanitize-ptsan-runtime-validate">,
+    Group<f_clang_Group>, HelpText<"Enable PTSan runtime validation">;
+def fno_sanitize_ptsan_runtime_validate : Flag<["-"], "fno-sanitize-ptsan-runtime-validate">,
+    Group<f_clang_Group>, HelpText<"Disable PTSan runtime validation">;
+
 def fsanitize_memory_track_origins_EQ : Joined<["-"], "fsanitize-memory-track-origins=">,
                                         Group<f_clang_Group>,
                                         HelpText<"Enable origins tracking in MemorySanitizer">,

@@ -33,6 +33,7 @@ Using Clang as a Compiler
    DataFlowAnalysisIntro
    FunctionEffectAnalysis
    AddressSanitizer
+   PointerTagSanitizer
    ThreadSanitizer
    MemorySanitizer
    UndefinedBehaviorSanitizer

@@ -1621,6 +1621,18 @@ void tools::linkSanitizerRuntimeDeps(const ToolChain &TC,
     CmdArgs.push_back("-lresolv");
 }
 
+static StringRef getPTSanRuntimeName(const SanitizerArgs &SanArgs) {
+  const bool Validate = SanArgs.needsPTSanValidationRt();
+  if (SanArgs.usesPTSan32BitIDs()) {
+    if (SanArgs.usesPTSanStrictMode())
+      return Validate ? "ptsan_32bit_strict_validate" : "ptsan_32bit_strict";
+    return Validate ? "ptsan_32bit_validate" : "ptsan_32bit";
+  }
+  if (SanArgs.usesPTSanLAM())
+    return Validate ? "ptsan_lam_validate" : "ptsan_lam";
+  return Validate ? "ptsan_validate" : "ptsan";
+}
+
 static void
 collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
                          SmallVectorImpl<StringRef> &SharedRuntimes,
@@ -1715,6 +1727,8 @@ collectSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
   }
   if (SanArgs.needsDfsanRt())
     StaticRuntimes.push_back("dfsan");
+  if (SanArgs.needsPTSanRt())
+    StaticRuntimes.push_back(getPTSanRuntimeName(SanArgs));
   if (SanArgs.needsLsanRt())
     StaticRuntimes.push_back("lsan");
   if (SanArgs.needsMsanRt()) {
@@ -1779,6 +1793,52 @@ bool tools::addSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
                              RequiredSymbols);
   }
 
+  // Pointer-containing constants are initialized by PTSan constructors, then
+  // protected read-only. Both GNU ld and LLD accept this layout fragment.
+  if (SanArgs.needsPTSanRt() && TC.getTriple().isOSBinFormatELF()) {
+    if (TC.getTriple().isOSGlibc() && !TC.getTriple().isMusl() &&
+        Args.hasArg(options::OPT_static, options::OPT_static_pie)) {
+      TC.getDriver().Diag(diag::err_drv_ptsan_unsupported_static_glibc);
+      return false;
+    }
+    const std::string LinkerPath = TC.GetLinkerPath();
+    StringRef Linker = llvm::sys::path::filename(LinkerPath);
+    // Gold does not support the script's INSERT directive.
+    if (Linker == "gold" || Linker.ends_with("ld.gold")) {
+      TC.getDriver().Diag(diag::err_drv_ptsan_unsupported_gold);
+      return false;
+    }
+    SmallString<128> Script(TC.getCompilerRT(Args, getPTSanRuntimeName(SanArgs)));
+    llvm::sys::path::remove_filename(Script);
+    llvm::sys::path::append(Script, "ptsan-init-ro.ld");
+    CmdArgs.push_back("-T");
+    CmdArgs.push_back(Args.MakeArgString(Script));
+  }
+
+  // The static instrumented-musl runtime keeps only metadata and assembly
+  // boundaries.  Use the linker's wrapping mechanism rather than the dynamic
+  // interception machinery required by an uninstrumented libc.
+  if (SanArgs.needsPTSanRt() &&
+      (TC.getTriple().getArch() == llvm::Triple::x86_64 ||
+       TC.getTriple().getArch() == llvm::Triple::aarch64) &&
+      TC.getTriple().isMusl() &&
+      Args.hasArg(options::OPT_static, options::OPT_static_pie)) {
+    for (StringRef Function : {
+             "malloc", "calloc", "__libc_malloc", "__libc_calloc",
+             "aligned_alloc", "posix_memalign", "realloc", "__libc_realloc",
+             "free", "__libc_free", "malloc_usable_size", "pthread_create",
+             "__pthread_create",
+             "dl_iterate_phdr",
+             "memcmp", "memchr", "memccpy",
+             "strlen", "strcmp", "strncmp", "stpcpy", "__stpcpy",
+             "strchrnul", "__strchrnul", "strlcpy", "stpncpy", "__stpncpy",
+             "munmap", "longjmp", "_longjmp", "siglongjmp", "__sigsetjmp_tail",
+             "__clone", "__copy_tls", "__unmapself", "vfork", "__libc_start_main",
+             "__syscall_cp_asm"}) {
+      CmdArgs.push_back(Args.MakeArgString("--wrap=" + Function));
+    }
+  }
+
   // -u options must be added before the runtime libs that resolve them.
   for (auto S : RequiredSymbols) {
     CmdArgs.push_back("-u");
@@ -1825,6 +1885,16 @@ bool tools::addSanitizerRuntimes(const ToolChain &TC, const ArgList &Args,
   // to be dynamic to be sure we export sanitizer interface functions.
   if (AddExportDynamic && !TC.getTriple().isNVPTX())
     CmdArgs.push_back("--export-dynamic");
+
+  // musl's static-PIE startup relocator processes relative relocations only.
+  // PTSan's dynamic export list would otherwise leave its runtime TLS symbols
+  // with unresolved TPOFF relocations during early startup.
+  if (SanArgs.needsPTSanRt() && TC.getTriple().isMusl() &&
+      Args.hasArg(options::OPT_static_pie)) {
+    StringRef Runtime = llvm::sys::path::filename(
+        TC.getCompilerRT(Args, getPTSanRuntimeName(SanArgs)));
+    CmdArgs.push_back(Args.MakeArgString(Twine("--exclude-libs=") + Runtime));
+  }
 
   if (SanArgs.hasCrossDsoCfi() && !AddExportDynamic)
     CmdArgs.push_back("--export-dynamic-symbol=__cfi_check");
