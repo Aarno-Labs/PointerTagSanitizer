@@ -1,17 +1,16 @@
 name: PTSan candidate validation
 
 on:
-  push:
-    # Explicit branches include every branch and exclude tag-only pushes.
-    branches: ['**']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-# Supersede obsolete candidates while allowing cancellation cleanup to finish.
+# Supersede an older candidate for the same branch while allowing cancellation
+# cleanup to finish.
 # Called workflows use a separate group to serialize access to build directories.
 concurrency:
-  group: ptsan-private-auto-${{ github.ref }}
+  group: ptsan-private-candidate-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

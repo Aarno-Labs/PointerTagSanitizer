@@ -1,13 +1,12 @@
 # Private PTSan candidate validation
 
-Pushes to any branch containing the
-[candidate workflow](workflows/ptsan-candidate.yml) start validation in
-`Aarno-Labs/PointerTagSanitizer-private`. Tag-only pushes do not trigger it.
-The workflow is read-only with respect
-to repository contents. Every PTSan job checks the exact repository identity,
-so a public release or a fork cannot execute these jobs.
+The [candidate workflow](workflows/ptsan-candidate.yml) manually starts full
+validation for a selected branch in `Aarno-Labs/PointerTagSanitizer-private`.
+Pushes do not trigger it. The workflow is read-only with respect to repository
+contents. Every PTSan job checks the exact repository identity, so a public
+release or a fork cannot execute these jobs.
 
-The automatic sequence is:
+The candidate sequence is:
 
 1. Correctness: ID32, software, then LAM, with every supported suite.
 2. If all correctness groups pass, performance: ID32, software, LAM, then
@@ -20,20 +19,21 @@ workflow. LAM and glibc-stack-off omit Fleetbench, which currently supports only
 software and ID32.
 
 Explicit job dependencies enforce this order. Each invocation checks out the
-same triggering commit. A new push supersedes the previous automatic run on the
-same branch. The shared runner concurrency group uses `queue: max`, so up to
-100 invocations from different branches or manual runs can wait without replacing
-one another; GitHub cancels additional invocations if that queue fills.
-Cancellation stops further work, retains available reports, and
-runs the existing performance CPU-policy cleanup. Runner or machine failure can
-still require manual CPU-policy restoration.
+selected commit. A new candidate dispatch supersedes an older candidate for the
+same branch. The shared runner concurrency group uses `queue: max`, so up to 100
+invocations from different branches or focused manual runs can wait without
+replacing one another; GitHub cancels additional invocations if that queue
+fills. Cancellation stops further work, retains available reports, and runs the
+existing performance CPU-policy cleanup. Runner or machine failure can still
+require manual CPU-policy restoration.
 
 One repetition measures coverage and initial performance; it does not establish
 run-to-run variability. The reusable [correctness](workflows/ptsan-ci.yml) and
 [performance](workflows/ptsan-performance.yml) workflows also retain manual
 entrypoints for focused reruns. Manual performance defaults to three repetitions
-for release measurements. GitHub exposes those entrypoints after the workflow
-files reach the default branch; automatic push runs need no default-branch setup.
+for release measurements. GitHub exposes the manual entrypoints after the
+workflow files reach the default branch; the dispatch branch selector can then
+run another ref.
 
 ## Runner setup
 

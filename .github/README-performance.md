@@ -207,13 +207,13 @@ modes per benchmark. Each SPEC repetition uses a fresh output root and copies
 existing executables/configs; setup is outside reported runtime. Each workload
 has a four-hour limit, and failures do not prevent subsequent workloads or suites.
 
-Automatic candidate validation uses **1** repetition; manual measurements default
-to **3**. The job allows four days and shares `ptsan-private-runner` concurrency
-with correctness CI within this repository. Both workflows use `queue: max` with
-`cancel-in-progress: false`, allowing up to 100 pending workflow runs to wait
-without replacing one another. GitHub cancels additional runs if that queue fills.
-The shared runner must use one worker to prevent overlap with jobs from other
-repositories.
+Full candidate validation uses **1** repetition; focused manual measurements
+default to **3**. The job allows four days and shares `ptsan-private-runner`
+concurrency with correctness CI within this repository. Both workflows use
+`queue: max` with `cancel-in-progress: false`, allowing up to 100 pending workflow
+runs to wait without replacing one another. GitHub cancels additional runs if
+that queue fills. The shared runner must use one worker to prevent overlap with
+jobs from other repositories.
 Other users' workloads are not stopped; recorded load, affinity and resource
 limits should be reviewed when interpreting results.
 
@@ -271,9 +271,9 @@ interrupted suite makes the combined report incomplete.
 
 Build/run logs, effective configs and derived evidence are uploaded. SPEC
 sources, inputs, binaries and full application outputs remain in the local
-build tree. The [candidate workflow](workflows/ptsan-candidate.yml) automatically runs the
-full correctness sequence before performance on pushes to any private branch
-containing the workflow. Tag-only pushes are excluded.
+build tree. The [candidate workflow](workflows/ptsan-candidate.yml) manually
+runs the full correctness sequence before performance for the selected private
+branch. Pushes do not trigger it.
 See the [CI setup and execution policy](README-ptsan-ci.md).
 Manual dispatch remains available once these workflows reach the default branch;
 manual performance runs default to three repetitions.

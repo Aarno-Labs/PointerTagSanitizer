@@ -10,6 +10,12 @@ from ptsan_ci_modes import BASELINES, BASE_MODES, ID32_MODES, MODES, CONFIGURATI
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_candidate_validation_is_manual_only(self):
+        workflow = (SCRIPTS.parent / 'workflows/ptsan-candidate.yml').read_text()
+        self.assertIn('on:\n  workflow_dispatch:', workflow)
+        self.assertNotIn('\n  push:', workflow)
+        self.assertIn('ptsan-private-candidate-${{ github.ref }}', workflow)
+
     def test_workflows_build_all_default_targets(self):
         for workflow, step in (
                 ('ptsan-ci.yml', 'Build all default targets'),
