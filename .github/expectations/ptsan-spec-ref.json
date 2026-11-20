@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "provenance": "Provisional ref-input expectations from the October 14\u201315 validation summary: glibc and musl non-strict 18/18, musl strict 11/18 with seven ID-exhaustion failures. Current CI retains strong stack temporal safety. Multiple ref input commands may finish or exhaust; require only normal exits or exit 1, at least one exit 1, SPEC runtime error, and exactly the exhaustion diagnostic category. Review differences; never learn expectations automatically. LAM ref expectations reviewed against the October 22, 2026 CI run at 8a053aad43523e768b10815ffd683ff4a33b1c88: glibc and musl non-strict 18/18, musl strict 10/18 with eight ID-exhaustion failures. Strict-musl LAM additionally exhausts IDs in 541.leela_r; runtime-statistics investigation confirmed general-ID-pool exhaustion. Other deviations require review. 507.cactuBSSN_r added for glibc only (including the plain baseline and LAM); expected to pass based on the July paper campaign. GNU Fortran supplies its build-only sources, with C/C++ instrumented by Clang. This addition does not change the historical counts above; review new CI results.",
+  "provenance": "Provisional ref-input expectations from the October 14\u201315 validation summary: glibc and musl non-strict 18/18, musl strict 11/18 with seven ID-exhaustion failures. Current CI retains strong stack temporal safety. Multiple ref input commands may finish or exhaust; require only normal exits or exit 1, at least one exit 1, SPEC runtime error, and exactly the exhaustion diagnostic category. Review differences; never learn expectations automatically. LAM ref expectations reviewed against the October 22, 2026 CI run at 8a053aad43523e768b10815ffd683ff4a33b1c88: glibc and musl non-strict 18/18, musl strict 10/18 with eight ID-exhaustion failures. Strict-musl LAM additionally exhausts IDs in 541.leela_r; runtime-statistics investigation confirmed general-ID-pool exhaustion. Other deviations require review. 507.cactuBSSN_r added for glibc only (including the plain baseline and LAM); expected to pass based on the July paper campaign. GNU Fortran supplies its build-only sources, with C/C++ instrumented by Clang. This addition does not change the historical counts above; review new CI results. LLVM 23.1.5 qualification on November 20, 2026 confirmed that 510.parest_r ref inputs report the same stack access as test inputs in all three software-decoding configurations. LAM and ID32 mirror the compile-time libc++ outcome already established with test inputs.",
   "benchmarks": [
     "500.perlbench_r",
     "502.gcc_r",
@@ -23,12 +23,25 @@
     "999.specrand_ir"
   ],
   "configurations": {
-    "glibc-id32": {},
+    "glibc-id32": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [256],
+        "diagnostics": ["access"]
+      }
+    },
     "musl-nonstrict-id32": {
       "502.gcc_r": {
         "category": "heap-out-of-bounds",
         "valid": "RE",
         "child_statuses": [256, 256, 0, 0, 0],
+        "diagnostics": ["access"]
+      },
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [256],
         "diagnostics": ["access"]
       }
     },
@@ -38,10 +51,30 @@
         "valid": "RE",
         "child_statuses": [256, 256, 256, 0, 0],
         "diagnostics": ["access"]
+      },
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [256],
+        "diagnostics": ["access"]
       }
     },
-    "glibc": {},
-    "musl-nonstrict": {},
+    "glibc": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [256],
+        "diagnostics": ["access"]
+      }
+    },
+    "musl-nonstrict": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [256],
+        "diagnostics": ["access"]
+      }
+    },
     "musl-strict": {
       "500.perlbench_r": {
         "category": "out-of-ids",
@@ -60,11 +93,11 @@
         ]
       },
       "510.parest_r": {
-        "category": "out-of-ids",
+        "category": "stack-out-of-bounds",
         "valid": "RE",
-        "child_status_policy": "exhaustion",
+        "child_statuses": [256],
         "diagnostics": [
-          "exhaustion"
+          "access"
         ]
       },
       "520.omnetpp_r": {
@@ -100,8 +133,22 @@
         ]
       }
     },
-    "glibc-lam": {},
-    "musl-nonstrict-lam": {},
+    "glibc-lam": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [256],
+        "diagnostics": ["access"]
+      }
+    },
+    "musl-nonstrict-lam": {
+      "510.parest_r": {
+        "category": "stack-out-of-bounds",
+        "valid": "RE",
+        "child_statuses": [256],
+        "diagnostics": ["access"]
+      }
+    },
     "musl-strict-lam": {
       "500.perlbench_r": {
         "category": "out-of-ids",
@@ -120,11 +167,11 @@
         ]
       },
       "510.parest_r": {
-        "category": "out-of-ids",
+        "category": "stack-out-of-bounds",
         "valid": "RE",
-        "child_status_policy": "exhaustion",
+        "child_statuses": [256],
         "diagnostics": [
-          "exhaustion"
+          "access"
         ]
       },
       "520.omnetpp_r": {
@@ -182,5 +229,5 @@
       "glibc-lam", "musl-nonstrict-lam", "musl-strict-lam"
     ]
   },
-  "id32_notes": "ID32 does not inherit ID16's exhaustion exceptions. GCC strict ref inputs expect three access failures: count_spilled_pseudo reads hard_regno_nregs[-1][16] before checking r < 0 (reload1.c:1868), confirmed with GDB. Both ref32 invocations complete. Non-strict GCC disables global instrumentation for this source bug. Non-strict musl ID32 additionally expects the two gcc-pp.c ref commands to fail with access diagnostics, as observed in CI revision 28d1f76c3 and reproduced locally: vn_nary_may_trap unconditionally reads op[1] from a length-1 CONVERT_EXPR record, eight bytes beyond its 4072-byte obstack allocation (tree-ssa-sccvn.c:3365). GDB confirmed op[1] starts exactly at the allocation end; COMPOUND check 11, function ID 0xaf8520a70693ba8d. The gcc-smaller.c and both ref32 commands still pass. This exception does not apply to glibc ID32 or test inputs. Blender is excluded because serialized pointer identities are unsupported. Other deviations must fail for review."
+  "id32_notes": "ID32 does not inherit ID16's exhaustion exceptions. GCC strict ref inputs expect three access failures: count_spilled_pseudo reads hard_regno_nregs[-1][16] before checking r < 0 (reload1.c:1868), confirmed with GDB. Both ref32 invocations complete. Non-strict GCC disables global instrumentation for this source bug. Non-strict musl ID32 additionally expects the two gcc-pp.c ref commands to fail with access diagnostics, as observed in CI revision 28d1f76c3 and reproduced locally: vn_nary_may_trap unconditionally reads op[1] from a length-1 CONVERT_EXPR record, eight bytes beyond its 4072-byte obstack allocation (tree-ssa-sccvn.c:3365). GDB confirmed op[1] starts exactly at the allocation end; COMPOUND check 11, function ID 0xaf8520a70693ba8d. The gcc-smaller.c and both ref32 commands still pass. This exception does not apply to glibc ID32 or test inputs. PareST expects the same LLVM 23 libc++ access as the other configurations. Blender is excluded because serialized pointer identities are unsupported. Other deviations must fail for review."
 }

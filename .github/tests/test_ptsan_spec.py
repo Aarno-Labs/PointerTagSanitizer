@@ -115,6 +115,19 @@ class SpecTests(unittest.TestCase):
             for mode in BASE_MODES + BASELINES:
                 self.assertIn('526.blender_r', spec_benchmarks(manifest, mode))
 
+    def test_llvm23_parest_expectations_cover_every_ptsan_mode(self):
+        root = SCRIPTS.parent / 'expectations'
+        for name in ('ptsan-spec.json', 'ptsan-spec-ref.json'):
+            manifest = json.loads((root / name).read_text())
+            for mode in MODES:
+                with self.subTest(manifest=name, mode=mode):
+                    self.assertEqual(manifest['configurations'][mode]['510.parest_r'], {
+                        'category': 'stack-out-of-bounds',
+                        'valid': 'RE',
+                        'child_statuses': [256],
+                        'diagnostics': ['access'],
+                    })
+
     def test_startup_directory_survives_empty_directory_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
