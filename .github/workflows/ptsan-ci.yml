@@ -355,9 +355,7 @@ jobs:
       - name: Validate Fleetbench
         if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'fleetbench') && (steps.fleetbench_build.outcome == 'success' || steps.fleetbench_build.outcome == 'failure') }}
         timeout-minutes: 90
-        # Match performance CI: cache-size overrides describe CPU 3 on this
-        # heterogeneous runner, not every CPU in the build affinity mask.
-        run: taskset -c 3 python .github/scripts/ptsan_fleetbench.py validate --group "$CI_GROUP"
+        run: python .github/scripts/ptsan_fleetbench.py validate --group "$CI_GROUP"
 
       - name: Collect build configuration
         if: always()

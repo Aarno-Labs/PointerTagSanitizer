@@ -24,7 +24,7 @@ class FleetbenchTests(unittest.TestCase):
         return {'name': 'BM_example', 'iterations': 100, 'cpu_time': 12,
                 'time_unit': 'ns', **kwargs}
 
-    def test_workflows_default_to_cpu_3_cache_sizes(self):
+    def test_workflows_default_to_verified_cache_sizes(self):
         workflows = SCRIPTS.parent / 'workflows'
         sizes = {
             'FLEETBENCH_L1_DATA_SIZE': 49152,

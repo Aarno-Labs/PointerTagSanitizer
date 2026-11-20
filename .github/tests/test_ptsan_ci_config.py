@@ -84,6 +84,17 @@ class ConfigurationTests(unittest.TestCase):
                 section = section.split('\n      - name:', 1)[0]
                 self.assertIn(f"inputs.suite == '{suite}'", section)
 
+    def test_cpu_pinning_is_performance_only(self):
+        correctness = (SCRIPTS.parent / 'workflows/ptsan-ci.yml').read_text()
+        self.assertNotIn('taskset', correctness)
+        for name in ('ptsan-multisource.py', 'ptsan-spec.py', 'ptsan_fleetbench.py'):
+            self.assertNotIn('sched_setaffinity', (SCRIPTS / name).read_text())
+
+        performance = (SCRIPTS.parent / 'workflows/ptsan-performance.yml').read_text()
+        self.assertIn("PERF_CPU: '3'", performance)
+        self.assertIn('os.sched_setaffinity(0, {cpu})',
+                      (SCRIPTS / 'ptsan-performance.py').read_text())
+
     def test_runtime_validation_is_only_in_correctness_flags(self):
         for mode in BASE_MODES + ID32_MODES:
             flags = benchmark_flags(mode, runtime_validate=True)[1]

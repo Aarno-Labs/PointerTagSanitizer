@@ -123,16 +123,18 @@ native; target actions use the generated Clang configs, including for plain musl
 Stack temporal safety is enabled for both ID16 and ID32, matching the other CI
 suites. Correctness enables runtime validation; performance does not.
 
-Fleetbench correctness is pinned to CPU 3, matching performance's `PERF_CPU`.
-On the current heterogeneous CI host, CPU-pinned CPUID leaf 4 verified CPU 3's
-cache sizes as 49152, 3145728, and 25165824 bytes respectively. The workflows
-use those values by default because the runner hides cache topology in sysfs.
-Repository variables `FLEETBENCH_L1_DATA_SIZE`, `FLEETBENCH_L2_SIZE`, and
-`FLEETBENCH_L3_SIZE` can override them if the runner or selected CPU changes.
-Both workflows pass the values to every configuration, including baselines,
-and record them in the run commands. Do not substitute guessed sizes or summed
-multi-socket cache totals: these settings determine the benchmark working sets.
-The defaults describe CPU 3, not every core on the machine.
+Fleetbench performance is pinned to CPU 3 through `PERF_CPU`; correctness is
+intentionally unpinned. On the current heterogeneous CI host, CPU-pinned CPUID
+leaf 4 verified CPU 3's cache sizes as 49152, 3145728, and 25165824 bytes
+respectively. The workflows use those values by default because the runner
+hides cache topology in sysfs. Repository variables `FLEETBENCH_L1_DATA_SIZE`,
+`FLEETBENCH_L2_SIZE`, and `FLEETBENCH_L3_SIZE` can override them if the runner
+or selected performance CPU changes. Both workflows pass the values to every
+configuration, including baselines, and record them in the run commands. These
+values define fixed benchmark working sets; in correctness they do not imply
+CPU affinity or performance claims. Do not substitute guessed sizes or summed
+multi-socket cache totals. The defaults describe CPU 3's cache topology, not
+every core on the machine.
 
 Strict ID32 Cord and Protobuf are built in a separate
 `musl-strict-id32-indicator` output root.
