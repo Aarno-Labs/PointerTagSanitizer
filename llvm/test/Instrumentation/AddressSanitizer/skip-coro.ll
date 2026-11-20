@@ -1,8 +1,8 @@
 ; Tests that asan skips pre-split coroutine and NoopCoro.Frame
 ; RUN: opt < %s -S -passes=coro-cleanup,asan | FileCheck %s
 
-; CHECK: %NoopCoro.Frame = type { ptr, ptr }
-; CHECK: @NoopCoro.Frame.Const = private constant %NoopCoro.Frame { ptr @__NoopCoro_ResumeDestroy, ptr @__NoopCoro_ResumeDestroy }
+; CHECK: %NoopCoro.Frame = type { ptr, ptr, i8 }
+; CHECK: @NoopCoro.Frame.Const = private constant %NoopCoro.Frame { ptr @__NoopCoro_ResumeDestroy, ptr @__NoopCoro_ResumeDestroy, i8 0 }
 ; CHECK-NOT: @0 = private alias { %NoopCoro.Frame,
 
 %struct.Promise = type { %"struct.std::__n4861::coroutine_handle" }

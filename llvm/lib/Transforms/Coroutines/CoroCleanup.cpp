@@ -177,8 +177,11 @@ void Lowerer::lowerCoroNoop(IntrinsicInst *II) {
     auto *FnTy = FunctionType::get(Type::getVoidTy(C), Builder.getPtrTy(0),
                                    /*isVarArg=*/false);
     auto *FnPtrTy = Builder.getPtrTy(0);
-    StructType *FrameTy =
-        StructType::create({FnPtrTy, FnPtrTy}, "NoopCoro.Frame");
+    // The llvm.coro.promise lowering addresses the empty C++ promise
+    // immediately after the two function pointers. Empty objects still require
+    // one byte of storage.
+    StructType *FrameTy = StructType::create(
+        {FnPtrTy, FnPtrTy, Builder.getInt8Ty()}, "NoopCoro.Frame");
 
     // Create a Noop function that does nothing.
     Function *NoopFn = Function::createWithDefaultAttr(
@@ -190,7 +193,7 @@ void Lowerer::lowerCoroNoop(IntrinsicInst *II) {
     ReturnInst::Create(C, Entry);
 
     // Create a constant struct for the frame.
-    Constant *Values[] = {NoopFn, NoopFn};
+    Constant *Values[] = {NoopFn, NoopFn, Builder.getInt8(0)};
     Constant *NoopCoroConst = ConstantStruct::get(FrameTy, Values);
     NoopCoro = new GlobalVariable(
         M, NoopCoroConst->getType(), /*isConstant=*/true,

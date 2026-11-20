@@ -1,7 +1,7 @@
 ; Tests that CoroCleanup pass correctly lowers coro.noop
 ; RUN: opt < %s -S -passes=coro-cleanup | FileCheck %s
 
-; CHECK: @NoopCoro.Frame.Const = private constant %NoopCoro.Frame { ptr @__NoopCoro_ResumeDestroy, ptr @__NoopCoro_ResumeDestroy }
+; CHECK: @NoopCoro.Frame.Const = private constant %NoopCoro.Frame { ptr @__NoopCoro_ResumeDestroy, ptr @__NoopCoro_ResumeDestroy, i8 0 }
 
 
 ; CHECK-LABEL: @noop(
