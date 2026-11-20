@@ -1,6 +1,6 @@
 # PTSan: A Practical Memory Safety Sanitizer with Pointer-Object Authority
 
-This repository is a fork of LLVM 19 implementing **PTSan**, an LLVM
+This repository is a fork of LLVM 23.1.5 implementing **PTSan**, an LLVM
 sanitizer that makes pointer-based memory-safety checking practical
 for existing C/C++ programs developed by [Aarno
 Labs](https://www.aarno-labs.com). Protected code is recompiled with
@@ -157,7 +157,7 @@ The design, security analysis, and full evaluation are described in:
 
 ## License
 
-This repository is a fork of LLVM 19. PTSan's own code — the
+This repository is a fork of LLVM 23.1.5. PTSan's own code — the
 instrumentation passes, the runtime, and the test suite — is
 Copyright (c) Aarno Labs LLC and is licensed under the same terms as
 LLVM itself: the Apache License v2.0 with LLVM Exceptions
