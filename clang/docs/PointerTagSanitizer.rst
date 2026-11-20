@@ -5,6 +5,7 @@ PointerTagSanitizer
 .. toctree::
    :hidden:
 
+   PointerTagSanitizerOptions
    PointerTagSanitizerSecurityAnalysis
 
 .. contents::
@@ -39,6 +40,8 @@ builds strict and non-strict musl support alongside glibc.
 The supplied CMake configuration builds an optimized compiler. Dependency
 libraries are built and installed under ``$LLVM_BUILD/ptsan``.
 The examples assume this build's ``clang`` and ``clang++`` are on ``PATH``.
+For supported compiler modes and build settings, see
+:doc:`PointerTagSanitizerOptions`.
 
 CMake generates the Clang configuration files in ``$LLVM_BUILD/bin``, alongside
 ``clang`` and ``clang++``. This build's compiler finds them by name with

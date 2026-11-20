@@ -34,6 +34,7 @@ Using Clang as a Compiler
    FunctionEffectAnalysis
    AddressSanitizer
    PointerTagSanitizer
+   PointerTagSanitizerOptions
    ThreadSanitizer
    MemorySanitizer
    UndefinedBehaviorSanitizer
