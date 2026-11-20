@@ -33,6 +33,24 @@ class ConfigurationTests(unittest.TestCase):
             self.assertIn('cp -a "$MUSL_SOURCE" "$BUILD_DIR/musl-src"', workflow)
             self.assertNotIn('https://git.musl-libc.org', workflow)
 
+    def test_correctness_all_groups_use_the_selected_matrix_group(self):
+        workflow = (SCRIPTS.parent / 'workflows/ptsan-ci.yml').read_text()
+        self.assertIn('options: [software, lam, id32, all]', workflow)
+        self.assertIn('CI_GROUP: ${{ matrix.group }}', workflow)
+        self.assertIn('max-parallel: 1', workflow)
+        self.assertIn('fail-fast: false', workflow)
+        self.assertIn('["software", "lam", "id32"]', workflow)
+        self.assertIn("inputs.suite == 'fleetbench' && '[\"software\", \"id32\"]'", workflow)
+        self.assertIn('name: ptsan-ci-${{ matrix.group }}-', workflow)
+        for name in ('Require working LAM_U48',
+                     'Fetch Fleetbench and pinned Bazel',
+                     'Run host-libc regressions',
+                     'Check selected runtime and C++ dependencies'):
+            section = workflow.split(f'- name: {name}', 1)[1]
+            section = section.split('\n      - name:', 1)[0]
+            self.assertIn('matrix.group', section)
+            self.assertNotIn('inputs.group', section)
+
     def test_correctness_workflow_can_select_benchmark_suite(self):
         workflow = (SCRIPTS.parent / 'workflows/ptsan-ci.yml').read_text()
         self.assertIn('options: [all, multisource, spec, fleetbench]', workflow)

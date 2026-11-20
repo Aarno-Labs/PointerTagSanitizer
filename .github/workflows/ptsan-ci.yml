@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       group:
-        description: Configuration group
+        description: Configuration group, or all supported groups
         required: true
         type: string
       suite:
@@ -14,9 +14,9 @@ on:
   workflow_dispatch:
     inputs:
       group:
-        description: "Configurations: each group includes non-strict and strict musl"
+        description: "Configurations: one group, or all supported groups sequentially"
         type: choice
-        options: [software, lam, id32]
+        options: [software, lam, id32, all]
         default: software
       suite:
         description: "Benchmark suite to validate"
@@ -36,23 +36,28 @@ concurrency:
 jobs:
   regression:
     if: github.repository == 'Aarno-Labs/PointerTagSanitizer-private'
-    name: Correctness (${{ inputs.group }}, ${{ inputs.suite }})
+    name: Correctness (${{ matrix.group }}, ${{ inputs.suite }})
     runs-on:
       group: ptsan-ci
       labels: [self-hosted, linux, x64]
     timeout-minutes: 1800
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        group: ${{ fromJSON(inputs.group == 'all' && (inputs.suite == 'fleetbench' && '["software", "id32"]' || '["software", "lam", "id32"]') || format('["{0}"]', inputs.group)) }}
     defaults:
       run:
         shell: bash
     env:
-      CI_GROUP: ${{ inputs.group }}
+      CI_GROUP: ${{ matrix.group }}
       CI_SUITE: ${{ inputs.suite }}
-      BUILD_DIR: ${{ format('/home/ptsan-ci/builds/PointerTagSanitizer-private/{0}', inputs.group) }}
+      BUILD_DIR: ${{ format('/home/ptsan-ci/builds/PointerTagSanitizer-private/{0}', matrix.group) }}
       MUSL_SOURCE: /home/ptsan-ci/sources/musl
-      LAM_DEPENDENCIES: ${{ inputs.group == 'lam' && 'ON' || 'OFF' }}
-      GLIBC_MODE: ${{ inputs.group == 'id32' && 'glibc-id32' || inputs.group == 'lam' && 'glibc-lam' || 'glibc' }}
-      MUSL_NONSTRICT_MODE: ${{ inputs.group == 'id32' && 'musl-nonstrict-id32' || inputs.group == 'lam' && 'musl-nonstrict-lam' || 'musl-nonstrict' }}
-      MUSL_STRICT_MODE: ${{ inputs.group == 'id32' && 'musl-strict-id32' || inputs.group == 'lam' && 'musl-strict-lam' || 'musl-strict' }}
+      LAM_DEPENDENCIES: ${{ matrix.group == 'lam' && 'ON' || 'OFF' }}
+      GLIBC_MODE: ${{ matrix.group == 'id32' && 'glibc-id32' || matrix.group == 'lam' && 'glibc-lam' || 'glibc' }}
+      MUSL_NONSTRICT_MODE: ${{ matrix.group == 'id32' && 'musl-nonstrict-id32' || matrix.group == 'lam' && 'musl-nonstrict-lam' || 'musl-nonstrict' }}
+      MUSL_STRICT_MODE: ${{ matrix.group == 'id32' && 'musl-strict-id32' || matrix.group == 'lam' && 'musl-strict-lam' || 'musl-strict' }}
       SPEC_ROOT: /home/ptsan-ci/spec2017
       FLEETBENCH_L1_DATA_SIZE: ${{ vars.FLEETBENCH_L1_DATA_SIZE || '49152' }}
       FLEETBENCH_L2_SIZE: ${{ vars.FLEETBENCH_L2_SIZE || '3145728' }}
@@ -126,7 +131,7 @@ jobs:
         run: python -m unittest discover -s .github/tests -v
 
       - name: Require working LAM_U48
-        if: inputs.group == 'lam'
+        if: matrix.group == 'lam'
         run: |
           set -euo pipefail
           /usr/bin/clang -O2 .github/scripts/ptsan-lam-probe.c -o "$BUILD_DIR/lam-probe"
@@ -196,7 +201,7 @@ jobs:
 
       - name: Fetch Fleetbench and pinned Bazel
         id: fleetbench_source
-        if: ${{ (inputs.suite == 'all' || inputs.suite == 'fleetbench') && (inputs.group == 'software' || inputs.group == 'id32') }}
+        if: ${{ (inputs.suite == 'all' || inputs.suite == 'fleetbench') && (matrix.group == 'software' || matrix.group == 'id32') }}
         timeout-minutes: 15
         run: python .github/scripts/ptsan_fleetbench.py fetch
 
@@ -227,7 +232,7 @@ jobs:
             2>&1 | tee ci-results/build-dependencies.log
 
       - name: Cross-build AArch64 runtimes and link smoke programs
-        if: ${{ !cancelled() && inputs.group == 'software' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.group == 'software' && steps.build.outcome == 'success' }}
         timeout-minutes: 20
         run: |
           set -euo pipefail
@@ -235,7 +240,7 @@ jobs:
             2>&1 | tee ci-results/aarch64-smoke.log
 
       - name: Run host-libc regressions
-        if: ${{ !cancelled() && inputs.group == 'software' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.group == 'software' && steps.build.outcome == 'success' }}
         run: |
           set -euo pipefail
           export LIT_OPTS="--output=$GITHUB_WORKSPACE/ci-results/check-ptsan.json --xunit-xml-output=$GITHUB_WORKSPACE/ci-results/check-ptsan.xml"
@@ -243,7 +248,7 @@ jobs:
             2>&1 | tee ci-results/build-and-test.log
 
       - name: Run musl regressions (strict and non-strict)
-        if: ${{ !cancelled() && inputs.group == 'software' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.group == 'software' && steps.build.outcome == 'success' }}
         run: |
           set -euo pipefail
           export LIT_OPTS="--output=$GITHUB_WORKSPACE/ci-results/check-ptsan-musl.json --xunit-xml-output=$GITHUB_WORKSPACE/ci-results/check-ptsan-musl.xml"
@@ -251,7 +256,7 @@ jobs:
             2>&1 | tee ci-results/check-ptsan-musl.log
 
       - name: Check selected runtime and C++ dependencies
-        if: ${{ !cancelled() && inputs.group != 'software' && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && matrix.group != 'software' && steps.build.outcome == 'success' }}
         run: |
           set -euo pipefail
           {
@@ -294,7 +299,7 @@ jobs:
             -r .github/multisource/requirements.txt
           "$BUILD_DIR/test-suite-venv/bin/lit" --version
 
-      - name: Build MultiSource benchmarks (${{ inputs.group }} configurations)
+      - name: Build MultiSource benchmarks (${{ matrix.group }} configurations)
         id: multisource_build
         if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'multisource') && steps.multisource_source.outcome == 'success' }}
         timeout-minutes: 90
@@ -315,7 +320,7 @@ jobs:
         timeout-minutes: 60
         run: python .github/scripts/ptsan-multisource.py validate "$MUSL_STRICT_MODE" --modes "$CI_GROUP"
 
-      - name: Build SPEC benchmarks (${{ inputs.group }} configurations)
+      - name: Build SPEC benchmarks (${{ matrix.group }} configurations)
         id: spec_build
         if: ${{ !cancelled() && (inputs.suite == 'all' || inputs.suite == 'spec') && steps.build.outcome == 'success' }}
         timeout-minutes: 180
@@ -366,6 +371,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: ptsan-ci-${{ inputs.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ptsan-ci-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.BUILD_DIR }}/ci-results/
           retention-days: 14
