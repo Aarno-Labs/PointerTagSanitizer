@@ -94,9 +94,9 @@ The compiler pass lives in `llvm/lib/Transforms/Instrumentation/PTSan/`.
 
 ## Collaboration and review
 
-- Keep `clang/docs/PointerTagSanitizer.rst` focused on the first-time user's
-  quickstart. Put flag inventories and detailed option behavior in
-  `clang/docs/PointerTagSanitizerOptions.rst`.
+- Edit `clang/docs/PointerTagSanitizer.rst` only with explicit user approval.
+  It is the first-time user's quickstart. Put flag inventories and detailed
+  option behavior in `clang/docs/PointerTagSanitizerOptions.rst`.
 - Treat questions as questions. Investigate and explain why the implementation
   works before changing it; do not assume a challenged choice must be wrong.
 - Explain concerns with small, concrete examples. Distinguish reproduced behavior
@@ -133,3 +133,16 @@ The compiler pass lives in `llvm/lib/Transforms/Instrumentation/PTSan/`.
   optimization level, treat the concern as hypothetical: bring it up and label
   any IR-only regression or XFAIL clearly, but do not complicate the
   implementation solely to address it.
+
+## Additional local guidance
+
+If `drift-docs/agent-guidance/ptsan-private-workflow.md` exists under the
+current Git root, read and follow it in full before doing work.
+
+In a linked worktree, if that file is absent, run
+`git rev-parse --path-format=absolute --git-common-dir`. If the result
+identifies the `.git` directory of a primary checkout, also check for the same
+`drift-docs` path in the parent of that directory.
+
+If the file is unavailable, continue with this `AGENTS.md`; do not create or
+fetch private guidance.
