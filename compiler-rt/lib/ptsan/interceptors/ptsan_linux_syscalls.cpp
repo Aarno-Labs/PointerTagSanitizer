@@ -74,18 +74,24 @@
 #define ARCH_SHSTK_STATUS 0x5005
 #endif
 #endif
+#include <net/if.h>
+#include <net/if_arp.h>
+
 #include <linux/ethtool.h>
 #include <linux/filter.h>
 #include <linux/futex.h>
+#include <linux/if_vlan.h>
 #include <linux/net_tstamp.h>
+#include <linux/netlink.h>
+#include <linux/seccomp.h>
 #include <linux/sockios.h>
+#include <linux/udp.h>
 
 #include <fcntl.h>
 #include <mqueue.h>
-#include <net/if.h>
-#include <netpacket/packet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netpacket/packet.h>
 #include <poll.h>
 #include <sched.h>
 #include <signal.h>
@@ -116,6 +122,169 @@
 #endif
 #ifndef F_CANCELLK
 #define F_CANCELLK 1029
+#endif
+
+// Recent Linux control operations and options are not exposed by every
+// supported libc.
+// PTSan supports only x86-64 and AArch64 here, where these UAPI values agree.
+#ifndef PR_SCHED_CORE
+#define PR_SCHED_CORE 62
+#define PR_SCHED_CORE_GET 0
+#endif
+#ifndef PR_SME_SET_VL
+#define PR_SME_SET_VL 63
+#define PR_SME_GET_VL 64
+#endif
+#ifndef PR_SET_MDWE
+#define PR_SET_MDWE 65
+#define PR_GET_MDWE 66
+#endif
+#ifndef PR_SET_VMA
+#define PR_SET_VMA 0x53564d41
+#define PR_SET_VMA_ANON_NAME 0
+#endif
+#ifndef PR_GET_AUXV
+#define PR_GET_AUXV 0x41555856
+#endif
+#ifndef PR_SET_MEMORY_MERGE
+#define PR_SET_MEMORY_MERGE 67
+#define PR_GET_MEMORY_MERGE 68
+#endif
+#ifndef PR_RISCV_V_SET_CONTROL
+#define PR_RISCV_V_SET_CONTROL 69
+#define PR_RISCV_V_GET_CONTROL 70
+#endif
+
+#ifndef SO_INCOMING_CPU
+#define SO_INCOMING_CPU 49
+#endif
+#ifndef SO_ATTACH_BPF
+#define SO_ATTACH_BPF 50
+#endif
+#ifndef SO_ATTACH_REUSEPORT_EBPF
+#define SO_ATTACH_REUSEPORT_EBPF 52
+#endif
+#ifndef SO_CNX_ADVICE
+#define SO_CNX_ADVICE 53
+#endif
+#ifndef SO_MEMINFO
+#define SO_MEMINFO 55
+#endif
+#ifndef SO_INCOMING_NAPI_ID
+#define SO_INCOMING_NAPI_ID 56
+#endif
+#ifndef SO_COOKIE
+#define SO_COOKIE 57
+#endif
+#ifndef SO_PEERGROUPS
+#define SO_PEERGROUPS 59
+#endif
+#ifndef SO_ZEROCOPY
+#define SO_ZEROCOPY 60
+#endif
+#ifndef SO_TXTIME
+#define SO_TXTIME 61
+#endif
+#ifndef SO_BINDTOIFINDEX
+#define SO_BINDTOIFINDEX 62
+#endif
+#ifndef SO_TIMESTAMP_NEW
+#define SO_TIMESTAMP_NEW 63
+#define SO_TIMESTAMPNS_NEW 64
+#define SO_TIMESTAMPING_NEW 65
+#endif
+#ifndef SO_RCVTIMEO_NEW
+#define SO_RCVTIMEO_NEW 66
+#define SO_SNDTIMEO_NEW 67
+#endif
+#ifndef SO_DETACH_REUSEPORT_BPF
+#define SO_DETACH_REUSEPORT_BPF 68
+#endif
+#ifndef SO_PREFER_BUSY_POLL
+#define SO_PREFER_BUSY_POLL 69
+#endif
+#ifndef SO_BUSY_POLL_BUDGET
+#define SO_BUSY_POLL_BUDGET 70
+#endif
+#ifndef SO_NETNS_COOKIE
+#define SO_NETNS_COOKIE 71
+#endif
+#ifndef SO_BUF_LOCK
+#define SO_BUF_LOCK 72
+#endif
+#ifndef SO_RESERVE_MEM
+#define SO_RESERVE_MEM 73
+#endif
+#ifndef SO_TXREHASH
+#define SO_TXREHASH 74
+#endif
+#ifndef SO_RCVMARK
+#define SO_RCVMARK 75
+#endif
+#ifndef SO_PASSPIDFD
+#define SO_PASSPIDFD 76
+#endif
+#ifndef SO_PEERPIDFD
+#define SO_PEERPIDFD 77
+#endif
+#ifndef IP_LOCAL_PORT_RANGE
+#define IP_LOCAL_PORT_RANGE 51
+#endif
+#ifndef IP_ORIGDSTADDR
+#define IP_ORIGDSTADDR 20
+#endif
+#ifndef MCAST_JOIN_GROUP
+#define MCAST_JOIN_GROUP 42
+#define MCAST_BLOCK_SOURCE 43
+#define MCAST_UNBLOCK_SOURCE 44
+#define MCAST_LEAVE_GROUP 45
+#define MCAST_JOIN_SOURCE_GROUP 46
+#define MCAST_LEAVE_SOURCE_GROUP 47
+#define MCAST_MSFILTER 48
+#endif
+#ifndef ICMP6_FILTER
+#define ICMP6_FILTER 1
+#endif
+#ifndef ICMP_FILTER
+#define ICMP_FILTER 1
+#endif
+#ifndef IP_PROTOCOL
+#define IP_PROTOCOL 52
+#endif
+#ifndef IPV6_RECVERR_RFC4884
+#define IPV6_RECVERR_RFC4884 31
+#endif
+#ifndef IPV6_FLOWINFO
+#define IPV6_FLOWINFO 11
+#endif
+#ifndef IPV6_FLOWLABEL_MGR
+#define IPV6_FLOWLABEL_MGR 32
+#define IPV6_FLOWINFO_SEND 33
+#endif
+#ifndef PACKET_VNET_HDR_SZ
+#define PACKET_VNET_HDR_SZ 24
+#endif
+#ifndef TCP_COOKIE_TRANSACTIONS
+#define TCP_COOKIE_TRANSACTIONS 15
+#endif
+#ifndef TCP_AO_ADD_KEY
+#define TCP_AO_ADD_KEY 38
+#define TCP_AO_DEL_KEY 39
+#define TCP_AO_INFO 40
+#define TCP_AO_GET_KEYS 41
+#define TCP_AO_REPAIR 42
+#endif
+#ifndef SECCOMP_SET_MODE_STRICT
+#define SECCOMP_SET_MODE_STRICT 0
+#endif
+#ifndef SECCOMP_SET_MODE_FILTER
+#define SECCOMP_SET_MODE_FILTER 1
+#endif
+#ifndef SECCOMP_GET_ACTION_AVAIL
+#define SECCOMP_GET_ACTION_AVAIL 2
+#endif
+#ifndef SECCOMP_GET_NOTIF_SIZES
+#define SECCOMP_GET_NOTIF_SIZES 3
 #endif
 
 #if !defined(__x86_64__) && !defined(__aarch64__)
@@ -572,6 +741,19 @@ static sptr SYSCALL_HANDLER(ptrace)(const SyscallExecutor &) {
   internal__exit(1);
 }
 
+static struct sock_fprog
+prepareSocketFilterProgram(const struct sock_fprog *program) {
+  program = checkAndStrip(program, sizeof(struct sock_fprog));
+  struct sock_fprog shadow = *program;
+  // A null instruction pointer is an ordinary kernel error. Nonnull programs
+  // are copied synchronously, so only the temporary descriptor needs it
+  // stripped.
+  shadow.filter = (struct sock_filter *)checkAndStrip(
+      program->filter, (uptr)program->len * sizeof(struct sock_filter),
+      /*optional=*/true);
+  return shadow;
+}
+
 // prctl's operation determines whether its remaining arguments are scalars or
 // pointers. Keep a closed list so newly added Linux operations cannot silently
 // bypass pointer handling.
@@ -583,6 +765,10 @@ static sptr SYSCALL_HANDLER(prctl)(const SyscallExecutor &executor,
                                    unsigned long argument5) {
   switch (operation) {
   case PR_GET_PDEATHSIG:
+  case PR_GET_UNALIGN:
+  case PR_GET_FPEMU:
+  case PR_GET_FPEXC:
+  case PR_GET_ENDIAN:
   case PR_GET_TSC:
   case PR_GET_CHILD_SUBREAPER: {
     int *output = (int *)argument2;
@@ -590,6 +776,35 @@ static sptr SYSCALL_HANDLER(prctl)(const SyscallExecutor &executor,
     argument2 = (unsigned long)output;
     break;
   }
+  case PR_SET_SECCOMP: {
+    // Only filter mode with a nonnull program has a pointer graph to prepare.
+    if (argument2 != SECCOMP_MODE_FILTER || !argument3) {
+      break;
+    }
+    struct sock_fprog shadow =
+        prepareSocketFilterProgram((const struct sock_fprog *)argument3);
+    return executor(SYS_prctl, (sptr)operation, (sptr)argument2, (sptr)&shadow,
+                    (sptr)argument4, (sptr)argument5, 0);
+  }
+  case PR_GET_AUXV: {
+    void *output = (void *)argument2;
+    output = checkAndStrip(output, argument3, /*optional=*/argument3 == 0);
+    argument2 = (unsigned long)output;
+    break;
+  }
+  case PR_SCHED_CORE:
+    if (argument2 == PR_SCHED_CORE_GET) {
+      auto *cookie = checkAndStrip((u64 *)argument5, sizeof(u64));
+      argument5 = (unsigned long)cookie;
+    }
+    break;
+  case PR_SET_VMA:
+    if (argument2 == PR_SET_VMA_ANON_NAME) {
+      argument3 = (unsigned long)clear_id((void *)argument3);
+      argument5 = (unsigned long)checkAndStripCString((const char *)argument5,
+                                                      /*optional=*/true);
+    }
+    break;
   case PR_SET_NAME: {
     const char *name = (const char *)argument2;
     name = checkAndStripBoundedCString(name, sizeof(char[16]));
@@ -647,6 +862,14 @@ static sptr SYSCALL_HANDLER(prctl)(const SyscallExecutor &executor,
   case PR_GET_IO_FLUSHER:
   case PR_PAC_SET_ENABLED_KEYS:
   case PR_PAC_GET_ENABLED_KEYS:
+  case PR_SME_SET_VL:
+  case PR_SME_GET_VL:
+  case PR_SET_MDWE:
+  case PR_GET_MDWE:
+  case PR_SET_MEMORY_MERGE:
+  case PR_GET_MEMORY_MERGE:
+  case PR_RISCV_V_SET_CONTROL:
+  case PR_RISCV_V_GET_CONTROL:
     break;
   default:
     Report("PTSan does not support prctl operation %d\n", operation);
@@ -658,6 +881,47 @@ static sptr SYSCALL_HANDLER(prctl)(const SyscallExecutor &executor,
                (sptr)argument4, (sptr)argument5, 0);
   return result;
 }
+
+#ifdef SYS_seccomp
+struct PTSanSeccompNotifSizes {
+  u16 notification;
+  u16 response;
+  u16 data;
+};
+
+static sptr SYSCALL_HANDLER(seccomp)(const SyscallExecutor &executor,
+                                     unsigned operation, unsigned flags,
+                                     void *arguments) {
+  switch (operation) {
+  case SECCOMP_SET_MODE_FILTER: {
+    if (!arguments) {
+      break;
+    }
+    struct sock_fprog shadow =
+        prepareSocketFilterProgram((const struct sock_fprog *)arguments);
+    return executor(SYS_seccomp, (sptr)operation, (sptr)flags, (sptr)&shadow, 0,
+                    0, 0);
+  }
+  case SECCOMP_GET_ACTION_AVAIL:
+    arguments = checkAndStrip((u32 *)arguments, sizeof(u32),
+                              /*optional=*/true);
+    break;
+  case SECCOMP_GET_NOTIF_SIZES:
+    arguments = checkAndStrip((PTSanSeccompNotifSizes *)arguments,
+                              sizeof(PTSanSeccompNotifSizes),
+                              /*optional=*/true);
+    break;
+  case SECCOMP_SET_MODE_STRICT:
+    break;
+  default:
+    // Pass unknown seccomp operations through unchanged.
+    break;
+  }
+
+  return executor(SYS_seccomp, (sptr)operation, (sptr)flags, (sptr)arguments, 0,
+                  0, 0);
+}
+#endif
 
 // These operations describe virtual-memory ranges rather than ranges within
 // one PTSan object. Their lengths may legitimately cross object or mapping
@@ -940,9 +1204,31 @@ static sptr SYSCALL_HANDLER(ioctl)(const SyscallExecutor &executor, int fd,
   }
   case FIONREAD:
   case FIONBIO:
+  case FIOASYNC:
   case TIOCGPGRP:
   case TIOCSPGRP:
   case TIOCSPTLCK:
+  case TIOCGSOFTCAR:
+  case TIOCSSOFTCAR:
+  case TIOCOUTQ:
+  case TIOCMGET:
+  case TIOCMBIC:
+  case TIOCMBIS:
+  case TIOCMSET:
+  case TIOCGETD:
+  case TIOCSETD:
+  case TIOCGSID:
+  case TIOCPKT:
+#ifdef TIOCGEXCL
+  case TIOCGEXCL:
+#endif
+#ifdef TIOCGPKT
+  case TIOCGPKT:
+#endif
+#ifdef TIOCGPTLCK
+  case TIOCGPTLCK:
+#endif
+  case SIOCOUTQNSD:
   case SIOCATMARK: {
     int *value = (int *)argument;
     value = checkAndStrip(value, sizeof(int));
@@ -955,17 +1241,85 @@ static sptr SYSCALL_HANDLER(ioctl)(const SyscallExecutor &executor, int fd,
     argument = (unsigned long)number;
     break;
   }
+  case TIOCSTI: {
+    char *character = (char *)argument;
+    character = checkAndStrip(character, sizeof(char));
+    argument = (unsigned long)character;
+    break;
+  }
+  case SIOCGIFCONF: {
+    auto *configuration =
+        checkAndStrip((struct ifconf *)argument, sizeof(struct ifconf));
+    struct ifconf shadow = *configuration;
+    if (shadow.ifc_len > 0) {
+      shadow.ifc_buf =
+          (char *)checkAndStrip(configuration->ifc_buf, (uptr)shadow.ifc_len);
+    } else {
+      shadow.ifc_buf = (char *)clear_id(configuration->ifc_buf);
+    }
+    const sptr result =
+        executor(SYS_ioctl, (sptr)fd, (sptr)request, (sptr)&shadow, 0, 0, 0);
+    if (result == 0) {
+      configuration->ifc_len = shadow.ifc_len;
+    }
+    return result;
+  }
   case SIOCGIFNAME:
+  case SIOCSIFLINK:
   case SIOCGIFINDEX:
   case SIOCGIFADDR:
+  case SIOCSIFADDR:
+  case SIOCGIFDSTADDR:
+  case SIOCSIFDSTADDR:
+  case SIOCGIFBRDADDR:
+  case SIOCSIFBRDADDR:
   case SIOCGIFNETMASK:
+  case SIOCSIFNETMASK:
   case SIOCGIFFLAGS:
   case SIOCSIFFLAGS:
+  case SIOCGIFMETRIC:
+  case SIOCSIFMETRIC:
+  case SIOCGIFMEM:
+  case SIOCSIFMEM:
   case SIOCGIFMTU:
-  case SIOCGIFHWADDR: {
+  case SIOCSIFMTU:
+  case SIOCSIFNAME:
+  case SIOCSIFHWADDR:
+  case SIOCGIFENCAP:
+  case SIOCSIFENCAP:
+  case SIOCGIFHWADDR:
+  case SIOCGIFSLAVE:
+  case SIOCSIFSLAVE:
+  case SIOCADDMULTI:
+  case SIOCDELMULTI:
+  case SIOCSIFPFLAGS:
+  case SIOCGIFPFLAGS:
+  case SIOCSIFHWBROADCAST:
+  case SIOCGIFTXQLEN:
+  case SIOCSIFTXQLEN:
+  case SIOCGIFMAP:
+  case SIOCSIFMAP: {
     struct ifreq *interface = (struct ifreq *)argument;
     interface = checkAndStrip(interface, sizeof(struct ifreq));
     argument = (unsigned long)interface;
+    break;
+  }
+  case SIOCDARP:
+  case SIOCGARP:
+  case SIOCSARP:
+  case SIOCDRARP:
+  case SIOCGRARP:
+  case SIOCSRARP: {
+    auto *entry =
+        checkAndStrip((struct arpreq *)argument, sizeof(struct arpreq));
+    argument = (unsigned long)entry;
+    break;
+  }
+  case SIOCGIFVLAN:
+  case SIOCSIFVLAN: {
+    // VLAN requests use a flat input/output structure rather than ifreq.
+    auto *vlan = (struct vlan_ioctl_args *)argument;
+    argument = (unsigned long)checkAndStrip(vlan, sizeof(*vlan));
     break;
   }
   case SIOCETHTOOL: {
@@ -1009,9 +1363,22 @@ static sptr SYSCALL_HANDLER(ioctl)(const SyscallExecutor &executor, int fd,
     return executor(SYS_ioctl, (sptr)fd, (sptr)request, (sptr)&shadow, 0, 0, 0);
   }
   case TCSBRK:
+  case TCSBRKP:
   case TCXONC:
   case TCFLSH:
   case TIOCSCTTY:
+  case TIOCEXCL:
+  case TIOCNXCL:
+  case TIOCNOTTY:
+  case TIOCSBRK:
+  case TIOCCBRK:
+#ifdef TIOCVHANGUP
+  case TIOCVHANGUP:
+#endif
+#ifdef TIOCGPTPEER
+  case TIOCGPTPEER:
+#endif
+  case SIOCGSKNS:
   case FIOCLEX:
   case FIONCLEX:
     break;
@@ -1855,21 +2222,149 @@ static uptr readSocketLengthForValidation(socklen_t *length) {
 
 static void requireSupportedFlatSocketOption(int level, int option) {
   switch (level) {
+  case SOL_NETLINK:
+    switch (option) {
+    case NETLINK_ADD_MEMBERSHIP:
+    case NETLINK_DROP_MEMBERSHIP:
+    case NETLINK_PKTINFO:
+    case NETLINK_BROADCAST_ERROR:
+    case NETLINK_NO_ENOBUFS:
+    case NETLINK_RX_RING:
+    case NETLINK_TX_RING:
+    case NETLINK_LISTEN_ALL_NSID:
+    case NETLINK_LIST_MEMBERSHIPS:
+    case NETLINK_CAP_ACK:
+    case NETLINK_EXT_ACK:
+    case NETLINK_GET_STRICT_CHK:
+      return;
+    }
+    break;
   case SOL_SOCKET:
     switch (option) {
+    case SO_DEBUG:
     case SO_REUSEADDR:
     case SO_REUSEPORT:
+    case SO_DONTROUTE:
     case SO_KEEPALIVE:
     case SO_BROADCAST:
+    case SO_OOBINLINE:
+    case SO_NO_CHECK:
+    case SO_PRIORITY:
+    case SO_BSDCOMPAT:
     case SO_SNDBUF:
     case SO_RCVBUF:
+    case SO_SNDLOWAT:
+    case SO_RCVLOWAT:
+    case SO_SNDTIMEO:
+    case SO_RCVTIMEO:
     case SO_ERROR:
     case SO_TYPE:
     case SO_ACCEPTCONN:
     case SO_LINGER:
+    case SO_PASSCRED:
+    case SO_PEERCRED:
+    case SO_SECURITY_AUTHENTICATION:
+    case SO_SECURITY_ENCRYPTION_TRANSPORT:
+    case SO_SECURITY_ENCRYPTION_NETWORK:
+    case SO_BINDTODEVICE:
+    case SO_PEERNAME:
+    case SO_TIMESTAMP:
     case SO_TIMESTAMPNS:
+    case SO_TIMESTAMPING:
+    case SO_RCVBUFFORCE:
+    case SO_SNDBUFFORCE:
+    case SO_PASSSEC:
+    case SO_PEERSEC:
+    case SO_MARK:
+    case SO_PROTOCOL:
+    case SO_DOMAIN:
+    case SO_RXQ_OVFL:
+    case SO_WIFI_STATUS:
+    case SO_PEEK_OFF:
+    case SO_NOFCS:
+    case SO_LOCK_FILTER:
+    case SO_SELECT_ERR_QUEUE:
+    case SO_BUSY_POLL:
+    case SO_MAX_PACING_RATE:
     case SO_BPF_EXTENSIONS:
     case SO_DETACH_FILTER:
+    case SO_INCOMING_CPU:
+    case SO_ATTACH_BPF:
+    case SO_ATTACH_REUSEPORT_EBPF:
+    case SO_CNX_ADVICE:
+    case SO_MEMINFO:
+    case SO_INCOMING_NAPI_ID:
+    case SO_COOKIE:
+    case SO_PEERGROUPS:
+    case SO_ZEROCOPY:
+    case SO_TXTIME:
+    case SO_BINDTOIFINDEX:
+    case SO_TIMESTAMP_NEW:
+    case SO_TIMESTAMPNS_NEW:
+    case SO_TIMESTAMPING_NEW:
+    case SO_RCVTIMEO_NEW:
+    case SO_SNDTIMEO_NEW:
+    case SO_DETACH_REUSEPORT_BPF:
+    case SO_PREFER_BUSY_POLL:
+    case SO_BUSY_POLL_BUDGET:
+    case SO_NETNS_COOKIE:
+    case SO_BUF_LOCK:
+    case SO_RESERVE_MEM:
+    case SO_TXREHASH:
+    case SO_RCVMARK:
+    case SO_PASSPIDFD:
+    case SO_PEERPIDFD:
+      return;
+    }
+    break;
+  case IPPROTO_IP:
+    switch (option) {
+    case IP_TOS:
+    case IP_TTL:
+    case IP_HDRINCL:
+    case IP_OPTIONS:
+    case IP_ROUTER_ALERT:
+    case IP_RECVOPTS:
+    case IP_RETOPTS:
+    case IP_PKTINFO:
+    case IP_MTU_DISCOVER:
+    case IP_RECVERR:
+    case IP_RECVTTL:
+    case IP_RECVTOS:
+    case IP_MTU:
+    case IP_FREEBIND:
+    case IP_IPSEC_POLICY:
+    case IP_PASSSEC:
+    case IP_TRANSPARENT:
+    case IP_ORIGDSTADDR:
+    case IP_MINTTL:
+    case IP_NODEFRAG:
+    case IP_CHECKSUM:
+    case IP_BIND_ADDRESS_NO_PORT:
+    case IP_RECVFRAGSIZE:
+    case IP_RECVERR_RFC4884:
+    case IP_MULTICAST_IF:
+    case IP_MULTICAST_TTL:
+    case IP_MULTICAST_LOOP:
+    case IP_ADD_MEMBERSHIP:
+    case IP_DROP_MEMBERSHIP:
+    case IP_BLOCK_SOURCE:
+    case IP_UNBLOCK_SOURCE:
+    case IP_ADD_SOURCE_MEMBERSHIP:
+    case IP_DROP_SOURCE_MEMBERSHIP:
+    case IP_MSFILTER:
+    case MCAST_JOIN_GROUP:
+    case MCAST_BLOCK_SOURCE:
+    case MCAST_UNBLOCK_SOURCE:
+    case MCAST_LEAVE_GROUP:
+    case MCAST_JOIN_SOURCE_GROUP:
+    case MCAST_LEAVE_SOURCE_GROUP:
+    case MCAST_MSFILTER:
+    case IP_MULTICAST_ALL:
+    case IP_UNICAST_IF:
+    case IP_LOCAL_PORT_RANGE:
+    case IP_PROTOCOL:
+    case IP_XFRM_POLICY:
       return;
     }
     break;
@@ -1896,24 +2391,142 @@ static void requireSupportedFlatSocketOption(int level, int option) {
     case TCP_CONGESTION:
     case TCP_INFO:
     case TCP_CC_INFO:
+    case TCP_THIN_LINEAR_TIMEOUTS:
+    case TCP_THIN_DUPACK:
+    case TCP_REPAIR:
+    case TCP_REPAIR_QUEUE:
+    case TCP_QUEUE_SEQ:
+    case TCP_REPAIR_OPTIONS:
+    case TCP_TIMESTAMP:
+    case TCP_SAVE_SYN:
+    case TCP_SAVED_SYN:
+    case TCP_REPAIR_WINDOW:
+    case TCP_ULP:
+    case TCP_FASTOPEN_KEY:
+    case TCP_MD5SIG:
+    case TCP_MD5SIG_EXT:
+    case TCP_COOKIE_TRANSACTIONS:
+    case TCP_AO_ADD_KEY:
+    case TCP_AO_DEL_KEY:
+    case TCP_AO_INFO:
+    case TCP_AO_GET_KEYS:
+    case TCP_AO_REPAIR:
       return;
     }
     break;
   case IPPROTO_IPV6:
-    if (option == IPV6_V6ONLY) {
+    switch (option) {
+    case IPV6_ADDRFORM:
+    case IPV6_2292PKTINFO:
+    case IPV6_2292HOPOPTS:
+    case IPV6_2292DSTOPTS:
+    case IPV6_2292RTHDR:
+    case IPV6_2292HOPLIMIT:
+    case IPV6_CHECKSUM:
+    case IPV6_NEXTHOP:
+    case IPV6_AUTHHDR:
+    case IPV6_FLOWINFO:
+    case IPV6_UNICAST_HOPS:
+    case IPV6_MULTICAST_IF:
+    case IPV6_MULTICAST_HOPS:
+    case IPV6_MULTICAST_LOOP:
+    case IPV6_JOIN_GROUP:
+    case IPV6_LEAVE_GROUP:
+    case IPV6_ROUTER_ALERT:
+    case IPV6_MTU_DISCOVER:
+    case IPV6_MTU:
+    case IPV6_RECVERR:
+    case IPV6_V6ONLY:
+    case IPV6_JOIN_ANYCAST:
+    case IPV6_LEAVE_ANYCAST:
+    case IPV6_MULTICAST_ALL:
+    case IPV6_ROUTER_ALERT_ISOLATE:
+    case IPV6_RECVERR_RFC4884:
+    case IPV6_FLOWLABEL_MGR:
+    case IPV6_FLOWINFO_SEND:
+    case IPV6_IPSEC_POLICY:
+    case IPV6_XFRM_POLICY:
+    case IPV6_HDRINCL:
+    case MCAST_JOIN_GROUP:
+    case MCAST_BLOCK_SOURCE:
+    case MCAST_UNBLOCK_SOURCE:
+    case MCAST_LEAVE_GROUP:
+    case MCAST_JOIN_SOURCE_GROUP:
+    case MCAST_LEAVE_SOURCE_GROUP:
+    case MCAST_MSFILTER:
+    case IPV6_RECVPKTINFO:
+    case IPV6_PKTINFO:
+    case IPV6_RECVHOPLIMIT:
+    case IPV6_HOPLIMIT:
+    case IPV6_RECVHOPOPTS:
+    case IPV6_HOPOPTS:
+    case IPV6_RTHDRDSTOPTS:
+    case IPV6_RECVRTHDR:
+    case IPV6_RTHDR:
+    case IPV6_RECVDSTOPTS:
+    case IPV6_DSTOPTS:
+    case IPV6_RECVPATHMTU:
+    case IPV6_PATHMTU:
+    case IPV6_DONTFRAG:
+    case IPV6_RECVTCLASS:
+    case IPV6_TCLASS:
+    case IPV6_AUTOFLOWLABEL:
+    case IPV6_ADDR_PREFERENCES:
+    case IPV6_MINHOPCOUNT:
+    case IPV6_ORIGDSTADDR:
+    case IPV6_TRANSPARENT:
+    case IPV6_UNICAST_IF:
+    case IPV6_RECVFRAGSIZE:
+    case IPV6_FREEBIND:
+      return;
+    }
+    break;
+  case IPPROTO_ICMPV6:
+    if (option == ICMP6_FILTER) {
+      return;
+    }
+    break;
+  case IPPROTO_UDP:
+    switch (option) {
+    case UDP_CORK:
+    case UDP_ENCAP:
+    case UDP_NO_CHECK6_TX:
+    case UDP_NO_CHECK6_RX:
+    case UDP_SEGMENT:
+    case UDP_GRO:
+      return;
+    }
+    break;
+  case SOL_RAW:
+    if (option == ICMP_FILTER) {
       return;
     }
     break;
   case SOL_PACKET:
     switch (option) {
     case PACKET_ADD_MEMBERSHIP:
+    case PACKET_DROP_MEMBERSHIP:
+    case PACKET_RECV_OUTPUT:
+    case PACKET_COPY_THRESH:
     case PACKET_AUXDATA:
     case PACKET_VERSION:
     case PACKET_HDRLEN:
     case PACKET_RESERVE:
     case PACKET_TIMESTAMP:
     case PACKET_RX_RING:
+    case PACKET_TX_RING:
     case PACKET_STATISTICS:
+    case PACKET_LOSS:
+    case PACKET_TX_TIMESTAMP:
+    case PACKET_FANOUT:
+    case PACKET_TX_HAS_OFF:
+    case PACKET_QDISC_BYPASS:
+    case PACKET_ROLLOVER_STATS:
+    case PACKET_FANOUT_DATA:
+    case PACKET_IGNORE_OUTGOING:
+    case PACKET_VNET_HDR:
+    case PACKET_VNET_HDR_SZ:
+    case PACKET_ORIGDEV:
       return;
     }
     break;
@@ -1932,17 +2545,18 @@ static sptr SYSCALL_HANDLER(setsockopt)(const SyscallExecutor &executor,
   switch (level) {
   case SOL_SOCKET:
     switch (option) {
-    case SO_ATTACH_FILTER: {
+    case SO_ATTACH_FILTER:
+    case SO_ATTACH_REUSEPORT_CBPF: {
       if (value_size != sizeof(struct sock_fprog)) {
         break;
       }
+      if (!value) {
+        return executor(SYS_setsockopt, (sptr)socket_fd, (sptr)level,
+                        (sptr)option, (sptr)value, (sptr)value_size, 0);
+      }
 
-      const struct sock_fprog *program = checkAndStrip(
-          (const struct sock_fprog *)value, sizeof(struct sock_fprog));
-      struct sock_fprog shadow = *program;
-      shadow.filter = (struct sock_filter *)checkAndStrip(
-          program->filter, (uptr)program->len * sizeof(struct sock_filter),
-          /*optional=*/program->len == 0);
+      struct sock_fprog shadow =
+          prepareSocketFilterProgram((const struct sock_fprog *)value);
       return executor(SYS_setsockopt, (sptr)socket_fd, (sptr)level,
                       (sptr)option, (sptr)&shadow, (sptr)value_size, 0);
     }
@@ -4033,6 +4647,11 @@ sptr __ptsan::dispatchSyscall(const SyscallExecutor &executor, sptr number,
     return SYSCALL_HANDLER(ptrace)(executor);
   case SYS_prctl:
     return SYSCALL_HANDLER(prctl)(executor, (int)a, b, c, d, e);
+#ifdef SYS_seccomp
+  case SYS_seccomp:
+    return SYSCALL_HANDLER(seccomp)(executor, (unsigned)a, (unsigned)b,
+                                    (void *)c);
+#endif
   // Architecture and thread address boundaries.
 #ifdef SYS_arch_prctl
   case SYS_arch_prctl:
