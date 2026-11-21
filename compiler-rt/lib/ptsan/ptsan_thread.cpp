@@ -157,6 +157,15 @@ void PTSanThread::Destroy() {
     }
   }
   IdCache.release();
+  {
+    ScopedSignalBlock block;
+    if (ExecArgvScratch) {
+      InternalFree(ExecArgvScratch);
+    }
+    if (ExecEnvpScratch) {
+      InternalFree(ExecEnvpScratch);
+    }
+  }
 #ifdef PTSAN_MUSL_INTERCEPTION
   SignalIdCache.release();
 #endif

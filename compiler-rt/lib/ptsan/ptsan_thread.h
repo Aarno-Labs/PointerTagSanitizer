@@ -129,6 +129,12 @@ class PTSanThread {
 
   IDCache IdCache;
   RandomStream Random;
+  // Kernel-facing argv/envp arrays survive a successful exec in a child
+  // created with CLONE_VM. Keep them for reuse by the suspended parent.
+  char **ExecArgvScratch;
+  uptr ExecArgvCapacity;
+  char **ExecEnvpScratch;
+  uptr ExecEnvpCapacity;
 #ifdef PTSAN_32_BIT_IDS
   // A frame consumes one nonzero, 4 KiB-aligned salt inline. Refills use
   // the same Random stream as heap origins; wrapped handlers bypass this cache.

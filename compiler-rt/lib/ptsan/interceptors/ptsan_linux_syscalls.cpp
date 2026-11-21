@@ -1168,7 +1168,8 @@ static uptr saturatingAdd(uptr left, uptr right) {
 // Exec argument vectors are NULL-terminated arrays of pointers to separately
 // bounded C strings. Build kernel-facing pointer arrays without copying the
 // string bytes themselves.
-static char **prepareCStringVector(char *const *strings) {
+static char **prepareCStringVector(char *const *strings, char ***scratch,
+                                   uptr *scratch_capacity) {
   if (!strings) {
     return nullptr;
   }
@@ -1185,8 +1186,22 @@ static char **prepareCStringVector(char *const *strings) {
     }
   } while (source[vector_slots++]);
 
-  // Now actually check individual strings
-  char **shadow = (char **)SignalSafeInternalAlloc(vector_slots * sizeof(char *));
+  // A CLONE_VM child may successfully exec without returning. Its parent's
+  // allocator would otherwise retain a fresh shadow array on every spawn.
+  char **shadow;
+  if (scratch) {
+    if (vector_slots > *scratch_capacity) {
+      const uptr new_capacity = RoundUpToPowerOfTwo(vector_slots);
+      ScopedSignalBlock block;
+      *scratch =
+          (char **)InternalRealloc(*scratch, new_capacity * sizeof(char *));
+      *scratch_capacity = new_capacity;
+    }
+    shadow = *scratch;
+  } else {
+    shadow = (char **)SignalSafeInternalAlloc(vector_slots * sizeof(char *));
+  }
+  // Now actually check individual strings.
   for (uptr index = 0; index != vector_slots - 1; ++index) {
     shadow[index] = (char *)checkAndStripCString(source[index]);
   }
@@ -1199,14 +1214,26 @@ static sptr SYSCALL_HANDLER(execve)(const SyscallExecutor &executor,
                                     char *const *arguments,
                                     char *const *environment) {
   path = checkAndStripCString(path);
-  char **prepared_arguments = prepareCStringVector(arguments);
-  char **prepared_environment = prepareCStringVector(environment);
+  PTSanThread *thread = GetCurrentThread();
+#ifdef PTSAN_MUSL_INTERCEPTION
+  // A handler can interrupt an exec using the thread's scratch buffers.
+  // Retain one-shot allocation for that rare path.
+  if (ptsan_in_signal_context) {
+    thread = nullptr;
+  }
+#endif
+  char **prepared_arguments = prepareCStringVector(
+      arguments, thread ? &thread->ExecArgvScratch : nullptr,
+      thread ? &thread->ExecArgvCapacity : nullptr);
+  char **prepared_environment = prepareCStringVector(
+      environment, thread ? &thread->ExecEnvpScratch : nullptr,
+      thread ? &thread->ExecEnvpCapacity : nullptr);
 
   const sptr result = executor(SYS_execve, (sptr)path, (sptr)prepared_arguments,
                                (sptr)prepared_environment, 0, 0, 0);
 
-  // A successful exec never returns. These allocations exist only on failure.
-  if (prepared_environment || prepared_arguments) {
+  // Only bootstrap and signal-handler calls use one-shot allocations.
+  if (!thread && (prepared_environment || prepared_arguments)) {
     ScopedSignalBlock block;
     if (prepared_environment) {
       InternalFree(prepared_environment);
@@ -1223,15 +1250,25 @@ static sptr SYSCALL_HANDLER(execveat)(const SyscallExecutor &executor,
                                       const char *path, char *const *arguments,
                                       char *const *environment, int flags) {
   path = checkAndStripCString(path);
-  char **prepared_arguments = prepareCStringVector(arguments);
-  char **prepared_environment = prepareCStringVector(environment);
+  PTSanThread *thread = GetCurrentThread();
+#ifdef PTSAN_MUSL_INTERCEPTION
+  // See the signal-handler rule in execve above.
+  if (ptsan_in_signal_context) {
+    thread = nullptr;
+  }
+#endif
+  char **prepared_arguments = prepareCStringVector(
+      arguments, thread ? &thread->ExecArgvScratch : nullptr,
+      thread ? &thread->ExecArgvCapacity : nullptr);
+  char **prepared_environment = prepareCStringVector(
+      environment, thread ? &thread->ExecEnvpScratch : nullptr,
+      thread ? &thread->ExecEnvpCapacity : nullptr);
 
   const sptr result =
       executor(SYS_execveat, (sptr)dirfd, (sptr)path, (sptr)prepared_arguments,
                (sptr)prepared_environment, (sptr)flags, 0);
 
-  // A successful exec never returns. These allocations exist only on failure.
-  if (prepared_environment || prepared_arguments) {
+  if (!thread && (prepared_environment || prepared_arguments)) {
     ScopedSignalBlock block;
     if (prepared_environment) {
       InternalFree(prepared_environment);
